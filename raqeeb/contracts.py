@@ -445,17 +445,41 @@ class Scenario(_Model):
         """Every planted fault except decoys is a root cause."""
         return AnswerKey(root_causes=[f.label for f in self.faults if f.type not in DECOY_FAULTS])
 
-    def without_answer_key(self) -> Scenario:
-        """The view the agent is allowed to see."""
-        return self.model_copy(update={"answer_key": None})
+    def agent_view(self) -> AgentScenario:
+        """The only part of a scenario the agent may see: no faults, no seed, no answer key."""
+        return AgentScenario(id=self.id, start=self.start, duration_hours=self.duration_hours)
 
     @classmethod
     def from_yaml(cls, path: Path) -> Scenario:
         return cls.model_validate(yaml.safe_load(path.read_text(encoding="utf-8")))
 
-    def to_yaml(self, path: Path) -> None:
+    def to_yaml(self, path: Path, header: str = "") -> None:
+        """Write the scenario; "HH:MM" times are always quoted. `header` is prepended (e.g. comments)."""
         data = self.model_dump(mode="json", exclude_none=True)
-        path.write_text(yaml.safe_dump(data, sort_keys=False, allow_unicode=True), encoding="utf-8")
+        text = yaml.dump(data, Dumper=_ScenarioDumper, sort_keys=False, allow_unicode=True)
+        path.write_text(header + text, encoding="utf-8", newline="\n")
+
+
+class AgentScenario(_Model):
+    """What the agent is told about an incident window. Everything else comes from telemetry."""
+
+    id: str
+    start: UtcDatetime
+    duration_hours: float = Field(gt=0)
+
+    @property
+    def end(self) -> datetime:
+        return self.start + timedelta(hours=self.duration_hours)
+
+
+class _ScenarioDumper(yaml.SafeDumper):
+    """Quotes "HH:MM" strings so no YAML 1.1 reader takes them for numbers."""
+
+
+_ScenarioDumper.add_representer(
+    str, lambda dumper, value: dumper.represent_scalar(
+        "tag:yaml.org,2002:str", value, style="'" if _HHMM_RE.match(value) else None)
+)
 
 
 # ---------------------------------------------------------------------------

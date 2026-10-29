@@ -268,7 +268,7 @@ def test_unauthorized_command_stops_inverter(run):
 
 def test_handoff_example_scenario_runs(plant):
     scenario = Scenario.from_yaml(FIXTURES / "scn_example.yaml")
-    batch = FaultInjector.for_scenario(scenario.without_answer_key(), plant).run_to_end()
+    batch = FaultInjector.for_scenario(scenario, plant).run_to_end()
     raised = codes(batch)
     assert raised["COMM_LOSS"] == 1 and raised["DERATE_TEMP"] >= 1 and raised["TRACKER_STOW_WIND"] == 16
     assert not {"LOW_STRING_CURRENT", "DC_INPUT_LOW"} & set(raised)  # panel and sensor soiled alike

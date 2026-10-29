@@ -1,5 +1,5 @@
 # SYNTHETIC scenario from raqeeb.faults.generator. Fault times are UTC on the start date.
-# answer_key is for bench/score.py only; the agent gets Scenario.without_answer_key().
+# Faults and answer_key are for the injector and bench only; the agent gets Scenario.agent_view().
 id: scn_0016
 seed: 2025016
 start: '2025-05-18T03:00:00Z'

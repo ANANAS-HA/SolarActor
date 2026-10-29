@@ -12,12 +12,10 @@ Scenario.expected_answer_key(): every planted fault except the decoy.
 from __future__ import annotations
 
 import argparse
-import re
 from datetime import date, datetime, time, timezone
 from pathlib import Path
 
 import numpy as np
-import yaml
 
 from raqeeb.config import SCENARIO_DIR, load_plant
 from raqeeb.contracts import (
@@ -202,22 +200,8 @@ def has_decoy(scenario: Scenario) -> bool:
     return any(f.type == FaultType.CURTAILMENT for f in scenario.faults)
 
 
-class _QuotedTimesDumper(yaml.SafeDumper):
-    """Quotes every "HH:MM" string, so no YAML 1.1 reader takes it for a number."""
-
-
-_QuotedTimesDumper.add_representer(
-    str, lambda dumper, value: dumper.represent_scalar(
-        "tag:yaml.org,2002:str", value, style="'" if re.fullmatch(r"\d\d:\d\d", value) else None)
-)
-
-
-def scenario_yaml(scenario: Scenario) -> str:
-    """Same content as Scenario.to_yaml, with quoted fault times and a synthetic-data header."""
-    data = scenario.model_dump(mode="json", exclude_none=True)
-    header = ("# SYNTHETIC scenario from raqeeb.faults.generator. Fault times are UTC on the start date.\n"
-              "# answer_key is for bench/score.py only; the agent gets Scenario.without_answer_key().\n")
-    return header + yaml.dump(data, Dumper=_QuotedTimesDumper, sort_keys=False, allow_unicode=True)
+HEADER = ("# SYNTHETIC scenario from raqeeb.faults.generator. Fault times are UTC on the start date.\n"
+          "# Faults and answer_key are for the injector and bench only; the agent gets Scenario.agent_view().\n")
 
 
 def write_scenarios(scenarios: list[Scenario], out_dir: Path = SCENARIO_DIR) -> list[Path]:
@@ -225,7 +209,7 @@ def write_scenarios(scenarios: list[Scenario], out_dir: Path = SCENARIO_DIR) -> 
     paths = []
     for scenario in scenarios:
         path = out_dir / f"{scenario.id}.yaml"
-        path.write_text(scenario_yaml(scenario), encoding="utf-8")
+        scenario.to_yaml(path, header=HEADER)
         paths.append(path)
     return paths
 

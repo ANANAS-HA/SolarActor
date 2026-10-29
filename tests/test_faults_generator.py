@@ -87,7 +87,7 @@ def test_full_scope_generation_runs():
 def test_core_scenarios_run_with_expected_effects(core):
     plant = load_plant()
     for s in core:
-        batch = FaultInjector.for_scenario(s.without_answer_key(), plant).run_to_end()
+        batch = FaultInjector.for_scenario(s, plant).run_to_end()
         raised = Counter(e.code for e in batch.events)
         types = {f.type for f in s.faults}
         if FaultType.SOILING in types:
