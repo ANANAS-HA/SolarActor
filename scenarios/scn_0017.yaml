@@ -1,0 +1,20 @@
+# SYNTHETIC scenario from raqeeb.faults.generator. Fault times are UTC on the start date.
+# answer_key is for bench/score.py only; the agent gets Scenario.without_answer_key().
+id: scn_0017
+seed: 2025017
+start: '2025-05-16T03:00:00Z'
+duration_hours: 12.0
+faults:
+- type: SOILING
+  target: ALL
+  start: '05:10'
+  end: '06:10'
+  severity: 0.19
+- type: CURTAILMENT
+  target: ALL
+  start: '09:05'
+  end: '10:30'
+  severity: 0.47
+answer_key:
+  root_causes:
+  - SOILING@ALL

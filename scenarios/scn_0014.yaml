@@ -1,0 +1,23 @@
+# SYNTHETIC scenario from raqeeb.faults.generator. Fault times are UTC on the start date.
+# answer_key is for bench/score.py only; the agent gets Scenario.without_answer_key().
+id: scn_0014
+seed: 2025014
+start: '2025-06-10T03:00:00Z'
+duration_hours: 12.0
+faults:
+- type: INVERTER_DERATE
+  target: INV-05
+  start: '06:25'
+  severity: 0.35
+- type: COMMS_DROPOUT
+  target: INV-12
+  start: '07:15'
+- type: CURTAILMENT
+  target: ALL
+  start: '09:05'
+  end: '10:25'
+  severity: 0.46
+answer_key:
+  root_causes:
+  - INVERTER_DERATE@INV-05
+  - COMMS_DROPOUT@INV-12

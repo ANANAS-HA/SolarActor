@@ -1,0 +1,252 @@
+"""The fault catalogue (HANDOFF section 8): how each FaultType changes PlantState.
+
+Severity is a fraction in [0, 1]; its meaning depends on the fault (see each class).
+`start`/`end` are when the fault begins and stops; with no `end` it lasts until the agent
+fixes it (or the scenario ends). SOILING is the exception: its window is the dust storm, and
+the soiling it leaves persists after the storm until panels are cleaned.
+
+Core: SOILING, SENSOR_SOILING, INVERTER_DERATE, COMMS_DROPOUT, CURTAILMENT (decoy).
+Full scope: TRACKER_STUCK, STRING_OPEN, UNAUTHORIZED_CMD.
+"""
+
+from __future__ import annotations
+
+from datetime import timedelta
+
+import numpy as np
+
+from raqeeb.contracts import PLANT_TARGET, FaultType, PlantConfig, PlantState
+from raqeeb.faults.base import Fault, InjectionContext, step_times
+
+# Dust storm
+STORM_DEFAULT_MIN = 60  # storm length when the spec has no end
+STORM_WIND_ADD_MS = (16.0, 19.0)  # added to the weather wind, so the total is always above stow (15 m/s)
+STORM_IRRADIANCE_FACTOR = (0.35, 0.6)  # dust in the air dims sunlight for plant, sensor and reference
+SOILING_SPREAD = 0.10  # each inverter's final soiling = severity x (1 +/- this), dust is not even
+DEFAULT_SOILING = 0.20
+
+DEFAULT_SENSOR_SOILING = 0.20
+
+# Thermal derate (failed cooling): output capped at (1 - severity) x rating, internal temp high
+DEFAULT_DERATE = 0.35
+DERATE_TEMP_MARGIN_C = 4.0  # internal temp sits at least this far above derate_temp_c at the cap
+DERATE_MIN_OFFSET_C = 20.0
+DAYLIGHT_GHI_WM2 = 50.0
+
+DEFAULT_CURTAILMENT = 0.40  # grid limit = (1 - severity) x plant rating
+
+DEFAULT_STRING_LOSS = 0.25
+UNAUTHORIZED_SOURCES = ("10.20.4.17", "vpn-user-ext03", "eng-laptop-221")
+
+
+def _inverter_ids(plant: PlantConfig) -> set[str]:
+    return set(plant.inverters.ids)
+
+
+class DustStormSoiling(Fault):
+    """SOILING: a dust storm, then plant-wide soiling that persists until cleaned.
+
+    During [start, end): wind_add_ms pushes wind above the stow limit (trackers stow, HIGH_WIND)
+    and irradiance_factor < 1 dims plant, sensor and reference alike. Soiling builds linearly to
+    ~severity on every inverter and stays when the wind drops.
+    """
+
+    fault_type = FaultType.SOILING
+
+    @staticmethod
+    def valid_targets(plant: PlantConfig) -> set[str]:
+        return {PLANT_TARGET}
+
+    def arm(self, ctx: InjectionContext) -> None:
+        severity = self.severity_or(DEFAULT_SOILING)
+        end = self.end or self.start + timedelta(minutes=STORM_DEFAULT_MIN)
+        wind_add = float(ctx.rng.uniform(*STORM_WIND_ADD_MS))
+        dimming = float(ctx.rng.uniform(*STORM_IRRADIANCE_FACTOR))
+        ids = ctx.plant.inverters.ids
+        final = np.clip(severity * (1 + ctx.rng.uniform(-SOILING_SPREAD, SOILING_SPREAD, len(ids))), 0.0, 1.0)
+
+        def storm(state: PlantState) -> None:
+            state.atmosphere.wind_add_ms = wind_add
+            state.atmosphere.irradiance_factor = dimming
+
+        def soil(fraction: float):
+            def change(state: PlantState) -> None:
+                for inv_id, loss in zip(ids, final):
+                    state.inverters[inv_id].soiling_loss = max(state.inverters[inv_id].soiling_loss,
+                                                               float(loss) * fraction)
+            return change
+
+        def calm(state: PlantState) -> None:
+            state.atmosphere.wind_add_ms = 0.0
+            state.atmosphere.irradiance_factor = 1.0
+
+        self.schedule(ctx, self.start, "storm begins", storm)
+        times = step_times(self.start, end) or [self.start]
+        for k, at in enumerate(times, start=1):
+            self.schedule(ctx, at, f"dust {k}/{len(times)}", soil(k / len(times)))
+        self.schedule(ctx, end, "storm ends", calm)
+
+
+class SensorSoiling(Fault):
+    """SENSOR_SOILING: the on-site GHI sensor under-reads by `severity`. Plant output is unchanged."""
+
+    fault_type = FaultType.SENSOR_SOILING
+
+    @staticmethod
+    def valid_targets(plant: PlantConfig) -> set[str]:
+        return {plant.weather_station_id}
+
+    def arm(self, ctx: InjectionContext) -> None:
+        severity = self.severity_or(DEFAULT_SENSOR_SOILING)
+        self.schedule(ctx, self.start, "begins", lambda s: setattr(s.station, "sensor_soiling", severity))
+        if self.end is not None:
+            self.schedule(ctx, self.end, "ends", lambda s: setattr(s.station, "sensor_soiling", 0.0))
+
+
+class InverterDerate(Fault):
+    """INVERTER_DERATE: failed cooling. Output capped at (1 - severity) x rating, internal temp above
+    derate_temp_c. The temperature offset is sized from the coolest daylight ambient in the window."""
+
+    fault_type = FaultType.INVERTER_DERATE
+
+    @staticmethod
+    def valid_targets(plant: PlantConfig) -> set[str]:
+        return _inverter_ids(plant)
+
+    def temp_offset_c(self, ctx: InjectionContext, cap_fraction: float) -> float:
+        inv = ctx.plant.inverters
+        end = self.end or ctx.scenario.end
+        window = ctx.weather.loc[self.start:end]
+        daylight = window[window["ghi_wm2"] > DAYLIGHT_GHI_WM2]
+        ambient = float((daylight if len(daylight) else window)["ambient_c"].min())
+        needed = inv.derate_temp_c + DERATE_TEMP_MARGIN_C - (ambient + inv.temp_rise_idle_c
+                                                            + inv.temp_rise_full_load_c * cap_fraction)
+        return max(needed, DERATE_MIN_OFFSET_C)
+
+    def arm(self, ctx: InjectionContext) -> None:
+        cap_fraction = 1.0 - self.severity_or(DEFAULT_DERATE)
+        cap_kw = ctx.plant.inverters.ac_kw * cap_fraction
+        offset = self.temp_offset_c(ctx, cap_fraction)
+        target = self.spec.target
+
+        def begin(state: PlantState) -> None:
+            state.inverters[target].derate_cap_kw = cap_kw
+            state.inverters[target].temp_offset_c = offset
+
+        def finish(state: PlantState) -> None:
+            state.inverters[target].derate_cap_kw = None
+            state.inverters[target].temp_offset_c = 0.0
+
+        self.schedule(ctx, self.start, "begins", begin)
+        if self.end is not None:
+            self.schedule(ctx, self.end, "ends", finish)
+
+
+class CommsDropout(Fault):
+    """COMMS_DROPOUT: the device keeps producing (the meter sees it) but writes no rows."""
+
+    fault_type = FaultType.COMMS_DROPOUT
+
+    @staticmethod
+    def valid_targets(plant: PlantConfig) -> set[str]:
+        return _inverter_ids(plant) | {plant.weather_station_id}
+
+    def arm(self, ctx: InjectionContext) -> None:
+        target, station = self.spec.target, ctx.plant.weather_station_id
+
+        def comms(up: bool):
+            def change(state: PlantState) -> None:
+                device = state.station if target == station else state.inverters[target]
+                device.comms_up = up
+            return change
+
+        self.schedule(ctx, self.start, "begins", comms(False))
+        if self.end is not None:
+            self.schedule(ctx, self.end, "ends", comms(True))
+
+
+class Curtailment(Fault):
+    """CURTAILMENT (decoy): the grid operator limits the plant to (1 - severity) x rating.
+
+    Expected behaviour, never a root cause. The twin writes grid_setpoint rows and GRID_LIMIT_ACTIVE.
+    """
+
+    fault_type = FaultType.CURTAILMENT
+
+    @staticmethod
+    def valid_targets(plant: PlantConfig) -> set[str]:
+        return {PLANT_TARGET, plant.plant_controller_id}
+
+    def arm(self, ctx: InjectionContext) -> None:
+        limit_kw = ctx.plant.rated_ac_kw * (1.0 - self.severity_or(DEFAULT_CURTAILMENT))
+        self.schedule(ctx, self.start, "begins", lambda s: setattr(s, "grid_limit_kw", limit_kw))
+        if self.end is not None:
+            self.schedule(ctx, self.end, "ends", lambda s: setattr(s, "grid_limit_kw", None))
+
+
+class TrackerStuck(Fault):
+    """TRACKER_STUCK (full scope): one block's tracker stays flat (stow angle); TRACKER_FAULT alarm."""
+
+    fault_type = FaultType.TRACKER_STUCK
+
+    @staticmethod
+    def valid_targets(plant: PlantConfig) -> set[str]:
+        return _inverter_ids(plant)
+
+    def arm(self, ctx: InjectionContext) -> None:
+        target, angle = self.spec.target, ctx.plant.tracker.stow_angle_deg
+
+        def begin(state: PlantState) -> None:
+            state.inverters[target].tracker_override_deg = angle
+            ctx.twin.emit_event(target, "TRACKER_FAULT", f"angle held at {angle:.0f} deg, not following command")
+
+        self.schedule(ctx, self.start, "begins", begin)
+        if self.end is not None:
+            self.schedule(ctx, self.end, "ends",
+                          lambda s: setattr(s.inverters[target], "tracker_override_deg", None))
+
+
+class StringOpen(Fault):
+    """STRING_OPEN (full scope): one inverter loses a fixed fraction (`severity`) of its DC."""
+
+    fault_type = FaultType.STRING_OPEN
+
+    @staticmethod
+    def valid_targets(plant: PlantConfig) -> set[str]:
+        return _inverter_ids(plant)
+
+    def arm(self, ctx: InjectionContext) -> None:
+        target, loss = self.spec.target, self.severity_or(DEFAULT_STRING_LOSS)
+        self.schedule(ctx, self.start, "begins", lambda s: setattr(s.inverters[target], "string_loss", loss))
+        if self.end is not None:
+            self.schedule(ctx, self.end, "ends", lambda s: setattr(s.inverters[target], "string_loss", 0.0))
+
+
+class UnauthorizedCommand(Fault):
+    """UNAUTHORIZED_CMD (full scope): a zero-power command from an unexpected source stops one
+    inverter, with no electrical alarm before it. The twin raises REMOTE_STOP."""
+
+    fault_type = FaultType.UNAUTHORIZED_CMD
+
+    @staticmethod
+    def valid_targets(plant: PlantConfig) -> set[str]:
+        return _inverter_ids(plant)
+
+    def arm(self, ctx: InjectionContext) -> None:
+        target = self.spec.target
+        source = str(ctx.rng.choice(UNAUTHORIZED_SOURCES))
+
+        def begin(state: PlantState) -> None:
+            ctx.twin.log_command(source, target, "SET_ACTIVE_POWER", {"kw": 0})
+            state.inverters[target].stopped = True
+
+        self.schedule(ctx, self.start, "begins", begin)
+        if self.end is not None:
+            self.schedule(ctx, self.end, "ends", lambda s: setattr(s.inverters[target], "stopped", False))
+
+
+CATALOGUE: dict[FaultType, type[Fault]] = {
+    cls.fault_type: cls
+    for cls in (DustStormSoiling, SensorSoiling, InverterDerate, CommsDropout, Curtailment,
+                TrackerStuck, StringOpen, UnauthorizedCommand)
+}
