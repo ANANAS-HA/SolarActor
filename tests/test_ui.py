@@ -10,6 +10,7 @@ from raqeeb.config import REPO_ROOT
 from raqeeb.contracts import FaultType
 from raqeeb.faults.generator import is_trap, load_scenarios
 from raqeeb.ui import samples, source
+from tests.leakcheck import assert_no_answer_leak
 
 APP = REPO_ROOT / "raqeeb" / "ui" / "app.py"
 PANELS = {"Plant map", "Alarm feed", "Recovery", "Agent timeline (sample)", "Approvals (sample)",
@@ -61,6 +62,29 @@ def test_clock_moves_and_panels_follow(app):
     assert not app.exception and app.session_state.clock == len(run.times) - 1
 
 
+def _reveal_shown(at: AppTest) -> bool:
+    return any("revealed after the run" in e.label and "never sees" in e.label for e in at.sidebar.expander)
+
+
+def test_answer_key_revealed_only_after_the_run(app):
+    run = source.replay(source.default_scenario_id())
+    assert app.session_state.clock < len(run.times) - 1 and not _reveal_shown(app)
+    page = " ".join(m.value for m in app.sidebar.markdown)
+    assert not any(f.label in page for f in run.planted.faults)
+    app.button(key="clock_end").click().run()
+    assert _reveal_shown(app)
+    page = " ".join(m.value for m in app.sidebar.markdown)
+    assert all(f.label in page for f in run.planted.faults)
+    app.button(key="clock_back").click().run()
+    assert not _reveal_shown(app)
+
+
+@pytest.mark.parametrize("scenario_id", source.scenario_ids()[:3])
+def test_incident_view_carries_no_answer(scenario_id):
+    run = source.replay(scenario_id)
+    assert_no_answer_leak(run.incident, run.planted, strict=True)
+
+
 def test_approve_and_reject():
     scenario_id = _scenario_with(FaultType.INVERTER_DERATE)
     first, second = (source.replay(scenario_id).agent.approvals * 2)[:2]
@@ -82,8 +106,8 @@ def test_approve_and_reject():
 def test_map_cell_for_missing_inverter():
     scenario_id = _scenario_with(FaultType.COMMS_DROPOUT)
     run = source.replay(scenario_id)
-    comms = next(f for f in run.scenario.faults if f.type == FaultType.COMMS_DROPOUT)
-    at = run.scenario.resolve_time(comms.start) + timedelta(minutes=10)
+    comms = next(f for f in run.planted.faults if f.type == FaultType.COMMS_DROPOUT)
+    at = run.planted.resolve_time(comms.start) + timedelta(minutes=10)
     at_ = AppTest.from_file(str(APP), default_timeout=120)
     at_.session_state.run_key = ("scenario", scenario_id)
     at_.session_state.clock = int(run.times.get_loc(at))
@@ -112,9 +136,9 @@ def test_tables_follow_the_store_shape(trap):
 
 def test_trap_hides_loss_from_sensor_line(trap):
     """With panels and sensor equally dusty, actual meets the sensor line but not the reference line."""
-    soiling = next(f for f in trap.scenario.faults if f.type == FaultType.SOILING)
+    soiling = next(f for f in trap.planted.faults if f.type == FaultType.SOILING)
     clean_at = next(p.at for p in trap.agent.executed if p.fault.type == FaultType.SOILING)
-    t0 = trap.scenario.resolve_time(soiling.end) + timedelta(minutes=15)
+    t0 = trap.planted.resolve_time(soiling.end) + timedelta(minutes=15)
     window = trap.lines[(trap.lines.index >= t0) & (trap.lines.index < clean_at)]
     window = window[window["expected_ref_kw"] > 5000]
     vs_ref = (window["actual_kw"] / window["expected_ref_kw"]).mean()
@@ -130,10 +154,10 @@ def test_sample_cleaning_recovers_the_twin(trap):
 
 def test_map_shows_no_data_and_degraded():
     run = source.replay(_scenario_with(FaultType.INVERTER_DERATE, FaultType.COMMS_DROPOUT))
-    comms = next(f for f in run.scenario.faults if f.type == FaultType.COMMS_DROPOUT)
-    derate = next(f for f in run.scenario.faults if f.type == FaultType.INVERTER_DERATE)
+    comms = next(f for f in run.planted.faults if f.type == FaultType.COMMS_DROPOUT)
+    derate = next(f for f in run.planted.faults if f.type == FaultType.INVERTER_DERATE)
     reset = next(p.at for p in run.agent.executed if p.fault is comms)
-    at = max(run.scenario.resolve_time(comms.start), run.scenario.resolve_time(derate.start)) + timedelta(minutes=10)
+    at = max(run.planted.resolve_time(comms.start), run.planted.resolve_time(derate.start)) + timedelta(minutes=10)
     assert at < reset
     states = source.inverter_status(run, at).set_index("inverter_id")["state"]
     assert states[comms.target] == source.NO_DATA
@@ -145,7 +169,7 @@ def test_map_shows_no_data_and_degraded():
 def test_samples_are_labelled_and_gated(trap):
     report = trap.agent.report
     assert "SAMPLE" in report.summary_en and "نموذجي" in report.summary_ar
-    for p in samples.scripted_plan(trap.scenario, source.load_plant()):
+    for p in samples.scripted_plan(trap.planted, source.load_plant()):
         assert p.request.rationale.startswith("SAMPLE")
     run = source.replay(_scenario_with(FaultType.INVERTER_DERATE))
     assert run.agent.approvals and all(p.request.needs_approval for p in run.agent.approvals)

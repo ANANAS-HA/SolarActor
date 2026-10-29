@@ -18,7 +18,7 @@ from datetime import datetime
 import pandas as pd
 
 from raqeeb.config import load_plant
-from raqeeb.contracts import TABLE_MODELS, InverterStatus, PlantConfig, Scenario, TelemetryBatch
+from raqeeb.contracts import TABLE_MODELS, AgentScenario, InverterStatus, PlantConfig, Scenario, TelemetryBatch
 from raqeeb.faults.generator import is_trap, load_scenarios, storm_scenario
 from raqeeb.faults.injector import FaultInjector
 from raqeeb.twin import plant as physics
@@ -40,12 +40,20 @@ HEALTHY, DEGRADED, NO_DATA = "healthy", "degraded", "no data"
 
 @dataclass
 class PlantRun:
-    scenario: Scenario  # injector side only: the console shows its faults as the answer key
-    start: datetime
-    end: datetime
+    incident: AgentScenario  # what the console shows and an agent may be given: id and window only
+    planted: Scenario  # injector side: faults and answer key. Revealed in the UI only after the run;
+    #                    never pass it (or anything built from it) to an agent
     tables: dict[str, pd.DataFrame]
     lines: pd.DataFrame
     agent: samples.SampleAgent
+
+    @property
+    def start(self) -> datetime:
+        return self.incident.start
+
+    @property
+    def end(self) -> datetime:
+        return self.incident.end
 
     @property
     def times(self) -> pd.DatetimeIndex:
@@ -108,7 +116,7 @@ def _run(scenario: Scenario) -> PlantRun:
     tables = _telemetry(scenario, plan)
     lines = power_lines(tables, scenario.start, scenario.end, plant)
     agent = samples.build_agent(scenario, plan, tables, lines, plant)
-    return PlantRun(scenario=scenario, start=scenario.start, end=scenario.end, tables=tables, lines=lines, agent=agent)
+    return PlantRun(incident=scenario.agent_view(), planted=scenario, tables=tables, lines=lines, agent=agent)
 
 
 def _telemetry(scenario: Scenario, plan: list[samples.PlannedAction]) -> dict[str, pd.DataFrame]:

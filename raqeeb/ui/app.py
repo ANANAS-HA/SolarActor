@@ -17,7 +17,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from raqeeb.config import load_plant
-from raqeeb.contracts import DISPLAY_TZ, STEP_MINUTES, AuditEntry, IncidentReport
+from raqeeb.contracts import DISPLAY_TZ, STEP_MINUTES, AuditEntry, FaultType, IncidentReport
 from raqeeb.ui import source
 from raqeeb.ui.samples import local_hhmm
 
@@ -33,6 +33,7 @@ CLOCK_STEP_MIN = 30
 RECENT_ALARM_MIN = 30
 MIN_GAP_FRACTION = 0.05  # of the plant rating: below this (dawn, dusk) no "vs expected" delta
 ON_EXPECTED_FRACTION = 0.01
+REVEAL_LABEL = "Planted faults: revealed after the run (the agent never sees this)"
 
 SYNTHETIC_NOTE = ("**Synthetic data.** The plant, its telemetry, the faults and the alarm codes are simulated "
                   "(weather from NASA POWER). The agent timeline, approvals, results and report are **SAMPLE** "
@@ -95,11 +96,6 @@ def sidebar(ids: list[str], run: source.PlantRun) -> None:
         st.button("Dust storm + 2 random faults", key="inject_storm", on_click=_inject_storm, width="stretch")
         st.selectbox("Scenario", ids, key="replay_id")
         st.button("Replay scenario", key="replay", on_click=_replay, width="stretch")
-        with st.expander("Planted faults (answer key, never shown to the agent)"):
-            for f in run.scenario.faults:
-                when = local_hhmm(run.scenario.resolve_time(f.start))
-                decoy = " (decoy, expected behaviour)" if f.type == "CURTAILMENT" else ""
-                st.markdown(f"- `{f.label}` from {when}{decoy}")
 
         st.header("Simulated clock")
         last = len(run.times) - 1
@@ -112,6 +108,20 @@ def sidebar(ids: list[str], run: source.PlantRun) -> None:
         fwd.button(f"{CLOCK_STEP_MIN}m ▶", key="clock_fwd", on_click=_move_clock, args=(steps, last),
                    width="stretch")
         end.button("End", key="clock_end", on_click=_move_clock, args=(last, last), width="stretch")
+
+        if st.session_state.clock == last:
+            answer_key(run)
+        else:
+            st.caption("Planted faults are revealed when the clock reaches the end of the run.")
+
+
+def answer_key(run: source.PlantRun) -> None:
+    """The planted faults, shown only once the run has finished. Display only: never passed to an agent."""
+    scenario = run.planted
+    with st.expander(REVEAL_LABEL):
+        for f in scenario.faults:
+            decoy = " (decoy, expected behaviour)" if f.type == FaultType.CURTAILMENT else ""
+            st.markdown(f"- `{f.label}` from {local_hhmm(scenario.resolve_time(f.start))}{decoy}")
 
 
 def default_clock(run: source.PlantRun) -> int:
@@ -281,7 +291,7 @@ def results_tab() -> None:
 def report_markdown(run: source.PlantRun, report: IncidentReport) -> str:
     executed = {p.request.id for p in run.agent.executed}
     verified = {v.action_id: v for v in report.verifications}
-    lines = [f"# Shift report: {run.scenario.id}", "",
+    lines = [f"# Shift report: {run.incident.id}", "",
              "> SAMPLE report on a synthetic plant. Times in Asia/Riyadh.", "",
              "## Summary (English)", "", report.summary_en, "",
              "## الملخص (العربية)", "", report.summary_ar, "",
@@ -310,7 +320,7 @@ def report_tab(run: source.PlantRun) -> None:
         st.markdown(f'<div dir="rtl" lang="ar" style="text-align: right">{report.summary_ar}</div>',
                     unsafe_allow_html=True)
     st.download_button("Download report (Markdown)", report_markdown(run, report),
-                       file_name=f"raqeeb_report_{run.scenario.id}.md", mime="text/markdown", key="download_report")
+                       file_name=f"raqeeb_report_{run.incident.id}.md", mime="text/markdown", key="download_report")
     with st.expander("Preview Markdown"):
         st.markdown(report_markdown(run, report))
 
@@ -332,7 +342,7 @@ def main() -> None:
     st.session_state.now = now
 
     st.title("Raqeeb console")
-    st.markdown(f"Incident **{run.scenario.id}** · {local(run.start):%Y-%m-%d} · "
+    st.markdown(f"Incident **{run.incident.id}** · {local(run.start):%Y-%m-%d} · "
                 f"clock **{local(now):%H:%M}** ({DISPLAY_TZ}) · site {load_plant().site.name}")
     st.info(SYNTHETIC_NOTE)
     pending = sum(p.at <= now and p.request.id not in st.session_state.decisions for p in run.agent.approvals)
