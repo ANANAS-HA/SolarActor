@@ -1,0 +1,93 @@
+# SYNTHETIC alarm codes and manual text, written for this project in a vendor-like style.
+# They do not come from any real manufacturer.
+# related_faults: faults that can raise this alarm. Empty = normal or protective behaviour.
+codes:
+  COMM_LOSS:
+    vendor_id: A-1203
+    severity: WARNING
+    title: Communication lost
+    related_faults: [COMMS_DROPOUT]
+    manual: >-
+      The data logger has received no telemetry from the device for more than three polling
+      cycles. The device may still be producing power. Check the substation meter before
+      assuming lost generation. Restart the communications gateway first; if the link does not
+      recover, inspect the fibre or RS-485 connection.
+  DERATE_TEMP:
+    vendor_id: W-2105
+    severity: WARNING
+    title: Power derating due to temperature
+    related_faults: [INVERTER_DERATE]
+    manual: >-
+      Internal temperature has exceeded the derating threshold and the inverter has reduced its
+      output to protect the power stage. Output is held at a flat cap while the condition lasts.
+      Common causes are blocked air filters, failed cooling fans or high ambient temperature.
+      Schedule an inspection; a temporary power limit can stabilise the unit.
+  LOW_PR:
+    vendor_id: W-3301
+    severity: WARNING
+    title: Low performance ratio
+    related_faults: [SOILING, INVERTER_DERATE, STRING_OPEN, TRACKER_STUCK]
+    manual: >-
+      The ratio of measured output to output expected from the on-site irradiance sensor is
+      below the configured limit. This alarm depends on the irradiance sensor being correct.
+      If the sensor is dirty, the ratio can look normal while real losses exist.
+  LOW_STRING_CURRENT:
+    vendor_id: W-3410
+    severity: INFO
+    title: Low string current
+    related_faults: [SOILING, STRING_OPEN]
+    manual: >-
+      One or more input strings report current below the expected value for the present
+      irradiance. When many strings across the plant report this at once, check for soiling or
+      a weather event before inspecting individual strings.
+  DC_INPUT_LOW:
+    vendor_id: W-3412
+    severity: WARNING
+    title: DC input power low
+    related_faults: [STRING_OPEN, SOILING]
+    manual: >-
+      Total DC input power is below the expected value. A fixed fractional drop on a single
+      inverter that does not follow the weather usually indicates an open string or a blown
+      fuse.
+  TRACKER_STOW_WIND:
+    vendor_id: I-4101
+    severity: INFO
+    title: Tracker stowed for wind
+    related_faults: []
+    manual: >-
+      Wind speed exceeded the stow threshold and the tracker moved to the safe stow position.
+      This is normal protective behaviour. Trackers should resume tracking automatically when
+      wind drops below the threshold.
+  TRACKER_FAULT:
+    vendor_id: A-4120
+    severity: WARNING
+    title: Tracker position fault
+    related_faults: [TRACKER_STUCK]
+    manual: >-
+      The tracker controller reports that the measured angle does not follow the commanded
+      angle. Send a resume-tracking command; if the angle stays fixed, dispatch a technician to
+      check the drive and controller.
+  GRID_LIMIT_ACTIVE:
+    vendor_id: I-5001
+    severity: INFO
+    title: Grid active-power limit active
+    related_faults: [CURTAILMENT]
+    manual: >-
+      The plant controller is applying an active-power limit received from the grid operator.
+      All inverters are capped together. This is expected behaviour and needs no action.
+  HIGH_WIND:
+    vendor_id: I-6105
+    severity: INFO
+    title: High wind at weather station
+    related_faults: []
+    manual: >-
+      The weather station reports wind speed above the warning level. Expect tracker stow and
+      possible dust deposition on modules and sensors.
+  REMOTE_STOP:
+    vendor_id: I-1101
+    severity: INFO
+    title: Inverter stopped by remote command
+    related_faults: [UNAUTHORIZED_CMD]
+    manual: >-
+      The inverter received a stop or zero-power command over the network. Check that the
+      command came from an authorised source and at an expected time.

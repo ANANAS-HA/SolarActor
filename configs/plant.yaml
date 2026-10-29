@@ -1,0 +1,33 @@
+# Synthetic plant. Site name / lat / lon come from .env (SITE_NAME, SITE_LAT, SITE_LON).
+site:
+  altitude_m: 610
+  timezone: Asia/Riyadh
+
+inverters:
+  count: 16
+  id_format: "INV-{:02d}"
+  ac_kw: 2500            # per inverter -> 40 MWac plant
+  dc_ac_ratio: 1.25      # -> 3125 kWp DC per inverter, 50 MWp plant
+  nominal_efficiency: 0.98
+  variation_pct: 2.0     # each inverter's DC capacity varies +/- this much, so peers differ
+  variation_seed: 42
+  derate_temp_c: 60      # internal temp above which DERATE_TEMP fires
+  layout_rows: 4         # console map: 4 x 4 grid
+  layout_cols: 4
+
+weather_station_id: WS-01
+meter_id: METER-01
+
+tracker:                 # single-axis, north-south axis, tracks east-west
+  axis_tilt_deg: 0
+  axis_azimuth_deg: 180
+  max_angle_deg: 55
+  gcr: 0.35
+  backtrack: true
+  stow_wind_ms: 15       # trackers stow flat above this wind speed (normal, not a fault)
+  stow_angle_deg: 0
+
+module:
+  gamma_pdc_per_c: -0.0035
+  sapm_temp_model: open_rack_glass_glass
+  dc_losses_pct: 3.0     # wiring, mismatch, LID (soiling is modelled separately)

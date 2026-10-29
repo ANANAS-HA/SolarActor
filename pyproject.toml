@@ -1,0 +1,38 @@
+[project]
+name = "raqeeb"
+version = "0.1.0"
+description = "Agentic recovery of a simulated solar plant under compound faults"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "langgraph>=1.2.18",
+    "litellm>=1.106.6",
+    "networkx>=3.6.1",
+    "numpy>=2.4.6",
+    "pandas>=3.1.0",
+    "plotly>=7.1.0",
+    "pvlib>=0.16.1",
+    "pydantic>=2.14.2",
+    "python-dotenv>=1.2.4",
+    "pyyaml>=6.0.3",
+    "requests>=2.34.2",
+    "streamlit>=1.66.1",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["raqeeb"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "llm: needs a live LLM endpoint from .env (skipped when not configured)",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.2.0",
+]

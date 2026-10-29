@@ -1,0 +1,24 @@
+# secrets
+.env
+
+# python / uv
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+build/
+dist/
+
+# local data
+data/*.db
+data/*.db-*
+
+# editors / OS
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
+
+# raw API responses (processed CSV is committed)
+data/weather/*_raw.csv

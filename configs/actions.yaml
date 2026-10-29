@@ -1,0 +1,39 @@
+# Action allowlist (HANDOFF section 9). Anything not listed here is rejected.
+# auto: false  -> needs human approval through the console.
+# Changing the grid setpoint is never allowed and is deliberately absent.
+actions:
+  reset_comms_gateway:
+    reversible: true
+    auto: true
+    scope: core
+    description: Restart the communications gateway of one device to restore its data feed.
+  flag_sensor_use_reference:
+    reversible: true
+    auto: true
+    scope: core
+    description: Mark the on-site irradiance sensor as suspect and use the trusted reference irradiance for expected-power calculations.
+  create_cleaning_work_order:
+    reversible: true
+    auto: true
+    scope: core
+    description: Open a panel-cleaning work order (ticket) for a block or the whole plant.
+  resume_tracking:
+    reversible: true
+    auto: true
+    scope: full
+    description: Send a resume-tracking command to a tracker block that is still stowed after wind has dropped.
+  dispatch_technician:
+    reversible: true
+    auto: true
+    scope: full
+    description: Open a technician dispatch ticket for on-site inspection of one device.
+  set_power_limit:
+    reversible: true
+    auto: false
+    scope: core
+    description: Set an active-power limit on one inverter, e.g. to protect an overheating unit.
+  isolate_device:
+    reversible: false
+    auto: false
+    scope: full
+    description: Disconnect a device from the plant network and grid. Requires a site visit to undo.
