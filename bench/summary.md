@@ -1,12 +1,10 @@
 # Raqeeb benchmark results
 
-Generated 2026-10-29 22:07 UTC.
-
 All plant data, faults and alarms are **synthetic** (simulated plant twin, NASA POWER weather).
 
 | Agent | Scenarios | Root-cause precision | Root-cause recall | All causes found | False-action rate | Approvals / incident | Verified recovery | Median time to verified recovery (min) | MWh recovered | Share of lost MWh recovered | Cost / incident (USD) | Local LLM calls |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| threshold | 20 | 0.18 | 0.56 | 30% | 5% | 0.6 | 0% | n/a | 164.3 | 22% | 0.0000 | n/a |
+| threshold | 20 | 0.19 | 0.56 | 30% | 5% | 0.6 | 0% | n/a | 189.5 | 25% | 0.0000 | n/a |
 | oracle | 20 | 1.00 | 1.00 | 100% | 0% | 0.6 | 100% | 108 | 385.3 | 51% | 0.0000 | n/a |
 | empty | 20 | n/a | 0.00 | 0% | n/a | 0.0 | 0% | n/a | 0.0 | 0% | 0.0000 | n/a |
 
@@ -28,11 +26,11 @@ A plant-wide cause (SOILING@ALL) counts an action on any single inverter as addr
 - scn_0004: missed SENSOR_SOILING@WS-01, SOILING@ALL; 1 wrong cause(s): SOILING@INV-10
 - scn_0005: missed SENSOR_SOILING@WS-01; 1 wrong cause(s): SOILING@INV-05; 1 false action(s)
 - scn_0006: missed SOILING@ALL; 16 wrong cause(s): SOILING@INV-01, SOILING@INV-02, SOILING@INV-03, SOILING@INV-04 ...
-- scn_0007: missed SENSOR_SOILING@WS-01, SOILING@ALL; 1 wrong cause(s): SOILING@INV-04
+- scn_0007: missed SENSOR_SOILING@WS-01, SOILING@ALL
 - scn_0008: 1 wrong cause(s): SOILING@INV-11; 1 false action(s)
 - scn_0009: missed SENSOR_SOILING@WS-01
 - scn_0010: missed SENSOR_SOILING@WS-01, SOILING@ALL; 1 wrong cause(s): SOILING@INV-10
-- scn_0011: missed SENSOR_SOILING@WS-01, SOILING@ALL; 1 wrong cause(s): SOILING@INV-06
+- scn_0011: missed SENSOR_SOILING@WS-01, SOILING@ALL
 - scn_0012: missed SOILING@ALL; 16 wrong cause(s): SOILING@INV-01, SOILING@INV-02, SOILING@INV-03, SOILING@INV-04 ...
 - scn_0013: 1 wrong cause(s): SOILING@INV-15; 1 false action(s)
 - scn_0014: 1 wrong cause(s): SOILING@INV-05; 1 false action(s)

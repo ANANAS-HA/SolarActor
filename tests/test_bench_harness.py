@@ -84,9 +84,33 @@ def test_threshold_baseline_falls_into_the_trap():
     assert (row["tp"], row["fp"], row["fn"]) == (2, 1, 2)
     assert [(a.request.action.value, a.request.target) for a in rec.actions] == [
         ("set_power_limit", "INV-07"), ("create_cleaning_work_order", "INV-07"), ("reset_comms_gateway", "INV-12")]
-    assert rec.actions[0].request.params == {"kw": load_plant().inverters.ac_kw * 0.5}
+    true_cap = load_plant().inverters.ac_kw * (1 - 0.38)
+    assert rec.actions[0].request.params["kw"] == pytest.approx(true_cap, rel=0.01)  # read off the flat cap
+    assert row["unmitigated_at_end"] == "SENSOR_SOILING@WS-01;SOILING@ALL"  # the limit holds the derate
     assert math.isnan(row["ttvr_min"])  # it never verifies
-    assert row["mwh_recovered"] < 0  # the fixed 50% limit is below the derate cap
+    assert 0 < row["mwh_recovered"] < 1  # one inverter cleaned; the plant-wide soiling stays
+
+
+def test_threshold_baseline_limit_waits_for_derated_readings():
+    t0 = datetime(2025, 4, 12, 8, tzinfo=timezone.utc)
+
+    def reading(minute, status, ac_kw):
+        return InverterReading(ts=t0 + timedelta(minutes=minute), inverter_id="INV-07", ac_kw=ac_kw, dc_kw=ac_kw,
+                               temp_c=70, status=status)
+
+    telemetry = MemoryTelemetry()
+    agent = ThresholdBaseline()
+    agent.start(scenario().agent_view(), telemetry)
+    telemetry.write_batch(TelemetryBatch(events=[_event(0, "INV-07", "DERATE_TEMP")]))
+    first = agent.step(t0 + timedelta(minutes=15), [])
+    assert first.diagnosis.root_causes[0].labels == ["INVERTER_DERATE@INV-07"] and first.actions == []
+    telemetry.write_batch(TelemetryBatch(inverter_readings=[
+        reading(15, "RUNNING", 2100.0), reading(20, "DERATED", 1600.0), reading(25, "DERATED", 1610.0),
+        reading(30, "DERATED", 1604.0)]))
+    second = agent.step(t0 + timedelta(minutes=35), [])
+    assert [(a.action.value, a.params, a.needs_approval) for a in second.actions] == [
+        ("set_power_limit", {"kw": 1604.0}, True)]
+    assert agent.step(t0 + timedelta(minutes=50), []).actions == []
 
 
 def _event(minute: int, device: str, code: str) -> Event:

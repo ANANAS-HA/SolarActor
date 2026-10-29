@@ -23,7 +23,6 @@ predictions; rates are shares of scenarios or actions).
 from __future__ import annotations
 
 import math
-from datetime import datetime
 
 import pandas as pd
 
@@ -237,10 +236,9 @@ def _fmt(value, fmt: str) -> str:
     return fmt.format(int(value) if fmt == "{:d}" else value)
 
 
-def summary_markdown(results: pd.DataFrame, summary: pd.DataFrame, generated: datetime | None = None) -> str:
+def summary_markdown(results: pd.DataFrame, summary: pd.DataFrame) -> str:
+    """No timestamp: the file changes only when results change."""
     lines = ["# Raqeeb benchmark results", ""]
-    if generated is not None:
-        lines += [f"Generated {generated:%Y-%m-%d %H:%M} UTC.", ""]
     lines += [
         "All plant data, faults and alarms are **synthetic** (simulated plant twin, NASA POWER weather).",
         "",

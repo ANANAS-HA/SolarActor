@@ -188,6 +188,7 @@ def test_summary_markdown():
     assert "| Agent | Scenarios | Root-cause precision |" in text
     assert "| good | 2 | 1.00 | 0.62 | 50% | 33% |" in text
     assert "synthetic" in text and "n/a" in text
+    assert "Generated" not in text and text == summary_markdown(results, summarize(results, {"bad": "reference bound"}))
     assert "## Where good gets it wrong" in text and "## Where bad gets it wrong" in text
     assert "loses to" not in text  # "bad" is a reference bound, so no head-to-head
     text = summary_markdown(results, summarize(results))

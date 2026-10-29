@@ -48,6 +48,7 @@ from raqeeb.twin.weather import weather_5min
 
 POLL_MIN = 15
 STEP = timedelta(minutes=STEP_MINUTES)
+LIMIT_AT_CAP_TOLERANCE = 0.01  # a limit read off noisy readings (0.3% noise) still counts as "at the cap"
 
 
 def approve_all(request: ActionRequest) -> bool:
@@ -69,8 +70,8 @@ def _sensor_mitigated(state: PlantState, target: str) -> bool:
 def _derate_mitigated(state: PlantState, target: str) -> bool:
     """Repaired, or held by a power limit at or below the derate cap (section 8: stabilised)."""
     inv = state.inverters[target]
-    return inv.derate_cap_kw is None or (inv.power_limit_kw is not None
-                                         and inv.power_limit_kw <= inv.derate_cap_kw + 1e-6)
+    return inv.derate_cap_kw is None or (
+        inv.power_limit_kw is not None and inv.power_limit_kw <= inv.derate_cap_kw * (1 + LIMIT_AT_CAP_TOLERANCE))
 
 
 def _comms_mitigated(state: PlantState, target: str) -> bool:

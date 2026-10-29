@@ -7,6 +7,10 @@ same device. Alarms with no related fault (HIGH_WIND, TRACKER_STOW_WIND) open no
 decoy type is skipped because its alarm text says it needs no action. A repeat of the same
 code on the same device does not open a second ticket. The baseline never verifies recovery.
 
+A power limit is set at the level the inverter is observed to be stuck at: the median AC output
+of its DERATED readings so far, as an operator would read it off the trend. Until such readings
+exist (e.g. its comms are down too) the limit waits for a later poll.
+
 Expected behaviour: plant-wide soiling becomes one ticket per inverter, symptoms become causes,
 and a dusty sensor that hides the symptom alarms hides the soiling too.
 """
@@ -15,7 +19,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from raqeeb.config import load_actions, load_alarm_codes, load_plant
+from raqeeb.config import load_actions, load_alarm_codes
 from raqeeb.contracts import (
     DECOY_FAULTS,
     ActionOutcome,
@@ -26,6 +30,7 @@ from raqeeb.contracts import (
     Diagnosis,
     FaultType,
     Hypothesis,
+    InverterStatus,
     TelemetryReader,
 )
 
@@ -38,7 +43,6 @@ FAULT_ACTION: dict[FaultType, ActionType] = {
     FaultType.STRING_OPEN: ActionType.DISPATCH_TECHNICIAN,
     FaultType.UNAUTHORIZED_CMD: ActionType.ISOLATE_DEVICE,
 }
-POWER_LIMIT_FRACTION = 0.5  # fixed limit for a hot inverter, as a share of its rating
 
 
 class ThresholdBaseline:
@@ -46,20 +50,31 @@ class ThresholdBaseline:
 
     def start(self, view: AgentScenario, telemetry: TelemetryReader) -> None:
         self.telemetry = telemetry
-        self.since = view.start
+        self.window_start = self.since = view.start
         self.codes = load_alarm_codes()
         self.actions = load_actions()
-        self.limit_kw = load_plant().inverters.ac_kw * POWER_LIMIT_FRACTION
         self.tickets: dict[tuple[str, str], Hypothesis] = {}  # (code, device) -> ticket
         self.acted: set[tuple[ActionType, str]] = set()
+        self.waiting: list[tuple[FaultType, str, Hypothesis]] = []  # actions waiting for data
 
-    def _action(self, fault_type: FaultType, device: str, ticket: Hypothesis) -> ActionRequest | None:
+    def _observed_cap_kw(self, device: str, now: datetime) -> float | None:
+        readings = self.telemetry.read("inverter_readings", self.window_start, now, inverter_id=device)
+        held = readings.loc[readings["status"] == InverterStatus.DERATED.value, "ac_kw"]
+        return float(held.median()) if len(held) else None
+
+    def _action(self, fault_type: FaultType, device: str, ticket: Hypothesis, now: datetime) -> ActionRequest | None:
         action = FAULT_ACTION.get(fault_type)
         if action is None or (action, device) in self.acted:
             return None
+        params = {}
+        if action == ActionType.SET_POWER_LIMIT:
+            cap = self._observed_cap_kw(device, now)
+            if cap is None:
+                self.waiting.append((fault_type, device, ticket))
+                return None
+            params["kw"] = round(cap, 1)
         self.acted.add((action, device))
         spec = self.actions[action]
-        params = {"kw": self.limit_kw} if action == ActionType.SET_POWER_LIMIT else {}
         return ActionRequest(id=f"threshold-{len(self.acted)}", action=action, target=device, params=params,
                              reversible=spec.reversible, needs_approval=spec.needs_approval,
                              rationale=f"ticket {ticket.id}: {ticket.evidence[0]}",
@@ -69,6 +84,9 @@ class ThresholdBaseline:
         events = self.telemetry.read("events", self.since, now)
         self.since = now
         actions = []
+        if not final:
+            waiting, self.waiting = self.waiting, []
+            actions += [r for fault_type, device, ticket in waiting if (r := self._action(fault_type, device, ticket, now))]
         opened = False
         for code, device, message in zip(events["code"], events["device_id"], events["message"]):
             spec = self.codes.get(code)
@@ -81,7 +99,7 @@ class ThresholdBaseline:
                                 evidence=[f"{code} on {device}: {message}"], score=1.0)
             self.tickets[(code, device)] = ticket
             opened = True
-            if not final and (request := self._action(fault_type, device, ticket)):
+            if not final and (request := self._action(fault_type, device, ticket, now)):
                 actions.append(request)
         diagnosis = Diagnosis(root_causes=list(self.tickets.values()), confidence=1.0) if opened else None
         return AgentTurn(diagnosis=diagnosis, actions=actions)

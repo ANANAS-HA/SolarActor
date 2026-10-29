@@ -14,7 +14,6 @@ from __future__ import annotations
 import argparse
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
@@ -72,7 +71,7 @@ def write_outputs(records: list[RunRecord], out: Path = BENCH_DIR) -> tuple[pd.D
     out.mkdir(parents=True, exist_ok=True)
     results.to_csv(out / "results.csv", index=False, float_format="%.4f", lineterminator="\n")
     summary.to_csv(out / "summary.csv", index=False, float_format="%.4f", lineterminator="\n")
-    text = summary_markdown(results, summary, generated=datetime.now(timezone.utc))
+    text = summary_markdown(results, summary)
     (out / "summary.md").write_text(text, encoding="utf-8", newline="\n")
     return results, summary
 
