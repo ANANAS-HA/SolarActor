@@ -8,12 +8,23 @@ from pydantic import ValidationError
 from raqeeb.contracts import (
     TABLE_DDL,
     TABLE_MODELS,
+    ActionOutcome,
+    ActionRequest,
+    ActionStatus,
+    ActionType,
+    Agent,
+    AgentTurn,
     AnswerKey,
+    Diagnosis,
     FaultSpec,
     FaultType,
+    Hypothesis,
     InverterReading,
+    LlmCall,
+    LlmRole,
     Scenario,
     ToolResult,
+    Verification,
     from_db_ts,
     parse_cause_label,
     to_db_ts,
@@ -143,3 +154,42 @@ def test_tool_result_shape_and_json_round_trip():
         ToolResult(tool="t", verdict="ok", start=datetime(2025, 1, 15, 7))
     with pytest.raises(ValidationError):
         ToolResult(tool="t", verdict="ok", extra_field=1)
+
+
+def test_agent_turn_round_trips_with_actions_and_llm_calls():
+    ts = datetime(2025, 1, 15, 7, tzinfo=timezone.utc)
+    hyp = Hypothesis(id="h1", fault_type=FaultType.COMMS_DROPOUT, targets=["INV-12"], score=0.9)
+    turn = AgentTurn(
+        diagnosis=Diagnosis(root_causes=[hyp], confidence=0.8),
+        actions=[ActionRequest(id="a1", action=ActionType.RESET_COMMS_GATEWAY, target="INV-12", reversible=True,
+                               needs_approval=False, rationale="rows missing", expected_effect="data returns")],
+        verifications=[Verification(action_id="a1", recovered=True, before_kw=0, after_kw=2100, expected_kw=2150)],
+        llm_calls=[LlmCall(role=LlmRole.LOCAL, model="qwen", purpose="hypotheses", prompt_tokens=900),
+                   LlmCall(role="api", model="sonnet", purpose="hypotheses", cost_usd=0.012, escalation="close")],
+    )
+    again = AgentTurn.model_validate_json(turn.model_dump_json())
+    assert again == turn
+    assert again.diagnosis.root_causes[0].labels == ["COMMS_DROPOUT@INV-12"]
+    assert AgentTurn().diagnosis is None and not AgentTurn().done
+    outcome = ActionOutcome(action_id="a1", status=ActionStatus.APPLIED, ts=ts)
+    assert ActionOutcome.model_validate_json(outcome.model_dump_json()) == outcome
+    with pytest.raises(ValidationError):
+        LlmCall(role="cloud", model="x", purpose="p")
+    with pytest.raises(ValidationError):
+        LlmCall(role="local", model="x", purpose="p", cost_usd=-1)
+    with pytest.raises(ValidationError):
+        ActionOutcome(action_id="a1", status="APPLIED", ts=datetime(2025, 1, 15, 7))
+
+
+def test_agent_protocol_is_structural():
+    class Minimal:
+        name = "minimal"
+
+        def start(self, view, telemetry):
+            self.view = view
+
+        def step(self, now, outcomes, final=False):
+            return AgentTurn(done=final)
+
+    agent: Agent = Minimal()
+    assert agent.step(datetime(2025, 1, 15, 7, tzinfo=timezone.utc), [], final=True).done

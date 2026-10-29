@@ -17,10 +17,13 @@ import re
 from datetime import date, datetime, time, timedelta, timezone
 from enum import StrEnum
 from pathlib import Path
-from typing import Annotated, Any
+from typing import TYPE_CHECKING, Annotated, Any, Protocol
 
 import yaml
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator, model_validator
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 STEP_MINUTES = 5
 DISPLAY_TZ = "Asia/Riyadh"
@@ -566,6 +569,81 @@ class IncidentReport(_Model):
     verifications: list[Verification]
     cost_usd: float = 0.0
     llm_calls: int = 0
+
+
+# ---------------------------------------------------------------------------
+# Agent interface: how an environment (bench harness or console) drives an agent.
+#
+#   agent.start(scenario.agent_view(), telemetry)
+#   every N sim-minutes: write new telemetry, then turn = agent.step(now, outcomes)
+#   the environment gates turn.actions with configs/actions.yaml (not the agent's
+#   needs_approval flag), asks for approval, runs them with twin.controls.apply_action,
+#   and passes the ActionOutcomes to the next step. The last call has final=True.
+# ---------------------------------------------------------------------------
+
+
+class LlmRole(StrEnum):
+    LOCAL = "local"
+    API = "api"
+
+
+class LlmCall(_Model):
+    """One LLM call, logged by llm/gateway.py (HANDOFF section 10)."""
+
+    role: LlmRole
+    model: str
+    purpose: str  # e.g. "hypotheses", "plan_order", "report"
+    prompt_tokens: int = Field(default=0, ge=0)
+    completion_tokens: int = Field(default=0, ge=0)
+    latency_s: float = Field(default=0.0, ge=0.0)
+    cost_usd: float = Field(default=0.0, ge=0.0)
+    ok: bool = True  # output parsed into its Pydantic model
+    escalation: str = ""  # why the call went to the api model; "" if routed there by rule
+
+
+class ActionStatus(StrEnum):
+    APPLIED = "APPLIED"
+    REJECTED = "REJECTED"  # approval refused
+    FAILED = "FAILED"  # not allowlisted, bad target or bad params
+
+
+class ActionOutcome(_Model):
+    """What the environment did with one ActionRequest."""
+
+    action_id: str
+    status: ActionStatus
+    ts: UtcDatetime  # sim time the environment handled it
+    note: str = ""
+
+
+class AgentTurn(_Model):
+    """The agent's answer to one poll."""
+
+    diagnosis: Diagnosis | None = None  # current best diagnosis; None = unchanged
+    actions: list[ActionRequest] = Field(default_factory=list)  # new requests this turn
+    verifications: list[Verification] = Field(default_factory=list)  # new verifications this turn
+    llm_calls: list[LlmCall] = Field(default_factory=list)  # calls made during this turn
+    report: IncidentReport | None = None
+    done: bool = False  # nothing left to do (the environment may still poll)
+
+
+class TelemetryReader(Protocol):
+    """Read access to the telemetry tables (telemetry/store.py TelemetryStore fits).
+
+    Returns the rows of `table` with start <= ts < end as a DataFrame indexed by `ts` (UTC),
+    optionally filtered on device-like columns (inverter_id, device_id, code, ...).
+    """
+
+    def read(self, table: str, start: datetime | None = None, end: datetime | None = None,
+             **filters: str | None) -> pd.DataFrame: ...
+
+
+class Agent(Protocol):
+    name: str
+
+    def start(self, view: AgentScenario, telemetry: TelemetryReader) -> None: ...
+
+    def step(self, now: datetime, outcomes: list[ActionOutcome], final: bool = False) -> AgentTurn: ...
 
 
 # ---------------------------------------------------------------------------
