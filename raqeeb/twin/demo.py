@@ -49,6 +49,7 @@ def run_day(day: date, soiling: float) -> dict:
         "simulated": series(batch.meter, "plant_ac_kw"),
         "expected": physics.expected_plant_ac(weather, plant),
         "soiled": pd.Series([t.plant_ac_kw for t in soiled.truth], index=pd.DatetimeIndex([t.ts for t in soiled.truth])),
+        "true_ghi": pd.Series([t.ghi_wm2 for t in twin.truth], index=pd.DatetimeIndex([t.ts for t in twin.truth])),
         "inv_temp": series(inv01, "temp_c"),
         "cell_temp": physics.cell_temperature(prepared["poa_track_wm2"], prepared["ambient_c"], prepared["wind_ms"], plant),
     }
@@ -66,7 +67,9 @@ def build_figure(day: date, data: dict, soiling: float) -> go.Figure:
 
     fig.add_trace(go.Scatter(x=local(hourly.index + pd.Timedelta(minutes=30)), y=hourly["ghi_wm2"], mode="markers",
                              name="NASA POWER GHI (hourly mean)"), row=1, col=1)
-    fig.add_trace(go.Scatter(x=local(w.index), y=w["ghi_wm2"], name="GHI, 5-min"), row=1, col=1)
+    fig.add_trace(go.Scatter(x=local(w.index), y=w["ghi_wm2"], name="Reference GHI, 5-min (NASA)"), row=1, col=1)
+    fig.add_trace(go.Scatter(x=local(data["true_ghi"].index), y=data["true_ghi"], name="True on-site GHI (twin)"),
+                  row=1, col=1)
     fig.add_trace(go.Scatter(x=local(w.index), y=w["clearsky_ghi_wm2"], name="Clear-sky GHI (Ineichen)",
                              line={"dash": "dot"}), row=1, col=1)
     fig.add_trace(go.Scatter(x=local(w.index), y=w["poa_track_wm2"], name="Plane of array (tracking)"), row=1, col=1)
@@ -103,7 +106,8 @@ def main() -> None:
     plant = data["plant"]
     sim, exp, soiled = energy_mwh(data["simulated"]), energy_mwh(data["expected"]), energy_mwh(data["soiled"])
     print(f"Day {day} ({plant.site.name})")
-    print(f"  simulated {sim:.1f} MWh, expected {exp:.1f} MWh ({(sim / exp - 1):+.2%}; inverter variation + noise-free meter)")
+    print(f"  simulated {sim:.1f} MWh, expected from reference {exp:.1f} MWh ({(sim / exp - 1):+.2%}; "
+          f"true irradiance vs reference + inverter variation)")
     print(f"  specific yield {sim * 1000 / (plant.inverters.dc_kw * plant.inverters.count):.2f} kWh/kWp, "
           f"peak {data['simulated'].max() / 1000:.1f} MW of {plant.rated_ac_kw / 1000:.0f} MW")
     print(f"  {args.soiling:.0%} soiling on {PLANT_TARGET} -> {soiled:.1f} MWh ({soiled / sim - 1:+.1%} energy; "

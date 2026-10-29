@@ -4,7 +4,9 @@ import pandas as pd
 import pytest
 
 from raqeeb.config import load_plant
-from raqeeb.contracts import InverterStatus, TelemetryBatch
+import numpy as np
+
+from raqeeb.contracts import InverterStatus, ReferenceErrorConfig, TelemetryBatch
 from raqeeb.twin import plant as physics
 from raqeeb.twin.simulator import Twin
 from raqeeb.twin.weather import weather_5min
@@ -15,8 +17,15 @@ N = 16
 
 
 @pytest.fixture(scope="module")
-def plant():
+def real_plant():
     return load_plant()
+
+
+@pytest.fixture(scope="module")
+def plant(real_plant):
+    """Plant whose true irradiance equals the reference, for exact comparisons."""
+    exact = ReferenceErrorConfig(bias_sigma=0.0, sigma=0.0, tau_min=60, max_abs=0.01)
+    return real_plant.model_copy(update={"reference_error": exact})
 
 
 @pytest.fixture(scope="module")
@@ -156,6 +165,41 @@ def test_string_open_and_stop(twin):
     assert by_id["INV-05"].dc_kw == pytest.approx(0.75 * by_id["INV-04"].dc_kw, rel=0.05)
     assert by_id["INV-06"].ac_kw == 0 and by_id["INV-06"].status == InverterStatus.STOPPED
     assert ("REMOTE_STOP", "INV-06") in codes(batch)
+
+
+def test_reference_is_not_ground_truth(real_plant, weather):
+    cfg = real_plant.reference_error
+    twin = Twin(START, END, plant=real_plant, seed=11, weather=weather)
+    batch = twin.run_to_end()
+    # The reference table reports NASA unchanged ...
+    assert [r.ghi_wm2 for r in batch.weather_reference] == pytest.approx(weather["ghi_wm2"].tolist())
+    # ... while the plant sees true irradiance a few percent away from it
+    true_over_ref = np.array([t.ghi_wm2 for t in twin.truth]) / weather["ghi_wm2"].to_numpy()
+    assert np.all(np.abs(true_over_ref - 1) <= cfg.max_abs + 1e-9)
+    assert np.abs(true_over_ref - 1).mean() > 0.005
+    # A clean sensor therefore disagrees with the reference by more than its own noise
+    sensor_over_ref = np.array([s.ghi_sensor_wm2 for s in batch.weather_station]) / weather["ghi_wm2"].to_numpy()
+    assert np.std(sensor_over_ref - 1) < 0.05
+    assert np.abs(sensor_over_ref - 1).max() > 2 * real_plant.noise.ghi_sensor
+
+
+def test_reference_error_differs_by_seed_and_repeats(real_plant, weather):
+    a = Twin(START, END, plant=real_plant, seed=1, weather=weather).irradiance_factor
+    b = Twin(START, END, plant=real_plant, seed=1, weather=weather).irradiance_factor
+    c = Twin(START, END, plant=real_plant, seed=2, weather=weather).irradiance_factor
+    assert a.equals(b) and not a.equals(c)
+
+
+def test_tracker_angle_reported(twin, plant, weather):
+    normal = twin.step()
+    theta = physics.prepare(weather, plant)["tracker_theta"].iloc[0]
+    assert [r.tracker_angle_deg for r in normal.inverter_readings] == pytest.approx([theta] * N)
+    assert abs(theta) > 20  # mid-morning: tracker well off flat
+    twin.state.inverters["INV-03"].tracker_override_deg = 10.0
+    twin.state.atmosphere.wind_add_ms = 20.0
+    stuck_and_stowed = {r.inverter_id: r.tracker_angle_deg for r in twin.step().inverter_readings}
+    assert stuck_and_stowed["INV-03"] == 10.0
+    assert stuck_and_stowed["INV-04"] == plant.tracker.stow_angle_deg
 
 
 def test_truth_records_exact_values(twin):

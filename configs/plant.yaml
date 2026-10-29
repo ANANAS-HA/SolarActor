@@ -42,6 +42,12 @@ noise:                   # measurement noise on readings (truth stays exact)
   ghi_sensor: 0.005
   ambient_c_abs: 0.2
 
+reference_error:         # true on-site irradiance vs the NASA reference (satellite is never exact)
+  bias_sigma: 0.02       # per-run offset, typical clear-sky satellite bias of a few percent
+  sigma: 0.025           # slowly varying part
+  tau_min: 60
+  max_abs: 0.08
+
 controls:                # simulated minutes before a control takes effect
   comms_reset_delay_min: 5
   cleaning_delay_min: 60

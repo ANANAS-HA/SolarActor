@@ -150,8 +150,9 @@ class InverterReading(_Model):
     inverter_id: str
     ac_kw: float
     dc_kw: float
-    temp_c: float
+    temp_c: float  # inverter internal temperature (not module/cell temperature)
     status: InverterStatus
+    tracker_angle_deg: float | None = None  # measured rotation of the tracker block; 0 = flat
 
 
 class WeatherStationReading(_Model):
@@ -164,7 +165,8 @@ class WeatherStationReading(_Model):
 
 
 class WeatherReference(_Model):
-    """NASA POWER + pvlib clear-sky. Trusted."""
+    """NASA POWER + pvlib clear-sky. Trusted, but not exact: the twin's true irradiance
+    differs from it by a few percent (see ReferenceErrorConfig)."""
 
     ts: UtcDatetime
     ghi_wm2: float
@@ -219,6 +221,7 @@ TABLE_DDL: dict[str, str] = {
             dc_kw REAL NOT NULL,
             temp_c REAL NOT NULL,
             status TEXT NOT NULL,
+            tracker_angle_deg REAL,
             PRIMARY KEY (ts, inverter_id)
         )""",
     "weather_station": """
@@ -603,6 +606,19 @@ class MeasurementNoiseConfig(_Model):
     ambient_c_abs: float = Field(ge=0)  # absolute, degrees C
 
 
+class ReferenceErrorConfig(_Model):
+    """How the twin's true irradiance differs from the reference (satellite vs on-site).
+
+    true = reference * (1 + bias + e(t)), with bias ~ N(0, bias_sigma) per twin and e(t) an
+    AR(1) process with standard deviation `sigma` and correlation time `tau_min`.
+    """
+
+    bias_sigma: float = Field(ge=0)
+    sigma: float = Field(ge=0)
+    tau_min: float = Field(gt=0)
+    max_abs: float = Field(gt=0, lt=1)  # clip |bias + e(t)|
+
+
 class ControlsConfig(_Model):
     """Simulated-time delays before a control takes effect."""
 
@@ -621,6 +637,7 @@ class PlantConfig(_Model):
     tracker: TrackerConfig
     module: ModuleConfig
     noise: MeasurementNoiseConfig
+    reference_error: ReferenceErrorConfig
     controls: ControlsConfig
 
     @property

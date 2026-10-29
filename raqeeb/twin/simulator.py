@@ -7,6 +7,10 @@
 Each step: apply scheduled changes due at the clock, compute readings at the clock, then
 move the clock forward by STEP_MINUTES. Changes made between steps show up in the next one.
 A device with comms down produces power (the meter sees it) but writes no rows.
+
+The weather passed in (NASA POWER) is what the weather_reference table reports. The plant and
+the on-site sensor see the TRUE irradiance, which differs from it by a few percent
+(plant.reference_error), so comparing the sensor with the reference is never exact.
 """
 
 from __future__ import annotations
@@ -33,6 +37,7 @@ from raqeeb.contracts import (
     MeterReading,
     PlantConfig,
     PlantState,
+    ReferenceErrorConfig,
     TelemetryBatch,
     WeatherReference,
     WeatherStationReading,
@@ -42,6 +47,20 @@ from raqeeb.twin.weather import weather_5min
 
 STEP = timedelta(minutes=STEP_MINUTES)
 StateChange = Callable[[PlantState], None]
+IRRADIANCE_COLUMNS = ["ghi_wm2", "dni_wm2", "dhi_wm2"]
+
+
+def true_irradiance_factor(index: pd.DatetimeIndex, cfg: ReferenceErrorConfig,
+                           rng: np.random.Generator) -> pd.Series:
+    """Multiplier from reference to true irradiance: 1 + bias + AR(1) error, clipped."""
+    phi = np.exp(-STEP_MINUTES / cfg.tau_min)
+    shocks = rng.normal(0.0, cfg.sigma, len(index))
+    error = np.empty(len(index))
+    error[0] = shocks[0]
+    for k in range(1, len(index)):
+        error[k] = phi * error[k - 1] + np.sqrt(1 - phi**2) * shocks[k]
+    bias = rng.normal(0.0, cfg.bias_sigma)
+    return pd.Series(1.0 + np.clip(bias + error, -cfg.max_abs, cfg.max_abs), index=index)
 
 
 @dataclass(order=True)
@@ -60,6 +79,7 @@ class StepTruth:
     plant_ac_kw: float
     inverter_ac_kw: dict[str, float]
     stowed: bool
+    ghi_wm2: float  # true on-site GHI (reference x error x atmosphere)
 
 
 class Twin:
@@ -84,7 +104,13 @@ class Twin:
         self._ids = self.plant.inverters.ids
         self._dc_rated = self.plant.inverters.dc_kw * physics.capacity_factors(self.plant)
         weather = weather if weather is not None else weather_5min(start, end, self.plant)
-        self._frame = physics.prepare(weather, self.plant)
+        self._reference = weather
+        self.irradiance_factor = true_irradiance_factor(
+            weather.index, self.plant.reference_error, np.random.default_rng([seed, 1])
+        )
+        truth = weather.copy()
+        truth[IRRADIANCE_COLUMNS] = weather[IRRADIANCE_COLUMNS].mul(self.irradiance_factor, axis=0)
+        self._frame = physics.prepare(truth, self.plant)
         self._fixed_poa: dict[float, pd.Series] = {}
         self._queue: list[_Scheduled] = []
         self._seq = itertools.count()
@@ -169,13 +195,17 @@ class Twin:
         invs = [state.inverters[i] for i in ids]
 
         poa = np.empty(len(ids))
+        angle = np.empty(len(ids))
         for k, inv in enumerate(invs):
             if inv.tracker_override_deg is not None:
                 poa[k] = self._poa_fixed(inv.tracker_override_deg).loc[w.name]
+                angle[k] = inv.tracker_override_deg
             elif stowed:
                 poa[k] = w["poa_stow_wm2"]
+                angle[k] = plant.tracker.stow_angle_deg
             else:
                 poa[k] = w["poa_track_wm2"]
+                angle[k] = w["tracker_theta"]
         poa *= factor
 
         soiling = np.array([inv.soiling_loss for inv in invs])
@@ -244,9 +274,10 @@ class Twin:
             if inv.comms_up:
                 out.inverter_readings.append(InverterReading(
                     ts=ts, inverter_id=inv_id, ac_kw=float(ac[k] * n_ac[k]), dc_kw=float(dc[k] * n_dc[k]),
-                    temp_c=float(temp[k] + n_t[k]), status=statuses[k],
+                    temp_c=float(temp[k] + n_t[k]), status=statuses[k], tracker_angle_deg=float(angle[k]),
                 ))
         ghi = float(w["ghi_wm2"]) * factor
+        ref = self._reference.loc[w.name]
         if state.station.comms_up:
             sensor = ghi * (1.0 - state.station.sensor_soiling) * (1.0 + self._noise(None, noise.ghi_sensor))
             out.weather_station.append(WeatherStationReading(
@@ -254,15 +285,16 @@ class Twin:
                 ambient_c=ambient + float(self._noise(None, noise.ambient_c_abs)), wind_ms=wind,
             ))
         out.weather_reference.append(WeatherReference(
-            ts=ts, ghi_wm2=ghi, dni_wm2=float(w["dni_wm2"]) * factor, dhi_wm2=float(w["dhi_wm2"]) * factor,
-            ambient_c=ambient, wind_ms=wind, clearsky_ghi_wm2=float(w["clearsky_ghi_wm2"]),
+            ts=ts, ghi_wm2=float(ref["ghi_wm2"]) * factor, dni_wm2=float(ref["dni_wm2"]) * factor,
+            dhi_wm2=float(ref["dhi_wm2"]) * factor, ambient_c=ambient, wind_ms=wind,
+            clearsky_ghi_wm2=float(ref["clearsky_ghi_wm2"]),
         ))
         plant_ac = float(ac.sum())
         out.meter.append(MeterReading(ts=ts, plant_ac_kw=plant_ac))
         if state.grid_limit_kw is not None:
             out.grid_setpoint.append(GridSetpoint(ts=ts, limit_kw=state.grid_limit_kw))
         self.truth.append(StepTruth(ts=ts, plant_ac_kw=plant_ac, inverter_ac_kw=dict(zip(ids, ac.tolist())),
-                                    stowed=stowed))
+                                    stowed=stowed, ghi_wm2=ghi))
 
     def _raise_alarms(self, current: set[tuple[str, str]], *, wind: float, temp: dict, ac: dict) -> None:
         details = {
