@@ -13,6 +13,7 @@ from raqeeb.contracts import (
     FaultType,
     InverterReading,
     Scenario,
+    ToolResult,
     from_db_ts,
     parse_cause_label,
     to_db_ts,
@@ -126,3 +127,19 @@ def test_ddl_creates_every_table_with_model_columns():
         columns = {row[1] for row in con.execute(f"PRAGMA table_info({table})")} - {"id"}
         fields = {"payload_json" if f == "payload" else f for f in model.model_fields}
         assert columns == fields, table
+
+
+def test_tool_result_shape_and_json_round_trip():
+    ts = datetime(2025, 1, 15, 7, tzinfo=timezone.utc)
+    result = ToolResult(tool="sensor_check", verdict="sensor_low", devices=["WS-01"], start=ts,
+                        end=ts + timedelta(hours=1), values={"sensor_vs_reference": 0.79, "onset": ts},
+                        thresholds={"sensor_low_ratio": 0.9}, evidence="sensor reads 79% of the reference")
+    assert result.finding
+    again = ToolResult.model_validate_json(result.model_dump_json())
+    assert again.values["onset"] == "2025-01-15T07:00:00Z"
+    assert not ToolResult(tool="t", verdict="ok").finding
+    assert not ToolResult(tool="t", verdict="inconclusive").finding
+    with pytest.raises(ValidationError):
+        ToolResult(tool="t", verdict="ok", start=datetime(2025, 1, 15, 7))
+    with pytest.raises(ValidationError):
+        ToolResult(tool="t", verdict="ok", extra_field=1)
