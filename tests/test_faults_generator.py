@@ -7,7 +7,15 @@ import pytest
 
 from raqeeb.config import SCENARIO_DIR, load_plant
 from raqeeb.contracts import CORE_FAULTS, DECOY_FAULTS, FULL_SCOPE_FAULTS, FaultType
-from raqeeb.faults.generator import COOL_MONTHS, generate, has_decoy, is_trap, load_scenarios, write_scenarios
+from raqeeb.faults.generator import (
+    COOL_MONTHS,
+    generate,
+    has_decoy,
+    is_trap,
+    load_scenarios,
+    storm_scenario,
+    write_scenarios,
+)
 from raqeeb.faults.injector import FaultInjector
 
 SYMPTOM_CODES = {"LOW_PR", "LOW_STRING_CURRENT", "DC_INPUT_LOW"}
@@ -105,3 +113,15 @@ def test_core_scenarios_run_with_expected_effects(core):
             assert raised["DERATE_TEMP"] >= 1, s.id
         if FaultType.COMMS_DROPOUT in types:
             assert raised["COMM_LOSS"] == 1, s.id
+
+
+@pytest.mark.parametrize("seed", range(12))
+def test_storm_scenario(seed):
+    s = storm_scenario(seed)
+    assert storm_scenario(seed) == s
+    types = [f.type for f in s.faults]
+    assert FaultType.SOILING in types and len(types) == 3 and len(set(types)) == 3
+    assert s.start.month in COOL_MONTHS
+    assert s.answer_key == s.expected_answer_key()
+    if FaultType.SENSOR_SOILING in types:
+        assert is_trap(s)
