@@ -131,6 +131,7 @@ def test_tables_follow_the_store_shape(trap):
     assert set(trap.tables) >= {"inverter_readings", "weather_station", "weather_reference", "meter", "events"}
     for frame in trap.tables.values():
         assert str(frame["ts"].dt.tz) == "UTC"
+    assert "id" in trap.tables["events"]  # read back from the TelemetryStore, not the raw batch
     assert len(trap.lines) == len(trap.tables["meter"]) == 144
 
 
