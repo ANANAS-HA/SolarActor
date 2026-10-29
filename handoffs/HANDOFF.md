@@ -300,3 +300,4 @@ Anything not in the allowlist is rejected. Approval uses a LangGraph interrupt; 
 
 - 2026-10-29 — Handoff written. Nothing built yet.
 - 2026-10-29 — Phase 0 done except LLM smoke: uv + Python 3.12, contracts, config, YAML skeletons, Riyadh 2025 NASA POWER CSV (8760 h, no gaps), 18 tests pass. Local LLM not running yet; `test_llm_smoke` skips until `.env` points at it.
+- 2026-10-29 — Phase 0 complete. Local LLM smoke passes: llama.cpp at 127.0.0.1:8080, Qwen3.8-27B IQ4_XS, ~84 tok/s, reasoning model (thinking can be turned off per call with `chat_template_kwargs: {enable_thinking: false}`). 19 tests pass.

@@ -46,16 +46,19 @@ def ping(settings: Settings, role: str = "local", timeout_s: float = 60) -> Smok
     response = litellm.completion(
         model=model,
         messages=[{"role": "user", "content": PROMPT}],
-        max_tokens=16,
+        max_tokens=512,  # reasoning models spend tokens thinking before the visible reply
         temperature=0,
         timeout=timeout_s,
         **extra,
     )
     usage = response.usage
+    reply = (response.choices[0].message.content or "").strip()
+    if not reply:
+        raise RuntimeError(f"{model} returned an empty reply (finish_reason={response.choices[0].finish_reason})")
     return SmokeResult(
         role=role,
         model=model,
-        reply=(response.choices[0].message.content or "").strip(),
+        reply=reply,
         latency_s=time.perf_counter() - started,
         prompt_tokens=usage.prompt_tokens,
         completion_tokens=usage.completion_tokens,
