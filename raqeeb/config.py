@@ -17,6 +17,7 @@ CONFIG_DIR = REPO_ROOT / "configs"
 DATA_DIR = REPO_ROOT / "data"
 WEATHER_DIR = DATA_DIR / "weather"
 SCENARIO_DIR = REPO_ROOT / "scenarios"
+BENCH_DIR = REPO_ROOT / "bench"  # benchmark output (results.csv, summary.csv, summary.md)
 ENV_FILE = REPO_ROOT / ".env"
 
 

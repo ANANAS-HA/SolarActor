@@ -1,0 +1,4 @@
+agent,note,scenarios,precision,recall,all_causes_found_rate,false_action_rate,actions_per_incident,approvals_per_incident,verified_recovery_rate,ttvr_median_min,mwh_recovered,mwh_lost,recovered_share_of_lost,cost_per_incident_usd,llm_calls_per_incident,local_call_share
+threshold,,20,0.1832,0.5581,0.3000,0.0534,6.5500,0.6000,0.0000,,164.3043,750.8956,0.2188,0.0000,0.0000,
+oracle,reference upper bound: reads the answer key,20,1.0000,1.0000,1.0000,0.0000,2.1500,0.6000,1.0000,107.5000,385.3143,750.8956,0.5131,0.0000,0.0000,
+empty,reference lower bound: does nothing,20,,0.0000,0.0000,,0.0000,0.0000,0.0000,,0.0000,750.8956,0.0000,0.0000,0.0000,
