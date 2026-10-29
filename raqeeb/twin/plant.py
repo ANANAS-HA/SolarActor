@@ -106,11 +106,12 @@ def expected_power(weather: pd.DataFrame, plant: PlantConfig, with_variation: bo
     tcell = cell_temperature(poa, prepared["ambient_c"], prepared["wind_ms"], plant)
     factors = capacity_factors(plant) if with_variation else np.ones(plant.inverters.count)
 
-    columns = {}
+    columns, by_factor = {}, {}
     for inv_id, factor in zip(plant.inverters.ids, factors):
-        dc = dc_power_kw(poa, tcell, plant.inverters.dc_kw * factor, plant)
-        columns[(inv_id, "dc_kw")] = dc
-        columns[(inv_id, "ac_kw")] = ac_power_kw(dc, plant)
+        if factor not in by_factor:  # nominal ratings: one computation for every inverter
+            dc = dc_power_kw(poa, tcell, plant.inverters.dc_kw * factor, plant)
+            by_factor[factor] = (dc, ac_power_kw(dc, plant))
+        columns[(inv_id, "dc_kw")], columns[(inv_id, "ac_kw")] = by_factor[factor]
     out = pd.DataFrame(columns, index=prepared.index)
     out.columns = pd.MultiIndex.from_tuples(out.columns, names=["inverter_id", "quantity"])
     return out
