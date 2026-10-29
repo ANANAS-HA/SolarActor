@@ -31,6 +31,10 @@ testpaths = ["tests"]
 markers = [
     "llm: needs a live LLM endpoint from .env (skipped when not configured)",
 ]
+filterwarnings = [
+    # raised inside pvlib with pandas 3; not our code
+    "ignore:DatetimeIndex.dayofyear is deprecated",
+]
 
 [dependency-groups]
 dev = [

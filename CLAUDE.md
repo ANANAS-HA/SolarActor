@@ -28,6 +28,15 @@ Code computes every number; the LLM proposes and prunes hypotheses, orders plans
 - Weather: `data/weather/nasa_power_<lat>_<lon>_<year>.csv`, hourly, UTC. A value labelled hour H is the
   average over [H, H+1): centre it at H+30 min before resampling to 5 min (checked against solar position).
 - Riyadh 2025 hourly wind maxes at ~11 m/s (below the 15 m/s stow limit): the dust-storm fault must inject its own wind.
+- NASA clear-day GHI is ~10% ABOVE pvlib Ineichen clear-sky here: compare the sensor to the reference, not raw Ineichen.
+
+## Twin (Lane A)
+- `Twin(start, end, seed=)`; faults and delayed effects go through `twin.schedule(at, label, fn(state))`;
+  `twin.advance(min)` returns a `TelemetryBatch`; `twin.truth` holds exact values for the bench.
+- Faults/controls change only `PlantState` (contracts). Controls: `twin/controls.py`, `apply_action()`.
+- Expected (fault-free) output: `twin.plant.expected_power()` / `expected_plant_ac()` on `weather_5min()`.
+- DC/AC 1.25 clips ~5 h on clear summer days, so midday soiling loss is partly hidden (20% soiling = -16% energy).
+- Derate fault: set `temp_offset_c` high enough to exceed `derate_temp_c` (65); +30 C works mid-morning.
 
 ## Rules
 - One module at a time, each with tests. Run `uv run pytest` before every commit; commit after each working piece.

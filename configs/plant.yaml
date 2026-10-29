@@ -11,14 +11,18 @@ inverters:
   nominal_efficiency: 0.98
   variation_pct: 2.0     # each inverter's DC capacity varies +/- this much, so peers differ
   variation_seed: 42
-  derate_temp_c: 60      # internal temp above which DERATE_TEMP fires
+  derate_temp_c: 65      # internal temp at which thermal derating starts (healthy max is ~58)
+  temp_rise_idle_c: 2    # internal temp = ambient + idle + full_load * load + fault offset
+  temp_rise_full_load_c: 10
   layout_rows: 4         # console map: 4 x 4 grid
   layout_cols: 4
 
 weather_station_id: WS-01
 meter_id: METER-01
+plant_controller_id: PPC-01
+high_wind_alarm_ms: 12   # HIGH_WIND alarm at the weather station
 
-tracker:                 # single-axis, north-south axis, tracks east-west
+tracker:                 # single-axis, north-south axis, tracks east-west; one block per inverter
   axis_tilt_deg: 0
   axis_azimuth_deg: 180
   max_angle_deg: 55
@@ -31,3 +35,14 @@ module:
   gamma_pdc_per_c: -0.0035
   sapm_temp_model: open_rack_glass_glass
   dc_losses_pct: 3.0     # wiring, mismatch, LID (soiling is modelled separately)
+  albedo: 0.3            # desert sand
+
+noise:                   # measurement noise on readings (truth stays exact)
+  inverter_power: 0.003
+  ghi_sensor: 0.005
+  ambient_c_abs: 0.2
+
+controls:                # simulated minutes before a control takes effect
+  comms_reset_delay_min: 5
+  cleaning_delay_min: 60
+  technician_delay_min: 120

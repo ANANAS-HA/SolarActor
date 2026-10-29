@@ -181,6 +181,8 @@ class MeterReading(_Model):
 
 
 class GridSetpoint(_Model):
+    """Written only while the grid operator's limit is active (its presence is the evidence)."""
+
     ts: UtcDatetime
     limit_kw: float
 
@@ -284,6 +286,67 @@ TABLE_MODELS: dict[str, type[BaseModel]] = {
     "commands": Command,
     "audit": AuditEntry,
 }
+
+
+class TelemetryBatch(_Model):
+    """What the twin emits for one or more steps. Field names = table names."""
+
+    inverter_readings: list[InverterReading] = Field(default_factory=list)
+    weather_station: list[WeatherStationReading] = Field(default_factory=list)
+    weather_reference: list[WeatherReference] = Field(default_factory=list)
+    meter: list[MeterReading] = Field(default_factory=list)
+    grid_setpoint: list[GridSetpoint] = Field(default_factory=list)
+    events: list[Event] = Field(default_factory=list)
+    commands: list[Command] = Field(default_factory=list)
+
+    def extend(self, other: TelemetryBatch) -> None:
+        for name in type(self).model_fields:
+            getattr(self, name).extend(getattr(other, name))
+
+    def tables(self) -> dict[str, list[BaseModel]]:
+        return {name: getattr(self, name) for name in type(self).model_fields}
+
+
+# ---------------------------------------------------------------------------
+# Twin state (HANDOFF section 7). Faults and controls change ONLY this; the
+# simulator computes readings from weather x state.
+# ---------------------------------------------------------------------------
+
+
+class InverterState(_Model):
+    soiling_loss: float = Field(default=0.0, ge=0.0, le=1.0)  # fraction of irradiance lost on panels
+    string_loss: float = Field(default=0.0, ge=0.0, le=1.0)  # fraction of DC lost (open strings)
+    derate_cap_kw: float | None = Field(default=None, ge=0.0)  # thermal derate cap (fault)
+    temp_offset_c: float = 0.0  # extra internal temperature (e.g. failed fan)
+    power_limit_kw: float | None = Field(default=None, ge=0.0)  # operator/agent limit (control)
+    comms_up: bool = True
+    tracker_override_deg: float | None = None  # stuck tracker angle; None = tracking normally
+    stopped: bool = False  # stopped by remote command
+    isolated: bool = False  # disconnected (irreversible in the twin)
+
+
+class WeatherStationState(_Model):
+    sensor_soiling: float = Field(default=0.0, ge=0.0, le=1.0)  # fraction the GHI sensor under-reads
+    flagged: bool = False  # flagged suspect: tools use the reference instead
+    comms_up: bool = True
+
+
+class AtmosphereState(_Model):
+    """Synthetic weather modifiers (dust storm). Apply to the true weather and the reference."""
+
+    irradiance_factor: float = Field(default=1.0, ge=0.0, le=1.0)
+    wind_add_ms: float = Field(default=0.0, ge=0.0)
+
+
+class PlantState(_Model):
+    inverters: dict[str, InverterState]
+    station: WeatherStationState = Field(default_factory=WeatherStationState)
+    atmosphere: AtmosphereState = Field(default_factory=AtmosphereState)
+    grid_limit_kw: float | None = Field(default=None, ge=0.0)  # curtailment from the grid operator
+
+    @classmethod
+    def healthy(cls, inverter_ids: list[str]) -> PlantState:
+        return cls(inverters={i: InverterState() for i in inverter_ids})
 
 
 # ---------------------------------------------------------------------------
@@ -495,6 +558,8 @@ class InverterFleetConfig(_Model):
     variation_pct: float = Field(ge=0)
     variation_seed: int
     derate_temp_c: float
+    temp_rise_idle_c: float  # internal temp = ambient + idle + full_load * load fraction + offset
+    temp_rise_full_load_c: float
     layout_rows: int = Field(gt=0)
     layout_cols: int = Field(gt=0)
 
@@ -527,6 +592,23 @@ class ModuleConfig(_Model):
     gamma_pdc_per_c: float
     sapm_temp_model: str
     dc_losses_pct: float = Field(ge=0, lt=100)
+    albedo: float = Field(ge=0, le=1)
+
+
+class MeasurementNoiseConfig(_Model):
+    """Relative (fraction) standard deviation of measurement noise on readings."""
+
+    inverter_power: float = Field(ge=0)
+    ghi_sensor: float = Field(ge=0)
+    ambient_c_abs: float = Field(ge=0)  # absolute, degrees C
+
+
+class ControlsConfig(_Model):
+    """Simulated-time delays before a control takes effect."""
+
+    comms_reset_delay_min: int = Field(ge=0)
+    cleaning_delay_min: int = Field(ge=0)
+    technician_delay_min: int = Field(ge=0)
 
 
 class PlantConfig(_Model):
@@ -534,5 +616,13 @@ class PlantConfig(_Model):
     inverters: InverterFleetConfig
     weather_station_id: str
     meter_id: str
+    plant_controller_id: str
+    high_wind_alarm_ms: float
     tracker: TrackerConfig
     module: ModuleConfig
+    noise: MeasurementNoiseConfig
+    controls: ControlsConfig
+
+    @property
+    def rated_ac_kw(self) -> float:
+        return self.inverters.ac_kw * self.inverters.count

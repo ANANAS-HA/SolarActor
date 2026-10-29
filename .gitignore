@@ -22,3 +22,6 @@ Thumbs.db
 
 # raw API responses (processed CSV is committed)
 data/weather/*_raw.csv
+
+# generated plots
+data/plots/
