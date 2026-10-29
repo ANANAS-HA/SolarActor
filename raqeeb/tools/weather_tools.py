@@ -1,12 +1,12 @@
 """Weather, on-site sensor and wind tools. Numbers only; reads only the telemetry store.
 
-- sensor_to_weather: THE expected-from-sensor weather of the project. Sensor GHI is split into
-  DNI/DHI with pvlib erbs. The tools use it, and so does the fault injector's LOW_PR family of
-  alarms, so the alarm feed and the agent's numbers agree. erbs puts less light in diffuse than
-  NASA POWER (~17% vs ~32% at midday here), so expected-from-sensor runs a few percent high on
-  trackers even with a clean sensor (up to ~10% in unclipped summer shoulder hours), as any
-  plant estimating the split from one GHI sensor would. sensor_check compares against the
-  reference directly, not through erbs.
+- sensor_scaled_weather: THE expected-from-sensor weather of the project: the reference
+  irradiance scaled by sensor GHI / reference GHI, with the station's ambient and wind. It keeps
+  the reference's beam/diffuse split, so a dust layer on the sensor is an exact uniform scale.
+  The tools use it (physics.expected_from_sensor) and so do the fault injector's LOW_PR family of
+  alarms, so the alarm feed and the agent's numbers agree. (Splitting sensor GHI with pvlib erbs
+  instead was tried: erbs puts ~17% of midday GHI in diffuse vs NASA's ~32%, expected runs 2-10%
+  high on trackers, and healthy days raised symptom alarms in 43 of 52 runs.)
 - sensor_flagged: from the commands table (flag_sensor_use_reference).
 - sensor_check: the dusty-sensor test. The reference is not ground truth (per-run bias sd ~2%,
   slow error sd ~2.5%, max 8%), so a single sensor/reference ratio is not enough. It combines
@@ -22,7 +22,6 @@ from datetime import datetime
 
 import numpy as np
 import pandas as pd
-import pvlib
 
 from raqeeb.contracts import VERDICT_INCONCLUSIVE, VERDICT_OK, ActionType, InverterStatus, PlantConfig, ToolResult
 from raqeeb.telemetry.store import TelemetryStore
@@ -46,30 +45,32 @@ PEERS_DISAGREE_TOL = 0.10  # above this: the panels do not see the sensor's loss
 UNCLIPPED_FRACTION = 0.95  # peers compared only where expected AC is below this share of rating
 
 GEOMETRY = ["apparent_zenith", "zenith", "azimuth"]
+IRRADIANCE = ["ghi_wm2", "dni_wm2", "dhi_wm2"]
+PREPARED_POA = ["poa_track_wm2", "poa_stow_wm2"]  # columns added by twin.plant.prepare()
 
 
 def solar_geometry(index: pd.DatetimeIndex, plant: PlantConfig | None = None) -> pd.DataFrame:
     return location(get_plant(plant)).get_solarposition(index)[GEOMETRY]
 
 
-def sensor_to_weather(ghi_sensor_wm2: pd.Series, ambient_c: pd.Series, wind_ms: pd.Series,
-                      geometry: pd.DataFrame) -> pd.DataFrame:
-    """Weather frame from the on-site sensor for twin.plant.expected_power(): GHI split with erbs.
+def sensor_scaled_weather(ghi_sensor_wm2: pd.Series, ambient_c: pd.Series, wind_ms: pd.Series,
+                          reference: pd.DataFrame) -> pd.DataFrame:
+    """Weather frame as the on-site sensor sees it, for twin.plant.expected_power().
 
-    `geometry` needs GEOMETRY columns on the same index (solar_geometry() or a weather_5min frame).
+    `reference` is a reference weather frame with GEOMETRY (reference_weather(), or a
+    weather_5min frame). Its irradiance is scaled by sensor GHI / reference GHI (0 where the
+    reference GHI is 0). If it is a prepared frame (twin.plant.prepare()), its plane-of-array
+    columns are scaled too: POA is linear in the irradiance components, so this is the same
+    result without recomputing the tracker geometry (the fault injector calls it every step).
     """
-    parts = pvlib.irradiance.erbs(ghi_sensor_wm2, geometry["zenith"], ghi_sensor_wm2.index)
-    frame = pd.DataFrame(
-        {
-            "ghi_wm2": ghi_sensor_wm2,
-            "dni_wm2": parts["dni"].fillna(0.0),
-            "dhi_wm2": parts["dhi"].fillna(0.0),
-            "ambient_c": ambient_c,
-            "wind_ms": wind_ms,
-        },
-        index=ghi_sensor_wm2.index,
-    )
-    return frame.join(geometry[GEOMETRY])
+    ref = reference.reindex(ghi_sensor_wm2.index)
+    scale = (ghi_sensor_wm2 / ref["ghi_wm2"]).where(ref["ghi_wm2"] > 0, 0.0)
+    frame = ref[GEOMETRY + [c for c in ("tracker_theta",) if c in ref]].copy()
+    for column in IRRADIANCE + [c for c in PREPARED_POA if c in ref]:
+        frame[column] = ref[column] * scale
+    frame["ambient_c"] = ambient_c
+    frame["wind_ms"] = wind_ms
+    return frame
 
 
 def reference_weather(store: TelemetryStore, start: datetime | None = None, end: datetime | None = None,
@@ -81,10 +82,11 @@ def reference_weather(store: TelemetryStore, start: datetime | None = None, end:
 
 def sensor_weather(store: TelemetryStore, start: datetime | None = None, end: datetime | None = None,
                    plant: PlantConfig | None = None) -> pd.DataFrame:
-    """sensor_to_weather() on stored station rows, plus clear-sky GHI. Only steps the station
+    """sensor_scaled_weather() on stored station rows, plus clear-sky GHI. Only steps the station
     reported (a station dropout stays missing)."""
     ws = store.weather_station(start, end)
-    frame = sensor_to_weather(ws["ghi_sensor_wm2"], ws["ambient_c"], ws["wind_ms"], solar_geometry(ws.index, plant))
+    frame = sensor_scaled_weather(ws["ghi_sensor_wm2"], ws["ambient_c"], ws["wind_ms"],
+                                  reference_weather(store, start, end, plant))
     frame["clearsky_ghi_wm2"] = store.weather_reference(start, end)["clearsky_ghi_wm2"].reindex(ws.index)
     return frame
 

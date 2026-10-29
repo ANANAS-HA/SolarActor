@@ -36,13 +36,34 @@ def test_expected_from_sensor_is_the_shared_calculation(run):
     """basis='sensor' is expected_from_sensor() on the stored station rows, step by step too."""
     store, _, inj = run("healthy")
     ws = store.weather_station()
-    geo = weather_tools.solar_geometry(ws.index)
-    whole = physics.expected_from_sensor(ws["ghi_sensor_wm2"], ws["ambient_c"], ws["wind_ms"], geo)
+    ref = weather_tools.reference_weather(store)
+    whole = physics.expected_from_sensor(ws["ghi_sensor_wm2"], ws["ambient_c"], ws["wind_ms"], ref)
     assert physics.expected(store, basis="sensor").to_numpy() == pytest.approx(whole.to_numpy())
     k = 60
     one = physics.expected_from_sensor(ws["ghi_sensor_wm2"].iloc[[k]], ws["ambient_c"].iloc[[k]],
-                                       ws["wind_ms"].iloc[[k]], geo.iloc[[k]])
+                                       ws["wind_ms"].iloc[[k]], ref)
     assert one.to_numpy() == pytest.approx(whole.iloc[[k]].to_numpy())
+
+
+@pytest.mark.parametrize("name", ["healthy", "sensor_only", "trap"])
+def test_injector_alarms_and_tools_use_the_same_expected(run, name):
+    """The injector's symptom alarms compare against exactly what the tools call expected-from-sensor."""
+    store, _, inj = run(name)
+    tools = physics.expected(store, basis="sensor").xs("dc_kw", axis=1, level="quantity").iloc[:, 0]
+    judged = 0
+    for station in _station_rows(store):
+        exp = inj.monitor.expected_from_sensor(station)
+        if exp is not None:
+            assert exp["dc_kw"] == pytest.approx(float(tools.loc[station.ts]), rel=1e-6)
+            judged += 1
+    assert judged > 50
+
+
+def _station_rows(store):
+    from raqeeb.contracts import WeatherStationReading
+
+    ws = store.weather_station()
+    return [WeatherStationReading(ts=ts.to_pydatetime(), **row) for ts, row in ws.iterrows()]
 
 
 def test_expected_from_dusty_sensor_is_low(run):

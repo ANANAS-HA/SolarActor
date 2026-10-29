@@ -32,6 +32,7 @@ from raqeeb.contracts import (
 )
 from raqeeb.faults.base import Fault, InjectionContext
 from raqeeb.faults.catalogue import CATALOGUE
+from raqeeb.tools.physics import expected_from_sensor as shared_expected_from_sensor
 from raqeeb.twin import plant as physics
 from raqeeb.twin.simulator import Twin
 from raqeeb.twin.weather import weather_5min
@@ -67,25 +68,34 @@ class SymptomMonitor:
         self.active: set[tuple[str, str]] = set()  # (code, inverter_id)
         self._below: defaultdict[tuple[str, str], int] = defaultdict(int)
         self._above: defaultdict[tuple[str, str], int] = defaultdict(int)
+        self._expected: dict[pd.Timestamp, dict[str, float] | None] = {}  # once per step
 
     def expected_from_sensor(self, station: WeatherStationReading) -> dict[str, float] | None:
-        """Nameplate DC and AC per inverter for the irradiance the sensor reports.
+        """Nameplate DC and AC (one inverter) for the irradiance the sensor reports.
 
-        POA scales linearly with irradiance (isotropic sky), so the reference POA is scaled by
-        sensor GHI / reference GHI. Wind stow is normal, so a stowed tracker is expected.
-        None when the step cannot be judged: low sun, or expected output at the clipping limit
-        (the inverter leaves MPP there, so neither DC nor AC shows a loss). Clipping therefore
-        hides soiling at midday on sunny days.
+        Uses raqeeb.tools.physics.expected_from_sensor, the same calculation as the agent's tools
+        (reference scaled by sensor GHI / reference GHI; wind stow is normal, so it is expected).
+        Computed once per step. None when the step cannot be judged: low sun, or expected output
+        at the clipping limit (the inverter leaves MPP there, so neither DC nor AC shows a loss).
+        Clipping therefore hides soiling at midday on sunny days.
         """
-        w = self.frame.loc[pd.Timestamp(station.ts)]
-        if station.ghi_sensor_wm2 < MIN_SENSOR_GHI_WM2 or w["ghi_wm2"] < MIN_REFERENCE_GHI_WM2:
+        ts = pd.Timestamp(station.ts)
+        if ts not in self._expected:
+            self._expected[ts] = self._expected_at(ts, station)
+        return self._expected[ts]
+
+    def _expected_at(self, ts: pd.Timestamp, station: WeatherStationReading) -> dict[str, float] | None:
+        w = self.frame.loc[[ts]]
+        if station.ghi_sensor_wm2 < MIN_SENSOR_GHI_WM2 or w["ghi_wm2"].iloc[0] < MIN_REFERENCE_GHI_WM2:
             return None
+        idx = w.index
+        expected = shared_expected_from_sensor(
+            pd.Series([station.ghi_sensor_wm2], index=idx), pd.Series([station.ambient_c], index=idx),
+            pd.Series([station.wind_ms], index=idx), w, self.plant)
+        first = self.plant.inverters.ids[0]  # nominal ratings: every inverter expects the same
+        dc = float(expected[(first, "dc_kw")].iloc[0])
+        ac = float(expected[(first, "ac_kw")].iloc[0])
         inv = self.plant.inverters
-        stowed = station.wind_ms > self.plant.tracker.stow_wind_ms
-        poa = float(w["poa_stow_wm2"] if stowed else w["poa_track_wm2"]) * station.ghi_sensor_wm2 / w["ghi_wm2"]
-        tcell = physics.cell_temperature(poa, station.ambient_c, station.wind_ms, self.plant)
-        dc = float(physics.dc_power_kw(poa, tcell, inv.dc_kw, self.plant))
-        ac = float(physics.ac_power_kw(dc, self.plant))
         if not MIN_EXPECTED_FRACTION * inv.ac_kw <= ac < inv.ac_kw * CLIPPING_FRACTION:
             return None
         return {"dc_kw": dc, "ac_kw": ac}

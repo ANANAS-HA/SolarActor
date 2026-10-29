@@ -2,7 +2,8 @@
 
 Expected output is raqeeb.twin.plant.expected_power() on a weather frame built from the store:
 - basis "reference": the trusted NASA reference (weather_reference table).
-- basis "sensor": the on-site sensor, GHI decomposed with erbs (what a plain PR alarm uses).
+- basis "sensor": the reference scaled to the on-site sensor (expected_from_sensor), what the
+  plant's own performance-ratio alarms use.
 - basis "auto": the sensor, except where it is flagged (commands table) or has no row; there
   the reference. This is the expected line the plant's own health check would draw.
 
@@ -24,8 +25,7 @@ from raqeeb.tools.common import get_plant, local_time, window
 from raqeeb.tools.weather_tools import (
     reference_weather,
     sensor_flagged,
-    sensor_to_weather,
-    sensor_weather,
+    sensor_scaled_weather,
     wind_series,
 )
 from raqeeb.twin import plant as twin_physics
@@ -38,14 +38,15 @@ TRACKER_FLAT_SD_DEG = 1.0  # measured angle sd below this while expected moves =
 
 
 def expected_from_sensor(ghi_sensor_wm2: pd.Series, ambient_c: pd.Series, wind_ms: pd.Series,
-                         geometry: pd.DataFrame, plant: PlantConfig | None = None) -> pd.DataFrame:
+                         reference: pd.DataFrame, plant: PlantConfig | None = None) -> pd.DataFrame:
     """THE expected-from-sensor output of the project (nameplate AC/DC per inverter).
 
-    Sensor GHI split with erbs (sensor_to_weather), then expected_power(). The tools and the
-    fault injector's symptom alarms (LOW_PR, LOW_STRING_CURRENT, DC_INPUT_LOW) both call this,
-    so the alarm feed and the agent's numbers agree. Wind stow is normal, so it is included.
+    The reference weather scaled by sensor GHI / reference GHI (sensor_scaled_weather), with the
+    station's ambient and wind, then expected_power(). The tools and the fault injector's symptom
+    alarms (LOW_PR, LOW_STRING_CURRENT, DC_INPUT_LOW) both call this, so the alarm feed and the
+    agent's numbers agree. Wind stow (station wind above the limit) is normal, so it is included.
     """
-    weather = sensor_to_weather(ghi_sensor_wm2, ambient_c, wind_ms, geometry)
+    weather = sensor_scaled_weather(ghi_sensor_wm2, ambient_c, wind_ms, reference)
     return twin_physics.expected_power(weather, get_plant(plant))
 
 
@@ -63,8 +64,8 @@ def expected(store: TelemetryStore, start: datetime | None = None, end: datetime
     ref = reference_weather(store, start, end, plant)
     if basis == "reference":
         return twin_physics.expected_power(ref, plant)
-    ws = sensor_weather(store, start, end, plant)
-    sensor = expected_from_sensor(ws["ghi_wm2"], ws["ambient_c"], ws["wind_ms"], ws, plant)
+    ws = store.weather_station(start, end)
+    sensor = expected_from_sensor(ws["ghi_sensor_wm2"], ws["ambient_c"], ws["wind_ms"], ref, plant)
     if basis == "sensor":
         return sensor
     if basis != "auto":

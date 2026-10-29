@@ -17,12 +17,32 @@ def test_reference_weather_has_geometry(run):
     assert ref.index[0] == s.start
 
 
-def test_sensor_weather_erbs_closure(run):
-    store, _, _ = run("healthy")
+def test_sensor_weather_is_the_reference_scaled_to_the_sensor(run):
+    store, s, _ = run("sensor_only")
     ws = weather_tools.sensor_weather(store)
-    day = ws[ws["zenith"] < 80]
-    closure = day["dni_wm2"] * np.cos(np.radians(day["zenith"])) + day["dhi_wm2"]
-    assert closure.to_numpy() == pytest.approx(day["ghi_wm2"].to_numpy(), rel=1e-6)
+    ref = weather_tools.reference_weather(store).reindex(ws.index)
+    station = store.weather_station()
+    assert ws["ghi_wm2"].to_numpy() == pytest.approx(station["ghi_sensor_wm2"].to_numpy())
+    day = ws[ref["ghi_wm2"] > 50]
+    # same beam/diffuse split as the reference, only scaled
+    assert (day["dni_wm2"] / day["ghi_wm2"]).to_numpy() == pytest.approx(
+        (ref.loc[day.index, "dni_wm2"] / ref.loc[day.index, "ghi_wm2"]).to_numpy())
+    assert ws["ambient_c"].to_numpy() == pytest.approx(station["ambient_c"].to_numpy())
+    late = day[day.index >= at(s, "08:00")]
+    assert (late["dhi_wm2"] / ref.loc[late.index, "dhi_wm2"]).median() == pytest.approx(0.80, abs=0.04)
+
+
+def test_scaling_a_prepared_frame_gives_the_same_weather(run):
+    from raqeeb.twin import plant as twin_physics
+
+    store, _, inj = run("sensor_only")
+    station = store.weather_station()
+    ref = weather_tools.reference_weather(store)
+    args = (station["ghi_sensor_wm2"], station["ambient_c"], station["wind_ms"])
+    plain = weather_tools.sensor_scaled_weather(*args, ref)
+    prepared = weather_tools.sensor_scaled_weather(*args, twin_physics.prepare(ref, inj.twin.plant))
+    assert np.allclose(twin_physics.expected_power(plain, inj.twin.plant).to_numpy(),
+                       twin_physics.expected_power(prepared, inj.twin.plant).to_numpy())
 
 
 def test_station_dropout_stays_missing(run):

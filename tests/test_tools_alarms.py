@@ -8,8 +8,9 @@ def test_alarm_groups_trap(run):
     store, s, _ = run("trap")
     result = call(alarms.alarm_groups, store, s)
     groups = {g["code"]: g for g in result.values["groups"]}
-    # device alarms from the twin + symptom alarms from the injector (LOW_PR family)
-    assert {"HIGH_WIND", "TRACKER_STOW_WIND", "DERATE_TEMP", "COMM_LOSS", "LOW_PR"} <= set(groups)
+    # device alarms from the twin; the only symptom alarm is LOW_PR on the derated inverter
+    assert set(groups) == {"HIGH_WIND", "TRACKER_STOW_WIND", "DERATE_TEMP", "COMM_LOSS", "LOW_PR"}
+    assert groups["LOW_PR"]["devices"] == ["INV-07"]
     stow = groups["TRACKER_STOW_WIND"]
     assert stow["plant_wide"] and stow["inverters"] == 16 and stow["related_faults"] == []
     assert groups["DERATE_TEMP"]["devices"] == ["INV-07"] and not groups["DERATE_TEMP"]["plant_wide"]
@@ -24,6 +25,22 @@ def test_symptom_alarms_come_from_the_injector(run):
     store, s, _ = run("tracker_stuck")
     codes = set(call(alarms.alarm_summary, store, s).values["by_code"])
     assert {"TRACKER_FAULT", "LOW_PR", "LOW_STRING_CURRENT"} <= codes
+
+
+def _symptom_inverters(run, name):
+    groups = call(alarms.alarm_groups, *run(name)[:2]).values["groups"]
+    return {g["code"]: g["inverters"] for g in groups if g["code"] in ("LOW_PR", "LOW_STRING_CURRENT", "DC_INPUT_LOW")}
+
+
+def test_healthy_raises_no_symptom_alarms(run):
+    assert _symptom_inverters(run, "healthy") == {}
+    assert _symptom_inverters(run, "sensor_only") == {}  # a dusty sensor alone makes the plant look better
+
+
+def test_trap_hides_the_soiling_alarms(run):
+    """Dusty panels alone: plant-wide LOW_PR / LOW_STRING_CURRENT. Panels + sensor dusty: none."""
+    assert _symptom_inverters(run, "soiling_only") == {"LOW_STRING_CURRENT": 16, "LOW_PR": 16}
+    assert _symptom_inverters(run, "trap") == {"LOW_PR": 1}  # only the derated INV-07
 
 
 def test_alarm_summary(run):

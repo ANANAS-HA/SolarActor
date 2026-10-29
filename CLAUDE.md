@@ -47,6 +47,9 @@ Code computes every number; the LLM proposes and prunes hypotheses, orders plans
 - Run the plant through the injector: `inj = FaultInjector.for_scenario(s)`, then `inj.advance(min)` / `inj.step()`,
   never `twin.advance` directly, or the symptom alarms (LOW_PR, LOW_STRING_CURRENT, DC_INPUT_LOW) never appear.
 - SOILING `start`/`end` = the dust-storm window; the soiling persists until cleaned.
+- Expected-from-sensor has ONE implementation, `raqeeb.tools.physics.expected_from_sensor()` (reference scaled by
+  sensor GHI / reference GHI). The injector's LOW_PR family and the tools both call it. Do not add another (erbs gave
+  symptom alarms on 43/52 healthy days).
 
 ## Rules
 - Agent tools may read only the telemetry database: never `scenarios/` files, `Scenario`, the twin's `truth` log
@@ -67,3 +70,4 @@ Code computes every number; the LLM proposes and prunes hypotheses, orders plans
 - `uv run python scripts/download_weather.py [--force]`
 - `uv run python -m raqeeb.llm.smoke [--api]`
 - `uv run python -m raqeeb.faults.generator [--n 20] [--seed 2025] [--full]` (rewrites `scenarios/`)
+- `uv run python scripts/sweep_detection.py` (year sweep of the sensor check, plant loss and symptom alarms; ~6 min)

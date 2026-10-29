@@ -27,9 +27,9 @@ SCENARIOS: dict[str, list[dict]] = {
     "healthy": [],
     "sensor_only": [SENSOR_DUST],
     "soiling_only": [STORM],
-    "trap": [
+    "trap": [  # as the generator builds traps: the storm soils the sensor from its start
         STORM,
-        SENSOR_DUST,
+        SENSOR_DUST | {"start": STORM["start"]},
         {"type": "INVERTER_DERATE", "target": "INV-07", "start": "08:30", "severity": DERATE_SEVERITY},
         {"type": "COMMS_DROPOUT", "target": "INV-12", "start": "09:15", "end": "11:00"},
     ],

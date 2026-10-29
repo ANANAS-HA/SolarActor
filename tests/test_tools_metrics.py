@@ -42,11 +42,11 @@ def test_dust_storm_soiling_shows_against_reference_and_sensor(run):
     assert after["ratio"].median() == pytest.approx(0.82, abs=0.04)
 
 
-def test_trap_health_check_looks_better_than_normal(run):
-    """The trap: PR against the dusty sensor reads above 1; against the reference it does not."""
+def test_trap_health_check_looks_normal(run):
+    """The trap: PR against the dusty sensor reads ~100%; against the reference it shows the loss."""
     store, s, _ = run("trap")
     perf = call(metrics.plant_performance, store, s)
-    assert perf.values["vs_sensor"]["ratio"] >= 1.0
+    assert perf.values["vs_sensor"]["ratio"] == pytest.approx(1.0, abs=0.04)
     assert perf.values["vs_reference"]["ratio"] <= 0.88
     assert perf.verdict == "underperforming"
     shortfall = perf.values["vs_reference"]
