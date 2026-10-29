@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from raqeeb.contracts import FaultSpec, Scenario
+from raqeeb.contracts import FaultSpec, PlantConfig, Scenario
 from raqeeb.faults.injector import FaultInjector
 from raqeeb.telemetry.store import TelemetryStore
 from raqeeb.twin.controls import flag_sensor
@@ -53,11 +53,13 @@ def make_scenario(name: str, seed: int = SEED, day: datetime = DAY) -> Scenario:
     return scenario.model_copy(update={"answer_key": scenario.expected_answer_key()})
 
 
-def build(name: str, seed: int = SEED, day: datetime = DAY) -> tuple[TelemetryStore, Scenario, FaultInjector]:
+def build(name: str, seed: int = SEED, day: datetime = DAY,
+          plant: PlantConfig | None = None) -> tuple[TelemetryStore, Scenario, FaultInjector]:
     """Run the scenario through the injector into a fresh store. Tools get only the store and
-    scenario.agent_view(); the Scenario and injector are for test assertions."""
+    scenario.agent_view(); the Scenario and injector are for test assertions. `plant` lets a
+    sweep change the twin (e.g. its reference error); the tools keep the default plant."""
     scenario = make_scenario(name, seed, day)
-    inj = FaultInjector.for_scenario(scenario)
+    inj = FaultInjector.for_scenario(scenario, plant=plant)
     store = TelemetryStore()
     if name == "sensor_flagged":
         store.write_batch(inj.advance((at(scenario, FLAG_AT) - scenario.start).total_seconds() / 60))
