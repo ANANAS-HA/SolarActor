@@ -486,6 +486,30 @@ _ScenarioDumper.add_representer(
 # Agent models
 # ---------------------------------------------------------------------------
 
+VERDICT_OK = "ok"
+VERDICT_INCONCLUSIVE = "inconclusive"
+
+
+class ToolResult(_Model):
+    """What every agent-facing tool in raqeeb/tools returns: one shape for the agent and the LLM.
+
+    Code computes `values`; `evidence` is a short plain-text summary built from them. `values`
+    must stay JSON-serialisable (it goes into Symptom.evidence, the audit log and prompts).
+    """
+
+    tool: str  # function name, e.g. "sensor_check"
+    verdict: str  # VERDICT_OK, VERDICT_INCONCLUSIVE, or a short finding code, e.g. "sensor_low"
+    devices: list[str] = Field(default_factory=list)  # what a finding is about; PLANT_TARGET = plant-wide
+    start: UtcDatetime | None = None  # window the tool looked at, [start, end)
+    end: UtcDatetime | None = None
+    values: dict[str, Any] = Field(default_factory=dict)
+    thresholds: dict[str, float] = Field(default_factory=dict)  # the limits the verdict used
+    evidence: str = ""
+
+    @property
+    def finding(self) -> bool:
+        return self.verdict not in (VERDICT_OK, VERDICT_INCONCLUSIVE)
+
 
 class Symptom(_Model):
     id: str
