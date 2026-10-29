@@ -1,8 +1,8 @@
-
 import pandas as pd
 import pytest
 
 from raqeeb.tools import metrics
+from tests.conftest import call
 from tests.tool_scenarios import at
 
 
@@ -23,97 +23,109 @@ def test_loss_onset():
     assert metrics.loss_onset(pd.Series(1.0, index=idx), 0.9) is None
 
 
-def test_healthy_plant_performance(scenario):
-    perf = metrics.plant_performance(scenario("healthy")[0])
-    assert not perf["underperforming"] and perf["onset"] is None
-    assert abs(perf["vs_reference"]["ratio"] - 1) < 0.06
-    assert abs(perf["vs_sensor"]["ratio"] - 1) < 0.06
+def test_healthy_plant_performance(run):
+    store, s, _ = run("healthy")
+    perf = call(metrics.plant_performance, store, s)
+    assert perf.verdict == "ok" and perf.values["onset"] is None
+    assert abs(perf.values["vs_reference"]["ratio"] - 1) < 0.06
+    assert abs(perf.values["vs_sensor"]["ratio"] - 1) < 0.06
+    assert (perf.start, perf.end) == (s.start, s.end)
 
 
-def test_soiling_shows_against_reference_and_sensor(scenario):
-    store, twin = scenario("soiling_only")
-    perf = metrics.plant_performance(store)
-    assert perf["underperforming"]
-    assert perf["onset"] == at(twin, "07:00")
-    assert perf["vs_reference"]["ratio"] < 0.90 and perf["vs_sensor"]["ratio"] < 0.90
-    after = metrics.performance_series(store, at(twin, "08:00"), at(twin, "13:00"))
+def test_dust_storm_soiling_shows_against_reference_and_sensor(run):
+    store, s, _ = run("soiling_only")
+    perf = call(metrics.plant_performance, store, s)
+    assert perf.verdict == "underperforming" and perf.devices == ["ALL"]
+    assert at(s, "06:00") <= perf.values["onset"] <= at(s, "07:00")  # soiling builds during the storm
+    assert perf.values["vs_reference"]["ratio"] < 0.90 and perf.values["vs_sensor"]["ratio"] < 0.90
+    after = metrics.performance_series(store, at(s, "08:00"), at(s, "13:00"))
     assert after["ratio"].median() == pytest.approx(0.82, abs=0.04)
 
 
-def test_trap_health_check_looks_normal(scenario):
-    """The trap: PR against the dusty sensor looks fine; against the reference it does not."""
-    store, twin = scenario("trap")
-    perf = metrics.plant_performance(store)
-    assert perf["vs_sensor"]["ratio"] >= 0.95
-    assert perf["vs_reference"]["ratio"] <= 0.88
-    assert perf["underperforming"]
-    assert perf["vs_reference"]["shortfall_kwh"] > 0.1 * perf["vs_reference"]["expected_kwh"]
+def test_trap_health_check_looks_better_than_normal(run):
+    """The trap: PR against the dusty sensor reads above 1; against the reference it does not."""
+    store, s, _ = run("trap")
+    perf = call(metrics.plant_performance, store, s)
+    assert perf.values["vs_sensor"]["ratio"] >= 1.0
+    assert perf.values["vs_reference"]["ratio"] <= 0.88
+    assert perf.verdict == "underperforming"
+    shortfall = perf.values["vs_reference"]
+    assert shortfall["shortfall_kwh"] > 0.1 * shortfall["expected_kwh"]
 
 
-def test_dusty_sensor_alone_makes_plant_look_too_good(scenario):
-    perf = metrics.plant_performance(scenario("sensor_only")[0])
-    assert not perf["underperforming"]
-    assert perf["vs_sensor"]["ratio"] > 1.15
+def test_dusty_sensor_alone_makes_plant_look_too_good(run):
+    store, s, _ = run("sensor_only")
+    perf = call(metrics.plant_performance, store, s)
+    assert perf.verdict == "ok"
+    assert perf.values["vs_sensor"]["ratio"] > 1.15
 
 
-def test_flag_reported(scenario):
-    assert metrics.plant_performance(scenario("sensor_flagged")[0])["sensor_flagged"]
-    assert not metrics.plant_performance(scenario("sensor_only")[0])["sensor_flagged"]
+def test_flag_reported(run):
+    assert call(metrics.plant_performance, *run("sensor_flagged")[:2]).values["sensor_flagged"]
+    assert not call(metrics.plant_performance, *run("sensor_only")[:2]).values["sensor_flagged"]
 
 
-def test_inverter_performance(scenario):
-    df = metrics.inverter_performance(scenario("soiling_only")[0])
-    assert len(df) == 16
-    assert df["ratio_unclipped"].between(0.78, 0.92).all()
-    trap = metrics.inverter_performance(scenario("trap")[0])
-    assert trap.loc["INV-12", "missing_daylight_steps"] == 21
-    assert trap.drop(index="INV-12")["missing_daylight_steps"].eq(0).all()
-    assert trap.loc["INV-07", "ratio"] < trap.drop(index="INV-07")["ratio"].min()
+def test_inverter_performance(run):
+    store, s, _ = run("soiling_only")
+    soiled = call(metrics.inverter_performance, store, s)
+    rows = soiled.values["inverters"]
+    assert len(rows) == 16 and soiled.verdict == "inverters_low" and len(soiled.devices) == 16
+    assert all(0.78 <= r["ratio_unclipped"] <= 0.92 for r in rows.values())
+    trap = call(metrics.inverter_performance, *run("trap")[:2]).values["inverters"]
+    assert trap["INV-12"]["missing_daylight_steps"] == 21
+    assert all(r["missing_daylight_steps"] == 0 for k, r in trap.items() if k != "INV-12")
+    assert trap["INV-07"]["ratio"] < min(r["ratio"] for k, r in trap.items() if k != "INV-07")
+    assert call(metrics.inverter_performance, *run("healthy")[:2]).verdict == "ok"
 
 
-def test_comms_gap_checked_against_meter(scenario):
-    store, twin = scenario("trap")
-    gaps = metrics.data_gaps(store)
-    assert len(gaps) == 1
-    gap = gaps[0]
-    assert gap["device_id"] == "INV-12"
-    assert (gap["start"], gap["end"], gap["steps"]) == (at(twin, "09:15"), at(twin, "11:00"), 21)
+def test_comms_gap_checked_against_meter(run):
+    store, s, _ = run("trap")
+    result = call(metrics.data_gaps, store, s)
+    assert result.verdict == "data_gap" and result.devices == ["INV-12"]
+    (gap,) = result.values["gaps"]
+    assert (gap["start"], gap["end"], gap["steps"]) == (at(s, "09:15"), at(s, "11:00"), 21)
     assert gap["still_producing"] and gap["producing_fraction"] == pytest.approx(1.0, abs=0.1)
     assert not gap["ongoing"]
+    assert "kept producing" in result.evidence
 
 
-def test_dead_and_silent_device_is_not_producing(scenario):
-    store, twin = scenario("dead_and_silent")
-    (gap,) = metrics.data_gaps(store)
+def test_dead_and_silent_device_is_not_producing(run):
+    store, s, _ = run("dead_and_silent")
+    result = call(metrics.data_gaps, store, s)
+    (gap,) = result.values["gaps"]
     assert gap["device_id"] == "INV-05" and gap["ongoing"]
-    assert gap["start"] == at(twin, "08:00")
+    assert gap["start"] == at(s, "08:00")
     assert gap["still_producing"] is False and abs(gap["producing_fraction"]) < 0.1
 
 
-def test_station_gap(scenario):
-    store, twin = scenario("station_dropout")
-    (gap,) = metrics.data_gaps(store)
+def test_station_gap(run):
+    store, s, _ = run("station_dropout")
+    (gap,) = call(metrics.data_gaps, store, s).values["gaps"]
     assert gap["device_id"] == "WS-01" and gap["steps"] == 6
-    assert gap["start"] == at(twin, "07:00") and gap["end"] == at(twin, "07:30")
+    assert gap["start"] == at(s, "07:00") and gap["end"] == at(s, "07:30")
 
 
-def test_no_gaps_when_healthy(scenario):
-    assert metrics.data_gaps(scenario("healthy")[0]) == []
+def test_no_gaps_when_healthy(run):
+    result = call(metrics.data_gaps, *run("healthy")[:2])
+    assert result.verdict == "ok" and result.values["gaps"] == []
 
 
-def test_curtailment_period(scenario):
-    store, twin = scenario("curtailment")
-    (period,) = metrics.curtailment_periods(store)
-    assert (period["start"], period["end"]) == (at(twin, "07:30"), at(twin, "09:30"))
+def test_curtailment_period(run):
+    store, s, _ = run("curtailment")
+    result = call(metrics.curtailment_periods, store, s)
+    assert result.verdict == "curtailment" and result.devices == ["PPC-01"]
+    (period,) = result.values["periods"]
+    assert (period["start"], period["end"]) == (at(s, "07:30"), at(s, "09:30"))
     assert period["limit_kw"] == 24000.0 and period["meter_at_limit"]
     assert period["expected_median_kw"] > period["limit_kw"]
-    perf = metrics.plant_performance(store)
-    assert perf["curtailed_steps"] == 24 and not perf["underperforming"]
-    assert metrics.curtailment_periods(scenario("healthy")[0]) == []
+    perf = call(metrics.plant_performance, store, s)
+    assert perf.values["curtailed_steps"] == 24 and perf.verdict == "ok"
+    assert call(metrics.curtailment_periods, *run("healthy")[:2]).verdict == "ok"
 
 
-def test_window_arguments(scenario):
-    store, twin = scenario("soiling_only")
-    before = metrics.plant_performance(store, twin.start, at(twin, "07:00"))
-    assert not before["underperforming"]
-    assert metrics.plant_performance(store, at(twin, "07:00"), twin.end)["underperforming"]
+def test_window_arguments(run):
+    store, s, _ = run("soiling_only")
+    assert metrics.plant_performance(store, s.start, at(s, "06:00")).verdict == "ok"
+    assert metrics.plant_performance(store, at(s, "07:00"), s.end).verdict == "underperforming"
+    empty = metrics.plant_performance(store, s.end, s.end + pd.Timedelta(hours=1))
+    assert empty.verdict == "inconclusive"

@@ -11,23 +11,24 @@ device kept producing and only its data is lost.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any
 
 import pandas as pd
 
-from raqeeb.contracts import STEP_MINUTES, PlantConfig
+from raqeeb.contracts import PLANT_TARGET, STEP_MINUTES, VERDICT_INCONCLUSIVE, VERDICT_OK, PlantConfig, ToolResult
 from raqeeb.telemetry.store import TelemetryStore
+from raqeeb.tools.common import STEP, get_plant, local_time, window
 from raqeeb.tools.physics import Basis, expected_inverter, expected_plant_ac
-from raqeeb.tools.weather_tools import UNCLIPPED_FRACTION, get_plant, sensor_flagged
+from raqeeb.tools.weather_tools import UNCLIPPED_FRACTION, sensor_flagged
 
-STEP = timedelta(minutes=STEP_MINUTES)
 DAYLIGHT_FRACTION = 0.05  # expected output above this share of rating = a production step
 PLANT_LOW_RATIO = 0.90  # plant vs reference at or below this: beyond reference error (max 8%)
 ONSET_SMOOTH_STEPS = 5  # rolling median before looking for a loss onset
 ONSET_MIN_STEPS = 6  # a loss must last 30 min of usable steps
 PRODUCING_FRACTION = 0.8  # meter residual >= this share of peer output: missing device still produces
 CURTAIL_AT_LIMIT_TOL = 0.02  # meter within 2% of (or under) the grid limit
+CURTAIL_AT_LIMIT_SHARE = 0.8  # share of binding steps the meter must sit at the limit
 
 
 def energy_kwh(power_kw: pd.Series) -> float:
@@ -115,35 +116,59 @@ def _ratio_summary(perf: pd.DataFrame) -> dict[str, Any]:
 
 
 def plant_performance(store: TelemetryStore, start: datetime | None = None, end: datetime | None = None,
-                      plant: PlantConfig | None = None) -> dict[str, Any]:
+                      plant: PlantConfig | None = None) -> ToolResult:
     """Meter vs expected from the trusted reference and from the on-site sensor.
 
     `vs_sensor` is the plant's usual health check (performance ratio on the sensor). When the
-    sensor is dusty it can look normal while `vs_reference` shows the real loss.
+    sensor is dusty it can look normal, even above 1, while `vs_reference` shows the real loss.
+    Verdicts: "underperforming" (devices = ALL), ok, inconclusive (no production steps).
     """
     plant = get_plant(plant)
+    start, end = window(store, start, end)
     ref = performance_series(store, start, end, plant, "reference")
     sensor = performance_series(store, start, end, plant, "sensor")
-    vs_ref = _ratio_summary(ref)
+    vs_ref, vs_sensor = _ratio_summary(ref), _ratio_summary(sensor)
     unclipped = ref["ratio"].where(~ref["clipped"])
     onset = loss_onset(unclipped, PLANT_LOW_RATIO)
     low = vs_ref["ratio_unclipped"] is not None and vs_ref["ratio_unclipped"] <= PLANT_LOW_RATIO
-    return {
+    values = {
         "meter_kwh": round(energy_kwh(ref.loc[ref["usable"], "meter_kw"]), 1),
         "vs_reference": vs_ref,
-        "vs_sensor": _ratio_summary(sensor),
+        "vs_sensor": vs_sensor,
         "sensor_flagged": bool(sensor_flagged(store, ref.index[-1:], plant).any()) if len(ref) else False,
         "curtailed_steps": int(ref["curtailed"].sum()),
-        "underperforming": bool(low or onset is not None),
         "onset": None if onset is None else onset.to_pydatetime(),
-        "threshold": PLANT_LOW_RATIO,
     }
+    thresholds = {"plant_low_ratio": PLANT_LOW_RATIO, "unclipped_fraction": UNCLIPPED_FRACTION,
+                  "daylight_fraction": DAYLIGHT_FRACTION, "onset_min_steps": ONSET_MIN_STEPS}
+    if vs_ref["ratio"] is None:
+        return ToolResult(tool="plant_performance", verdict=VERDICT_INCONCLUSIVE, start=start, end=end,
+                          values=values, thresholds=thresholds, evidence="no production steps in the window")
+    underperforming = low or onset is not None
+    evidence = (f"meter {vs_ref['ratio']:.0%} of expected from the reference "
+                f"({vs_ref['ratio_unclipped']:.0%} outside clipping), "
+                f"{vs_sensor['ratio']:.0%} of expected from the site sensor"
+                if vs_sensor["ratio"] is not None else
+                f"meter {vs_ref['ratio']:.0%} of expected from the reference; no sensor data")
+    if underperforming:
+        evidence += f"; shortfall {vs_ref['shortfall_kwh'] / 1000:.1f} MWh"
+        if onset is not None:
+            evidence += f", below {PLANT_LOW_RATIO:.0%} from {local_time(onset)}"
+    if values["curtailed_steps"]:
+        evidence += f"; {values['curtailed_steps']} curtailed steps excluded"
+    return ToolResult(tool="plant_performance", verdict="underperforming" if underperforming else VERDICT_OK,
+                      devices=[PLANT_TARGET] if underperforming else [], start=start, end=end,
+                      values=values, thresholds=thresholds, evidence=evidence)
 
 
 def inverter_performance(store: TelemetryStore, start: datetime | None = None, end: datetime | None = None,
-                         plant: PlantConfig | None = None, basis: Basis = "reference") -> pd.DataFrame:
-    """Per inverter, over the steps it reported: measured and expected kWh and their ratio."""
+                         plant: PlantConfig | None = None, basis: Basis = "reference") -> ToolResult:
+    """Per inverter, over the steps it reported: measured and expected kWh and their ratio.
+
+    Verdicts: "inverters_low" (devices = inverters at or below PLANT_LOW_RATIO outside clipping), ok.
+    """
     plant = get_plant(plant)
+    start, end = window(store, start, end)
     measured = store.inverter_wide("ac_kw", start, end)
     exp = expected_inverter(store, "ac_kw", start, end, plant, basis)
     measured = measured.reindex(index=exp.index, columns=exp.columns)
@@ -163,7 +188,13 @@ def inverter_performance(store: TelemetryStore, start: datetime | None = None, e
             "reported_steps": int(present.sum()),
             "missing_daylight_steps": int((usable[inv_id] & ~present).sum()),
         }
-    return pd.DataFrame.from_dict(rows, orient="index").rename_axis("inverter_id")
+    low = [k for k, r in rows.items() if r["ratio_unclipped"] is not None and r["ratio_unclipped"] <= PLANT_LOW_RATIO]
+    evidence = (f"{len(low)} of {len(rows)} inverters at or below {PLANT_LOW_RATIO:.0%} of expected ({basis})"
+                + (": " + ", ".join(f"{k} {rows[k]['ratio_unclipped']:.0%}" for k in low) if low else ""))
+    return ToolResult(tool="inverter_performance", verdict="inverters_low" if low else VERDICT_OK, devices=low,
+                      start=start, end=end, values={"basis": basis, "inverters": rows},
+                      thresholds={"plant_low_ratio": PLANT_LOW_RATIO, "unclipped_fraction": UNCLIPPED_FRACTION},
+                      evidence=evidence)
 
 
 def _clock(store: TelemetryStore, start, end) -> pd.DatetimeIndex:
@@ -172,12 +203,18 @@ def _clock(store: TelemetryStore, start, end) -> pd.DatetimeIndex:
 
 
 def data_gaps(store: TelemetryStore, start: datetime | None = None, end: datetime | None = None,
-              plant: PlantConfig | None = None) -> list[dict[str, Any]]:
-    """Runs of missing rows per device (inverters, weather station, meter), checked against the meter."""
+              plant: PlantConfig | None = None) -> ToolResult:
+    """Runs of missing rows per device (inverters, weather station, meter), checked against the meter.
+
+    Verdicts: "data_gap" (devices = devices with a gap), ok. values["gaps"] lists each gap.
+    """
     plant = get_plant(plant)
+    start, end = window(store, start, end)
+    thresholds = {"producing_fraction": PRODUCING_FRACTION}
     clock = _clock(store, start, end)
     if len(clock) == 0:
-        return []
+        return ToolResult(tool="data_gaps", verdict=VERDICT_INCONCLUSIVE, start=start, end=end,
+                          thresholds=thresholds, evidence="no logger steps in the window")
     ac = store.inverter_wide("ac_kw", start, end).reindex(index=clock, columns=plant.inverters.ids)
     meter = store.meter(start, end)["plant_ac_kw"].reindex(clock)
     n_missing = ac.isna().sum(axis=1)
@@ -201,36 +238,57 @@ def data_gaps(store: TelemetryStore, start: datetime | None = None, end: datetim
                 "ongoing": gap_end > last,
             }
             if device_id in ac.columns:
-                window = slice(gap_start, gap_end - STEP)
-                frac = producing.loc[window].dropna()
+                part = slice(gap_start, gap_end - STEP)
+                frac = producing.loc[part].dropna()
                 gap |= {
-                    "meter_residual_kw": round(float(residual.loc[window].median()), 1),
-                    "peer_median_kw": round(float(peer_median.loc[window].median()), 1),
+                    "meter_residual_kw": round(float(residual.loc[part].median()), 1),
+                    "peer_median_kw": round(float(peer_median.loc[part].median()), 1),
                     "producing_fraction": round(float(frac.median()), 3) if len(frac) else None,
                     "still_producing": bool(frac.median() >= PRODUCING_FRACTION) if len(frac) else None,
                 }
             gaps.append(gap)
-    return sorted(gaps, key=lambda g: (g["start"], g["device_id"]))
+    gaps.sort(key=lambda g: (g["start"], g["device_id"]))
+
+    def describe(g: dict[str, Any]) -> str:
+        text = (f"{g['device_id']} sent no rows for {g['steps'] * 5} min from {local_time(g['start'])}"
+                + (" (still missing)" if g["ongoing"] else ""))
+        if g.get("still_producing") is True:
+            text += f"; the meter still carries {g['producing_fraction']:.0%} of a peer's output, so it kept producing"
+        elif g.get("still_producing") is False:
+            text += f"; the meter carries only {g['producing_fraction']:.0%} of a peer's output, so it is not producing"
+        return text
+
+    gap_devices = sorted({g["device_id"] for g in gaps})
+    return ToolResult(tool="data_gaps", verdict="data_gap" if gaps else VERDICT_OK, devices=gap_devices,
+                      start=start, end=end, values={"gaps": gaps}, thresholds=thresholds,
+                      evidence="; ".join(describe(g) for g in gaps) if gaps else "no missing rows")
 
 
 def curtailment_periods(store: TelemetryStore, start: datetime | None = None, end: datetime | None = None,
-                        plant: PlantConfig | None = None) -> list[dict[str, Any]]:
-    """Periods with a grid active-power limit, and whether the meter sat at the limit."""
+                        plant: PlantConfig | None = None) -> ToolResult:
+    """Periods with a grid active-power limit, and whether the meter sat at the limit.
+
+    Verdicts: "curtailment" (expected behaviour, no action; devices = the plant controller), ok.
+    """
     plant = get_plant(plant)
+    start, end = window(store, start, end)
+    thresholds = {"at_limit_tol": CURTAIL_AT_LIMIT_TOL, "at_limit_share": CURTAIL_AT_LIMIT_SHARE}
     limits = store.grid_setpoint(start, end)["limit_kw"]
     if limits.empty:
-        return []
+        return ToolResult(tool="curtailment_periods", verdict=VERDICT_OK, start=start, end=end,
+                          values={"periods": []}, thresholds=thresholds, evidence="no grid limit in the window")
     meter = store.meter(start, end)["plant_ac_kw"].reindex(limits.index)
     exp = expected_plant_ac(store, start, end, plant).reindex(limits.index)
-    out = []
+    periods = []
     changed = limits.ne(limits.shift()).cumsum()
     for _, part in limits.groupby(changed):
         for p_start, p_end, steps in runs(pd.Series(True, index=part.index)):
             limit = float(part.iloc[0])
             m, e = meter.loc[p_start:p_end - STEP], exp.loc[p_start:p_end - STEP]
             binding = e > limit
-            at_limit = (m[binding] <= limit * (1 + CURTAIL_AT_LIMIT_TOL)) & (m[binding] >= limit * (1 - CURTAIL_AT_LIMIT_TOL))
-            out.append({
+            mb = m[binding]
+            at_limit = (mb <= limit * (1 + CURTAIL_AT_LIMIT_TOL)) & (mb >= limit * (1 - CURTAIL_AT_LIMIT_TOL))
+            periods.append({
                 "start": p_start.to_pydatetime(),
                 "end": p_end.to_pydatetime(),
                 "steps": steps,
@@ -238,6 +296,11 @@ def curtailment_periods(store: TelemetryStore, start: datetime | None = None, en
                 "meter_median_kw": round(float(m.median()), 1),
                 "expected_median_kw": round(float(e.median()), 1),
                 "binding_steps": int(binding.sum()),
-                "meter_at_limit": bool(at_limit.mean() >= 0.8) if binding.any() else None,
+                "meter_at_limit": bool(at_limit.mean() >= CURTAIL_AT_LIMIT_SHARE) if binding.any() else None,
             })
-    return out
+    evidence = "; ".join(
+        f"grid limit {p['limit_kw'] / 1000:.1f} MW from {local_time(p['start'])} to {local_time(p['end'])}, "
+        f"meter median {p['meter_median_kw'] / 1000:.1f} MW vs {p['expected_median_kw'] / 1000:.1f} MW expected"
+        for p in periods) + " (curtailment by the grid operator is expected behaviour)"
+    return ToolResult(tool="curtailment_periods", verdict="curtailment", devices=[plant.plant_controller_id],
+                      start=start, end=end, values={"periods": periods}, thresholds=thresholds, evidence=evidence)

@@ -1,31 +1,32 @@
 """Weather, on-site sensor and wind tools. Numbers only; reads only the telemetry store.
 
-- reference_weather / sensor_weather: weather frames ready for twin.plant.expected_power().
-  The sensor frame decomposes sensor GHI into DNI/DHI with pvlib erbs. erbs puts less light
-  in diffuse than NASA POWER (~17% vs ~32% at midday here), so expected-from-sensor runs a few
-  percent high on trackers even with a clean sensor (up to ~10% in unclipped summer shoulder
-  hours). sensor_check therefore compares against the reference directly, not through erbs.
-- sensor_flagged: from the commands table (flag_sensor_use_reference), never from twin state.
+- sensor_to_weather: THE expected-from-sensor weather of the project. Sensor GHI is split into
+  DNI/DHI with pvlib erbs. The tools use it, and so does the fault injector's LOW_PR family of
+  alarms, so the alarm feed and the agent's numbers agree. erbs puts less light in diffuse than
+  NASA POWER (~17% vs ~32% at midday here), so expected-from-sensor runs a few percent high on
+  trackers even with a clean sensor (up to ~10% in unclipped summer shoulder hours), as any
+  plant estimating the split from one GHI sensor would. sensor_check compares against the
+  reference directly, not through erbs.
+- sensor_flagged: from the commands table (flag_sensor_use_reference).
 - sensor_check: the dusty-sensor test. The reference is not ground truth (per-run bias sd ~2%,
   slow error sd ~2.5%, max 8%), so a single sensor/reference ratio is not enough. It combines
   (1) sensor vs reference on clear steps, (2) clear-sky shape: the sky is clear per the
-  reference and the sensor follows the clear-sky curve at a steady scale, as a dust layer
-  would, (3) a step down in the ratio inside the window, (4) peers: the inverters' DC vs
-  expected from the reference says whether the panels see the sensor's loss too.
+  reference and the sensor follows it at a steady scale, as a dust layer would, (3) a step down
+  in the ratio inside the window, (4) peers: the inverters' DC vs expected from the reference
+  says whether the panels see the sensor's loss too.
 """
 
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
 
 import numpy as np
 import pandas as pd
 import pvlib
 
-from raqeeb.config import load_plant
-from raqeeb.contracts import ActionType, InverterStatus, PlantConfig
+from raqeeb.contracts import VERDICT_INCONCLUSIVE, VERDICT_OK, ActionType, InverterStatus, PlantConfig, ToolResult
 from raqeeb.telemetry.store import TelemetryStore
+from raqeeb.tools.common import get_plant, local_time, window
 from raqeeb.twin import plant as physics
 from raqeeb.twin.weather import location
 
@@ -38,20 +39,37 @@ SMOOTH_STEPS = 5  # rolling median of sensor/reference before looking for the lo
 
 SENSOR_LOW_RATIO = 0.90  # sensor/reference at or below this: beyond the reference's 8% max error
 SENSOR_CLEAR_KT_MAX = 0.90  # a clean sensor under a clear sky reads >= ~1.0x pvlib Ineichen here
-SENSOR_STEP_DROP = 0.08  # ratio fell this much vs the first clear hour (reference bias cancels)
-SENSOR_SHAPE_CV_MAX = 0.05  # sensor/clear-sky steady: uniform scaling, not clouds or shading
+SENSOR_STEP_DROP = 0.08  # ratio fell this much vs the clear steps before (reference bias cancels)
+SENSOR_SHAPE_CV_MAX = 0.05  # sensor/reference steady: uniform scaling, not clouds or shading
 PEERS_AGREE_TOL = 0.05  # |peers - sensor| (both vs reference) below this: panels see the same loss
 PEERS_DISAGREE_TOL = 0.10  # above this: the panels do not see the sensor's loss
 UNCLIPPED_FRACTION = 0.95  # peers compared only where expected AC is below this share of rating
 
-
-def get_plant(plant: PlantConfig | None = None) -> PlantConfig:
-    return plant or load_plant()
+GEOMETRY = ["apparent_zenith", "zenith", "azimuth"]
 
 
 def solar_geometry(index: pd.DatetimeIndex, plant: PlantConfig | None = None) -> pd.DataFrame:
-    sp = location(get_plant(plant)).get_solarposition(index)
-    return sp[["apparent_zenith", "zenith", "azimuth"]]
+    return location(get_plant(plant)).get_solarposition(index)[GEOMETRY]
+
+
+def sensor_to_weather(ghi_sensor_wm2: pd.Series, ambient_c: pd.Series, wind_ms: pd.Series,
+                      geometry: pd.DataFrame) -> pd.DataFrame:
+    """Weather frame from the on-site sensor for twin.plant.expected_power(): GHI split with erbs.
+
+    `geometry` needs GEOMETRY columns on the same index (solar_geometry() or a weather_5min frame).
+    """
+    parts = pvlib.irradiance.erbs(ghi_sensor_wm2, geometry["zenith"], ghi_sensor_wm2.index)
+    frame = pd.DataFrame(
+        {
+            "ghi_wm2": ghi_sensor_wm2,
+            "dni_wm2": parts["dni"].fillna(0.0),
+            "dhi_wm2": parts["dhi"].fillna(0.0),
+            "ambient_c": ambient_c,
+            "wind_ms": wind_ms,
+        },
+        index=ghi_sensor_wm2.index,
+    )
+    return frame.join(geometry[GEOMETRY])
 
 
 def reference_weather(store: TelemetryStore, start: datetime | None = None, end: datetime | None = None,
@@ -63,24 +81,12 @@ def reference_weather(store: TelemetryStore, start: datetime | None = None, end:
 
 def sensor_weather(store: TelemetryStore, start: datetime | None = None, end: datetime | None = None,
                    plant: PlantConfig | None = None) -> pd.DataFrame:
-    """On-site sensor as a weather frame: GHI split into DNI/DHI with erbs; ambient and wind
-    from the station. Only steps the station reported (a station dropout stays missing)."""
+    """sensor_to_weather() on stored station rows, plus clear-sky GHI. Only steps the station
+    reported (a station dropout stays missing)."""
     ws = store.weather_station(start, end)
-    geo = solar_geometry(ws.index, plant)
-    parts = pvlib.irradiance.erbs(ws["ghi_sensor_wm2"], geo["zenith"], ws.index)
-    clearsky = store.weather_reference(start, end)["clearsky_ghi_wm2"].reindex(ws.index)
-    frame = pd.DataFrame(
-        {
-            "ghi_wm2": ws["ghi_sensor_wm2"],
-            "dni_wm2": parts["dni"].fillna(0.0),
-            "dhi_wm2": parts["dhi"].fillna(0.0),
-            "ambient_c": ws["ambient_c"],
-            "wind_ms": ws["wind_ms"],
-            "clearsky_ghi_wm2": clearsky,
-        },
-        index=ws.index,
-    )
-    return frame.join(geo)
+    frame = sensor_to_weather(ws["ghi_sensor_wm2"], ws["ambient_c"], ws["wind_ms"], solar_geometry(ws.index, plant))
+    frame["clearsky_ghi_wm2"] = store.weather_reference(start, end)["clearsky_ghi_wm2"].reindex(ws.index)
+    return frame
 
 
 def sensor_flagged(store: TelemetryStore, index: pd.DatetimeIndex, plant: PlantConfig | None = None) -> pd.Series:
@@ -106,23 +112,38 @@ def wind_series(store: TelemetryStore, start: datetime | None = None, end: datet
 
 
 def wind_summary(store: TelemetryStore, start: datetime | None = None, end: datetime | None = None,
-                 plant: PlantConfig | None = None) -> dict[str, Any]:
-    """Wind vs the tracker stow limit and the high-wind alarm level."""
+                 plant: PlantConfig | None = None) -> ToolResult:
+    """Wind vs the tracker stow limit and the high-wind alarm level.
+
+    Verdicts: "stow_wind" (trackers should be stowed), "high_wind", ok, inconclusive (no data).
+    """
     plant = get_plant(plant)
+    start, end = window(store, start, end)
     wind = wind_series(store, start, end)
+    stow, alarm = plant.tracker.stow_wind_ms, plant.high_wind_alarm_ms
+    thresholds = {"stow_wind_ms": stow, "high_wind_alarm_ms": alarm}
     if wind.empty:
-        return {"steps": 0}
-    above_stow = wind[wind > plant.tracker.stow_wind_ms]
-    return {
+        return ToolResult(tool="wind_summary", verdict=VERDICT_INCONCLUSIVE, start=start, end=end,
+                          thresholds=thresholds, evidence="no wind data in the window")
+    above_stow = wind[wind > stow]
+    above_alarm = wind[wind > alarm]
+    values = {
         "steps": len(wind),
         "max_wind_ms": round(float(wind.max()), 2),
         "max_at": wind.idxmax().to_pydatetime(),
-        "stow_wind_ms": plant.tracker.stow_wind_ms,
         "steps_above_stow": len(above_stow),
         "first_above_stow": above_stow.index[0].to_pydatetime() if len(above_stow) else None,
         "last_above_stow": above_stow.index[-1].to_pydatetime() if len(above_stow) else None,
-        "steps_above_high_wind_alarm": int((wind > plant.high_wind_alarm_ms).sum()),
+        "steps_above_high_wind_alarm": len(above_alarm),
+        "first_above_high_wind_alarm": above_alarm.index[0].to_pydatetime() if len(above_alarm) else None,
     }
+    verdict = "stow_wind" if len(above_stow) else "high_wind" if len(above_alarm) else VERDICT_OK
+    evidence = f"max wind {values['max_wind_ms']:.1f} m/s at {local_time(values['max_at'])}"
+    if len(above_stow):
+        evidence += (f"; above the {stow:.0f} m/s stow limit for {len(above_stow) * 5} min from "
+                     f"{local_time(values['first_above_stow'])} (tracker stow is normal then)")
+    return ToolResult(tool="wind_summary", verdict=verdict, devices=[plant.weather_station_id] if verdict != VERDICT_OK
+                      else [], start=start, end=end, values=values, thresholds=thresholds, evidence=evidence)
 
 
 def clear_steps(ref: pd.DataFrame) -> pd.Series:
@@ -148,32 +169,37 @@ def _peers_vs_reference(store: TelemetryStore, ref_weather: pd.DataFrame, steps:
     return (dc / exp_dc).where(usable).median(axis=1).dropna()
 
 
+SENSOR_THRESHOLDS = {
+    "sensor_low_ratio": SENSOR_LOW_RATIO, "sensor_clear_kt_max": SENSOR_CLEAR_KT_MAX,
+    "sensor_step_drop": SENSOR_STEP_DROP, "shape_cv_max": SENSOR_SHAPE_CV_MAX,
+    "peers_agree_tol": PEERS_AGREE_TOL, "peers_disagree_tol": PEERS_DISAGREE_TOL,
+    "clear_kt_min": CLEAR_KT_MIN, "min_clear_steps": MIN_CLEAR_STEPS,
+}
+
+
 def sensor_check(store: TelemetryStore, start: datetime | None = None, end: datetime | None = None,
-                 plant: PlantConfig | None = None) -> dict[str, Any]:
+                 plant: PlantConfig | None = None) -> ToolResult:
     """Is the on-site irradiance sensor reading low (dusty)? See the module docstring.
 
-    `suspect` needs: sensor/reference <= SENSOR_LOW_RATIO on clear steps, a steady clear-sky
-    shape, and at least one more vote (sensor below clear-sky level, a step drop in the window,
-    or peers disagreeing with the sensor). `panels_share_loss` says the inverters lose about
-    as much as the sensor does (the trap: performance ratio vs the sensor looks normal).
+    A finding needs: sensor/reference <= SENSOR_LOW_RATIO on clear steps, a steady deficit, and
+    at least one more vote (sensor below clear-sky level, a step drop, or peers disagreeing with
+    the sensor). Verdicts: "sensor_low" (the panels do not share the loss), "sensor_low_panels_too"
+    (they do: the trap, where performance ratio vs the sensor looks normal), ok, inconclusive.
     """
     plant = get_plant(plant)
+    start, end = window(store, start, end)
+    station = plant.weather_station_id
     ref_weather = reference_weather(store, start, end, plant)
     ghi_sensor = store.weather_station(start, end)["ghi_sensor_wm2"]
     clear = clear_steps(ref_weather).reindex(ghi_sensor.index, fill_value=False)
     steps = ghi_sensor.index[clear.to_numpy()]
-    result: dict[str, Any] = {
-        "clear_steps": len(steps),
-        "flagged": bool(sensor_flagged(store, ghi_sensor.index[-1:], plant).any()) if len(ghi_sensor) else False,
-        "thresholds": {
-            "sensor_low_ratio": SENSOR_LOW_RATIO, "sensor_clear_kt_max": SENSOR_CLEAR_KT_MAX,
-            "sensor_step_drop": SENSOR_STEP_DROP, "shape_cv_max": SENSOR_SHAPE_CV_MAX,
-            "peers_agree_tol": PEERS_AGREE_TOL, "peers_disagree_tol": PEERS_DISAGREE_TOL,
-        },
-    }
+    flagged = bool(sensor_flagged(store, ghi_sensor.index[-1:], plant).any()) if len(ghi_sensor) else False
+    base = {"tool": "sensor_check", "start": start, "end": end, "thresholds": SENSOR_THRESHOLDS}
     if len(steps) < MIN_CLEAR_STEPS:
-        return result | {"verdict": "inconclusive", "suspect": False,
-                         "reasons": [f"only {len(steps)} clear steps (need {MIN_CLEAR_STEPS})"]}
+        return ToolResult(**base, verdict=VERDICT_INCONCLUSIVE,
+                          values={"clear_steps": len(steps), "flagged": flagged},
+                          evidence=f"only {len(steps)} clear-sky steps (need {MIN_CLEAR_STEPS}); "
+                                   "the sensor cannot be judged against the reference")
 
     ratio_all = ghi_sensor.loc[steps] / ref_weather.loc[steps, "ghi_wm2"]
     # Current low period: the last run of low (smoothed) ratio that reaches the end of the window
@@ -210,35 +236,38 @@ def sensor_check(store: TelemetryStore, start: datetime | None = None, end: date
     suspect = votes["below_reference"] and shape_ok and support
     panels_share = gap is not None and abs(gap) < PEERS_AGREE_TOL
 
-    reasons = [f"sensor/reference median {vs_ref:.3f} on {len(period)} clear steps"
-               + (f" since {onset:%H:%M} UTC" if onset is not None else "")]
-    reasons.append(f"sensor/clear-sky median {sensor_kt.median():.3f}, ratio cv {shape_cv:.3f}")
+    since = f" since {local_time(onset)}" if onset is not None else ""
+    parts = [f"sensor reads {vs_ref:.0%} of the reference on {len(period)} clear-sky steps{since}",
+             f"{sensor_kt.median():.0%} of the clear-sky model (deficit spread {shape_cv:.1%})"]
     if drop is not None:
-        reasons.append(f"ratio fell {drop:+.3f} vs the clear steps before the onset")
+        parts.append(f"down {drop:.0%} from before")
     if peers_vs_ref is not None:
-        reasons.append(f"peers DC/expected(reference) median {peers_vs_ref:.3f}")
+        parts.append(f"inverter DC is {peers_vs_ref:.0%} of expected from the reference")
     if suspect:
         verdict = "sensor_low_panels_too" if panels_share else "sensor_low"
+        parts.append("the panels lose about the same, so a performance ratio on this sensor hides the loss"
+                     if panels_share else "the panels do not see this loss")
     elif votes["below_reference"]:
-        verdict = "inconclusive"
-        reasons.append("sensor deficit is not steady (clouds or shading?)" if not shape_ok
-                       else "sensor below reference, but no clear-sky, step or peer evidence")
+        verdict = VERDICT_INCONCLUSIVE
+        parts.append("the deficit is not steady (clouds or shading?)" if not shape_ok
+                     else "no clear-sky, step or peer evidence backs it")
     else:
-        verdict = "ok"
-    return result | {
-        "verdict": verdict,
-        "suspect": bool(suspect),
-        "panels_share_loss": bool(suspect and panels_share),
+        verdict = VERDICT_OK
+    values = {
+        "clear_steps": len(steps),
+        "flagged": flagged,
         "sensor_vs_reference": round(vs_ref, 4),
         "sensor_kt_clear": round(float(sensor_kt.median()), 4),
         "reference_kt_clear": round(float((ref["ghi_wm2"] / ref["clearsky_ghi_wm2"]).median()), 4),
         "shape_cv": round(shape_cv, 4),
         "ratio_drop": None if drop is None else round(drop, 4),
         "peers_vs_reference": None if peers_vs_ref is None else round(peers_vs_ref, 4),
+        "panels_share_loss": bool(suspect and panels_share),
         "onset": None if onset is None else onset.to_pydatetime(),
         "votes": votes,
-        "reasons": reasons,
     }
+    return ToolResult(**base, verdict=verdict, devices=[station] if suspect else [], values=values,
+                      evidence="; ".join(parts))
 
 
 def irradiance_ratios(store: TelemetryStore, start: datetime | None = None, end: datetime | None = None,

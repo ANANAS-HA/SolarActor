@@ -18,9 +18,16 @@ from typing import Any, Literal
 import numpy as np
 import pandas as pd
 
-from raqeeb.contracts import PlantConfig
+from raqeeb.contracts import VERDICT_INCONCLUSIVE, VERDICT_OK, PlantConfig, ToolResult
 from raqeeb.telemetry.store import TelemetryStore
-from raqeeb.tools.weather_tools import get_plant, reference_weather, sensor_flagged, sensor_weather, wind_series
+from raqeeb.tools.common import get_plant, local_time, window
+from raqeeb.tools.weather_tools import (
+    reference_weather,
+    sensor_flagged,
+    sensor_to_weather,
+    sensor_weather,
+    wind_series,
+)
 from raqeeb.twin import plant as twin_physics
 
 Basis = Literal["reference", "sensor", "auto"]
@@ -28,6 +35,18 @@ Basis = Literal["reference", "sensor", "auto"]
 TRACKER_DEVIATION_DEG = 10.0  # measured angle this far from the expected tracking angle ...
 TRACKER_MIN_STEPS = 6  # ... for at least this many daylight steps (wind below stow) = not tracking
 TRACKER_FLAT_SD_DEG = 1.0  # measured angle sd below this while expected moves = held still
+
+
+def expected_from_sensor(ghi_sensor_wm2: pd.Series, ambient_c: pd.Series, wind_ms: pd.Series,
+                         geometry: pd.DataFrame, plant: PlantConfig | None = None) -> pd.DataFrame:
+    """THE expected-from-sensor output of the project (nameplate AC/DC per inverter).
+
+    Sensor GHI split with erbs (sensor_to_weather), then expected_power(). The tools and the
+    fault injector's symptom alarms (LOW_PR, LOW_STRING_CURRENT, DC_INPUT_LOW) both call this,
+    so the alarm feed and the agent's numbers agree. Wind stow is normal, so it is included.
+    """
+    weather = sensor_to_weather(ghi_sensor_wm2, ambient_c, wind_ms, geometry)
+    return twin_physics.expected_power(weather, get_plant(plant))
 
 
 def expected_basis(store: TelemetryStore, index: pd.DatetimeIndex, plant: PlantConfig | None = None) -> pd.Series:
@@ -44,7 +63,8 @@ def expected(store: TelemetryStore, start: datetime | None = None, end: datetime
     ref = reference_weather(store, start, end, plant)
     if basis == "reference":
         return twin_physics.expected_power(ref, plant)
-    sensor = twin_physics.expected_power(sensor_weather(store, start, end, plant), plant)
+    ws = sensor_weather(store, start, end, plant)
+    sensor = expected_from_sensor(ws["ghi_wm2"], ws["ambient_c"], ws["wind_ms"], ws, plant)
     if basis == "sensor":
         return sensor
     if basis != "auto":
@@ -78,29 +98,31 @@ def expected_tracker_angle(store: TelemetryStore, start: datetime | None = None,
 
 
 def tracker_check(store: TelemetryStore, start: datetime | None = None, end: datetime | None = None,
-                  plant: PlantConfig | None = None) -> dict[str, dict[str, Any]]:
+                  plant: PlantConfig | None = None) -> ToolResult:
     """Per inverter: does the measured tracker angle follow the expected angle?
 
     Only daylight steps with wind at or below the stow limit count (stow in high wind is normal).
+    Verdicts: "tracker_off" (devices = blocks off their angle), ok, inconclusive (no usable steps).
     """
     plant = get_plant(plant)
+    start, end = window(store, start, end)
     exp = expected_tracker_angle(store, start, end, plant)
     daylight = store.weather_reference(start, end)["clearsky_ghi_wm2"].reindex(exp.index) > 0
     calm = wind_series(store, start, end).reindex(exp.index) <= plant.tracker.stow_wind_ms
     usable = daylight & calm
     measured = store.inverter_wide("tracker_angle_deg", start, end).reindex(exp.index)
-    out: dict[str, dict[str, Any]] = {}
+    per_inverter: dict[str, dict[str, Any]] = {}
     for inv_id in measured.columns:
         m = measured[inv_id][usable].dropna()
         e = exp.reindex(m.index)
         if len(m) < TRACKER_MIN_STEPS:
-            out[inv_id] = {"steps": len(m), "stuck": None}
+            per_inverter[inv_id] = {"steps": len(m), "stuck": None}
             continue
         dev = (m - e).abs()
         off = dev > TRACKER_DEVIATION_DEG
         held = m[off]
         flat = bool(len(held) > 1 and held.std() < TRACKER_FLAT_SD_DEG and e[off].std() > 5 * TRACKER_FLAT_SD_DEG)
-        out[inv_id] = {
+        per_inverter[inv_id] = {
             "steps": len(m),
             "median_deviation_deg": round(float(dev.median()), 2),
             "steps_off": int(off.sum()),
@@ -108,4 +130,21 @@ def tracker_check(store: TelemetryStore, start: datetime | None = None, end: dat
             "held_at_deg": round(float(held.median()), 1) if flat else None,
             "stuck": bool(off.sum() >= TRACKER_MIN_STEPS),
         }
-    return out
+    stuck = [k for k, v in per_inverter.items() if v["stuck"]]
+    judged = [k for k, v in per_inverter.items() if v["stuck"] is not None]
+    if stuck:
+        verdict = "tracker_off"
+        evidence = "; ".join(
+            f"{k} off its tracking angle for {per_inverter[k]['steps_off'] * 5} min from "
+            f"{local_time(per_inverter[k]['first_off'])}"
+            + (f", held at {per_inverter[k]['held_at_deg']:.0f} deg" if per_inverter[k]["held_at_deg"] is not None else "")
+            for k in stuck) + " (wind below the stow limit)"
+    elif judged:
+        verdict, evidence = VERDICT_OK, f"{len(judged)} tracker blocks follow their expected angle"
+    else:
+        verdict, evidence = VERDICT_INCONCLUSIVE, "no daylight steps with wind below the stow limit"
+    return ToolResult(tool="tracker_check", verdict=verdict, devices=stuck, start=start, end=end,
+                      values={"inverters": per_inverter},
+                      thresholds={"deviation_deg": TRACKER_DEVIATION_DEG, "min_steps": TRACKER_MIN_STEPS,
+                                  "flat_sd_deg": TRACKER_FLAT_SD_DEG, "stow_wind_ms": plant.tracker.stow_wind_ms},
+                      evidence=evidence)

@@ -1,116 +1,66 @@
-"""Fixture scenarios for the tool tests: run the Twin, change twin.state directly, store the telemetry.
+"""Fixture scenarios for the tool tests, driven through Lane B's FaultInjector (so the symptom
+alarms appear) and stored in an in-memory TelemetryStore.
 
-Lane B's injector is not used here. Day: 15 Jan 2025 (clear, cool, so midday soiling loss is
-not hidden by clipping), 07:00-18:00 Riyadh = 04:00-15:00 UTC. Times below are UTC.
+Day: 15 Jan 2025 (clear, cool, so midday soiling loss is not hidden by clipping), 07:00-18:00
+Riyadh = 04:00-15:00 UTC. Fault times are UTC on the scenario's start date.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 
-from raqeeb.contracts import PlantState
+from raqeeb.contracts import FaultSpec, Scenario
+from raqeeb.faults.injector import FaultInjector
 from raqeeb.telemetry.store import TelemetryStore
 from raqeeb.twin.controls import flag_sensor
-from raqeeb.twin.simulator import Twin
 
 DAY = datetime(2025, 1, 15, tzinfo=timezone.utc)
-START_H, END_H = 4, 15
+START_H, HOURS = 4, 11
 SEED = 7
+FLAG_AT = "09:00"  # sensor_flagged: flag_sensor is called through the real control at this time
+DERATE_SEVERITY = 0.44  # cap = 0.56 x 2500 kW = 1400 kW
 
+STORM = {"type": "SOILING", "target": "ALL", "start": "06:00", "end": "07:00", "severity": 0.20}
+SENSOR_DUST = {"type": "SENSOR_SOILING", "target": "WS-01", "start": "07:00", "severity": 0.20}
 
-def at(twin: Twin, hhmm: str) -> datetime:
-    """UTC clock time on the twin's start date."""
-    hh, mm = (int(p) for p in hhmm.split(":"))
-    day = twin.start.replace(hour=0, minute=0)
-    return day + timedelta(hours=hh, minutes=mm)
-
-
-def _set(**changes) -> Callable[[PlantState], None]:
-    """State change from dotted paths, e.g. _set(**{"station.sensor_soiling": 0.2})."""
-
-    def change(state: PlantState) -> None:
-        for path, value in changes.items():
-            *parents, name = path.split(".")
-            obj = state
-            for p in parents:
-                obj = obj.inverters[p] if p.startswith("INV-") else getattr(obj, p)
-            setattr(obj, name, value)
-
-    return change
-
-
-def _soil_all(loss: float) -> Callable[[PlantState], None]:
-    def change(state: PlantState) -> None:
-        for inv in state.inverters.values():
-            inv.soiling_loss = loss
-
-    return change
-
-
-def healthy(twin: Twin) -> None:
-    pass
-
-
-def sensor_only(twin: Twin) -> None:
-    twin.schedule(at(twin, "07:00"), "sensor dust", _set(**{"station.sensor_soiling": 0.20}))
-
-
-def soiling_only(twin: Twin) -> None:
-    twin.schedule(at(twin, "07:00"), "panel dust", _soil_all(0.20))
-
-
-def trap(twin: Twin) -> None:
-    """Dust storm -> panels AND sensor dusty, plus a derate and a comms dropout."""
-    twin.schedule(at(twin, "06:00"), "storm", _set(**{"atmosphere.wind_add_ms": 16.0, "atmosphere.irradiance_factor": 0.7}))
-    twin.schedule(at(twin, "07:00"), "storm over", _set(**{"atmosphere.wind_add_ms": 0.0, "atmosphere.irradiance_factor": 1.0,
-                                                     "station.sensor_soiling": 0.20}))
-    twin.schedule(at(twin, "07:00"), "panel dust", _soil_all(0.20))
-    twin.schedule(at(twin, "08:30"), "INV-07 fan", _set(**{"INV-07.derate_cap_kw": 1400.0, "INV-07.temp_offset_c": 40.0}))
-    twin.schedule(at(twin, "09:15"), "INV-12 comms down", _set(**{"INV-12.comms_up": False}))
-    twin.schedule(at(twin, "11:00"), "INV-12 comms back", _set(**{"INV-12.comms_up": True}))
-
-
-def curtailment(twin: Twin) -> None:
-    twin.schedule(at(twin, "07:30"), "grid limit", _set(grid_limit_kw=24000.0))
-    twin.schedule(at(twin, "09:30"), "grid limit off", _set(grid_limit_kw=None))
-
-
-def tracker_stuck(twin: Twin) -> None:
-    twin.schedule(at(twin, "05:00"), "INV-03 tracker", _set(**{"INV-03.tracker_override_deg": 0.0}))
-
-
-def station_dropout(twin: Twin) -> None:
-    twin.schedule(at(twin, "07:00"), "WS-01 comms down", _set(**{"station.comms_up": False}))
-    twin.schedule(at(twin, "07:30"), "WS-01 comms back", _set(**{"station.comms_up": True}))
-
-
-def dead_and_silent(twin: Twin) -> None:
-    """INV-05 stops producing AND loses comms: the meter shows the loss."""
-    twin.schedule(at(twin, "08:00"), "INV-05 down", _set(**{"INV-05.comms_up": False, "INV-05.stopped": True}))
-
-
-SCENARIOS: dict[str, Callable[[Twin], None]] = {
-    "station_dropout": station_dropout,
-    "dead_and_silent": dead_and_silent,
-    "healthy": healthy,
-    "sensor_only": sensor_only,
-    "soiling_only": soiling_only,
-    "trap": trap,
-    "curtailment": curtailment,
-    "tracker_stuck": tracker_stuck,
-    "sensor_flagged": sensor_only,  # build() flags the sensor with the real control at FLAG_AT
+SCENARIOS: dict[str, list[dict]] = {
+    "healthy": [],
+    "sensor_only": [SENSOR_DUST],
+    "soiling_only": [STORM],
+    "trap": [
+        STORM,
+        SENSOR_DUST,
+        {"type": "INVERTER_DERATE", "target": "INV-07", "start": "08:30", "severity": DERATE_SEVERITY},
+        {"type": "COMMS_DROPOUT", "target": "INV-12", "start": "09:15", "end": "11:00"},
+    ],
+    "curtailment": [{"type": "CURTAILMENT", "target": "ALL", "start": "07:30", "end": "09:30", "severity": 0.40}],
+    "tracker_stuck": [{"type": "TRACKER_STUCK", "target": "INV-03", "start": "05:00"}],
+    "sensor_flagged": [SENSOR_DUST],
+    "station_dropout": [{"type": "COMMS_DROPOUT", "target": "WS-01", "start": "07:00", "end": "07:30"}],
+    # INV-05 stopped by a command AND silent: the meter shows the loss
+    "dead_and_silent": [{"type": "UNAUTHORIZED_CMD", "target": "INV-05", "start": "08:00"},
+                        {"type": "COMMS_DROPOUT", "target": "INV-05", "start": "08:00"}],
 }
 
-FLAG_AT = "09:00"
+
+def at(scenario: Scenario, hhmm: str) -> datetime:
+    return scenario.resolve_time(hhmm)
 
 
-def build(name: str, seed: int = SEED, day: datetime = DAY) -> tuple[TelemetryStore, Twin]:
-    twin = Twin(day + timedelta(hours=START_H), day + timedelta(hours=END_H), seed=seed)
-    SCENARIOS[name](twin)
+def make_scenario(name: str, seed: int = SEED, day: datetime = DAY) -> Scenario:
+    scenario = Scenario(id=f"fx_{name}", seed=seed, start=day + timedelta(hours=START_H), duration_hours=HOURS,
+                        faults=[FaultSpec(**f) for f in SCENARIOS[name]])
+    return scenario.model_copy(update={"answer_key": scenario.expected_answer_key()})
+
+
+def build(name: str, seed: int = SEED, day: datetime = DAY) -> tuple[TelemetryStore, Scenario, FaultInjector]:
+    """Run the scenario through the injector into a fresh store. Tools get only the store and
+    scenario.agent_view(); the Scenario and injector are for test assertions."""
+    scenario = make_scenario(name, seed, day)
+    inj = FaultInjector.for_scenario(scenario)
     store = TelemetryStore()
     if name == "sensor_flagged":
-        store.write_batch(twin.advance((at(twin, FLAG_AT) - twin.start).total_seconds() / 60))
-        flag_sensor(twin, twin.plant.weather_station_id)
-    store.write_batch(twin.run_to_end())
-    return store, twin
+        store.write_batch(inj.advance((at(scenario, FLAG_AT) - scenario.start).total_seconds() / 60))
+        flag_sensor(inj.twin, inj.twin.plant.weather_station_id)
+    store.write_batch(inj.advance(HOURS * 60))
+    return store, scenario, inj
