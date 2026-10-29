@@ -51,9 +51,20 @@ def test_fault_times_resolve_to_utc_on_start_date(scenario: Scenario):
     assert scenario.resolve_time("2025-04-12T09:00:00Z").tzinfo == timezone.utc
 
 
-def test_agent_view_hides_answer_key(scenario: Scenario):
-    assert scenario.without_answer_key().answer_key is None
+def test_agent_view_has_only_the_window(scenario: Scenario):
+    view = scenario.agent_view()
+    assert set(view.model_dump()) == {"id", "start", "duration_hours"}
+    assert (view.start, view.end) == (scenario.start, scenario.end)
     assert scenario.answer_key is not None
+
+
+def test_to_yaml_quotes_fault_times(scenario: Scenario, tmp_path: Path):
+    out = tmp_path / "scn.yaml"
+    scenario.to_yaml(out, header="# synthetic\n")
+    text = out.read_text(encoding="utf-8")
+    assert text.startswith("# synthetic\n")
+    assert "start: '07:00'" in text and "end: '13:00'" in text
+    assert Scenario.from_yaml(out) == scenario
 
 
 def test_unquoted_yaml_time_is_rejected():

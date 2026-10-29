@@ -6,6 +6,10 @@ Built for the Misk x HUMAIN "Future AI Builders" hackathon, Challenge 1: *Agenti
 
 > **Synthetic data notice.** The plant, its telemetry, the faults, the alarm codes and the alarm manual text are all **synthetic**. Weather comes from NASA POWER for a real Saudi location. Plant output is simulated from that weather with pvlib.
 
+## Known simplifications
+
+- **Curtailment split.** When the grid operator limits the plant, the twin gives every running inverter an equal share of the limit. A real plant controller would hand a derated inverter's unused share to the others, so a scenario with both curtailment and a derated inverter sits slightly below the grid limit.
+
 ## Status
 
 Phase 0 (project setup and shared contracts). See `handoffs/HANDOFF.md` for the full plan.
