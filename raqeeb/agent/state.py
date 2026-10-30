@@ -112,8 +112,10 @@ class Memory:
     revised: list[tuple[str, str]] = field(default_factory=list)  # (old label, new label) diagnosis revisions
     escalations: list[Escalation] = field(default_factory=list)  # hand-overs to a human, in order
     unexplained_polls: dict[str, int] = field(default_factory=dict)  # symptom id -> polls in a row unexplained
+    seen_at: dict[str, datetime] = field(default_factory=dict)  # symptom id -> poll it was first reported
     escalated: set[str] = field(default_factory=set)  # cause labels and symptom ids already handed over
     router: Any = None  # raqeeb.llm.router.Router, or None for rules only
+    disabled: frozenset = frozenset()  # FaultTypes whose rules (graph links and fix ladder) are off (ablation)
     alternatives: list[Hypothesis] = field(default_factory=list)  # candidates rank did not select, standalone scores
     consulted: set[frozenset[str]] = field(default_factory=set)  # questions already put to the model
     hypothesis_calls: int = 0  # hypothesis questions asked this incident

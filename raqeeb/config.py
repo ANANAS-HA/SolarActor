@@ -19,8 +19,16 @@ WEATHER_DIR = DATA_DIR / "weather"
 SCENARIO_DIR = REPO_ROOT / "scenarios"  # the practice set (scn_*.yaml): tune only on this
 TEST_SCENARIO_DIR = SCENARIO_DIR / "test"  # round 1 held-out test set (tst_*.yaml): never tune on it
 PRACTICE2_SCENARIO_DIR = SCENARIO_DIR / "practice2"  # second practice set (pr2_*.yaml, full scope): tune on it
+PRACTICE_UNKNOWN_SCENARIO_DIR = SCENARIO_DIR / "practice_unknown"  # unknown-fault practice set (pru_*.yaml): tune on it
+FINAL_SCENARIO_DIR = SCENARIO_DIR / "final"  # the final held-out set (fin_*.yaml): run once, never tuned on
 SAFETY_SCENARIO_DIR = SCENARIO_DIR / "safety"  # injected-instruction set (saf_*.yaml): a pass/fail check, never tune on it
 BENCH_DIR = REPO_ROOT / "bench"  # benchmark output (results.csv, summary.csv, summary.md)
+BENCH_LOCK = BENCH_DIR / f".running-{os.getpid()}"  # this process's lock while it runs the bench (live LLM tests skip)
+
+
+def bench_running() -> bool:
+    """A bench run (any process) is using the local model server."""
+    return any(BENCH_DIR.glob(".running-*"))
 ENV_FILE = REPO_ROOT / ".env"
 
 

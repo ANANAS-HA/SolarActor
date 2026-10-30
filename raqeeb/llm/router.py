@@ -18,8 +18,8 @@
 5. If the local server is down, the call goes to the API model (escalation "local_down") and the
    local model is skipped for LOCAL_RETRY_AFTER_S. If no model gives a valid reply, the methods
    return an empty / None result and the agent keeps its rule-based output.
-6. With api=False the API model is never called: the hard cases go to the local model too, and a
-   local failure ends with the rule-based result.
+6. With api=False, or when .env sets no API model and key, the API model is never called: the hard
+   cases go to the local model too, and a local failure ends with the rule-based result.
 
 Technician notes, alarm manual text and the site layout reach the model only inside untrusted-data
 blocks, like every other piece of plant data.
@@ -167,7 +167,7 @@ class Router:
         self.plant = plant or load_plant()
         self.margin = margin
         self.unexplained_max = unexplained_max
-        self.api = api
+        self.api = api and self.gateway.configured(LlmRole.API)  # no key or model in .env: never try the API
         self._local_down_until = 0.0
 
     @property

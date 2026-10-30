@@ -31,3 +31,14 @@ def call(tool, store, scenario: Scenario, **kwargs) -> ToolResult:
     """Call a tool on the agent's window (agent_view) and check its output."""
     view = scenario.agent_view()
     return checked(tool(store, view.start, view.end, **kwargs), scenario)
+
+
+def pytest_collection_modifyitems(config, items):
+    """Live LLM tests (marker `llm`) stay off the local model server while a bench run uses it."""
+    from raqeeb.config import bench_running
+
+    if bench_running():
+        skip = pytest.mark.skip(reason="a bench run is using the local model server (bench/.running-* present)")
+        for item in items:
+            if "llm" in item.keywords:
+                item.add_marker(skip)

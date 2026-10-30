@@ -22,22 +22,28 @@ MAX_KNOWN_LOSS_SHARE = 0.25  # more known-loss inverters than this share of the 
 PLANT_FAULTS = {FaultType.SOILING, FaultType.SENSOR_SOILING, FaultType.CURTAILMENT}
 COMMON_ONSET = timedelta(minutes=20)  # units below their peers from within this of each other share an onset
 COMMON_ONSET_MIN = 3  # ... when at least this many do (independent device faults rarely start together)
+ONSET_HOLD = timedelta(minutes=30)  # two units weak together: wait this long after the later onset for a third
 
 
-def mark_common_onset(memory: Memory, current: dict[str, Symptom]) -> None:
+def mark_common_onset(memory: Memory, current: dict[str, Symptom], now: datetime) -> None:
     """Flag weak-unit symptoms that started together on several units: a shared cause (something the
     units have in common), not separate single-device faults. A unit below its peers starts at the
     peer tool's onset; one only below the reference starts when first seen. Units with a confirmed
-    cause of their own do not count."""
+    cause of their own do not count. Two units weak together are held (no single-unit guess) for
+    ONSET_HOLD after the later of them was first seen, in case a third joins."""
     explained = {t for c in memory.causes.values() if c.status not in PASSIVE for t in c.hypothesis.targets}
     lows = [memory.symptoms[sid] for sid, s in current.items() if s.kind == SymptomKind.DEVICE_UNDERPERFORMANCE
             and s.device_id not in explained]
     onset = {s.id: current[s.id].start if "ratio_to_peers" in current[s.id].evidence else s.start for s in lows}
+
     for s in lows:
-        together = sorted(o.device_id for o in lows if abs(onset[o.id] - onset[s.id]) <= COMMON_ONSET)
+        near = [o for o in lows if abs(onset[o.id] - onset[s.id]) <= COMMON_ONSET]
+        together = sorted(o.device_id for o in near)
         if len(together) >= COMMON_ONSET_MIN:
             s.evidence["common_onset"] = together
             s.evidence["summary"] = f"{s.evidence.get('summary', s.id)}; started with {', '.join(together)}"
+        elif len(together) > 1 and now - max(memory.seen_at.get(o.id, now) for o in near) < ONSET_HOLD:
+            s.evidence["onset_hold"] = together  # might be the start of a shared loss: no single-unit guess yet
 
 
 def known_losses(memory: Memory, now: datetime) -> list[str]:
@@ -193,8 +199,9 @@ def investigate(state: PollState) -> PollState:
         old = memory.symptoms.get(sid)
         # keep the first start; refresh the evidence
         memory.symptoms[sid] = symptom if old is None else symptom.model_copy(update={"start": min(old.start, symptom.start)})
+        memory.seen_at.setdefault(sid, now)
     memory.active = set(current)
-    mark_common_onset(memory, current)
+    mark_common_onset(memory, current, now)
     if new:
         memory.log(now, "investigate", f"{len(new)} new symptoms: " + "; ".join(
             current[s].evidence.get("summary", s) for s in new))

@@ -1,0 +1,23 @@
+# SYNTHETIC scenario from raqeeb.faults.generator. Fault times are UTC on the start date.
+# Faults and answer_key are for the injector and bench only; the agent gets Scenario.agent_view().
+id: abl_0009
+seed: 4242010
+start: '2025-05-19T03:00:00Z'
+duration_hours: 12.0
+faults:
+- type: SENSOR_SOILING
+  target: WS-01
+  start: '04:00'
+  severity: 0.19
+- type: UNAUTHORIZED_CMD
+  target: INV-05
+  start: '04:35'
+- type: STRING_OPEN
+  target: INV-16
+  start: '08:20'
+  severity: 0.16
+answer_key:
+  root_causes:
+  - SENSOR_SOILING@WS-01
+  - UNAUTHORIZED_CMD@INV-05
+  - STRING_OPEN@INV-16

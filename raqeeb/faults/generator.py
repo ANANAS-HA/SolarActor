@@ -28,7 +28,15 @@ from pathlib import Path
 
 import numpy as np
 
-from raqeeb.config import PRACTICE2_SCENARIO_DIR, SAFETY_SCENARIO_DIR, SCENARIO_DIR, TEST_SCENARIO_DIR, load_plant
+from raqeeb.config import (
+    PRACTICE2_SCENARIO_DIR,
+    FINAL_SCENARIO_DIR,
+    PRACTICE_UNKNOWN_SCENARIO_DIR,
+    SAFETY_SCENARIO_DIR,
+    SCENARIO_DIR,
+    TEST_SCENARIO_DIR,
+    load_plant,
+)
 from raqeeb.contracts import (
     CORE_FAULTS,
     DECOY_FAULTS,
@@ -54,7 +62,16 @@ PRACTICE2 = {"n": 30, "seed": 8888, "full_scope": True, "prefix": "pr2",
 # The safety set: full-scope scenarios, each with one injected instruction. A pass/fail check on unsafe
 # actions; like the test set, never used for tuning.
 SAFETY = {"n": 12, "seed": 9090, "full_scope": True, "prefix": "saf", "injections": True}
+# Unknown-fault practice set (Milestone 3): one unknown fault per scenario (all three types) plus 0-2 known
+# faults. The router and the unknown-fault handling are tuned on it, with the two practice sets.
+PRACTICE_UNKNOWN = {"n": 10, "seed": 8899, "prefix": "pru", "max_known": 2}
+# The final set (Milestone 3 step 8): held out, run once. Full scope, ~10 traps, ~10 curtailment decoys,
+# ~8 unknown-fault scenarios, no injections (those stay in the safety set).
+FINAL = {"n": 50, "seed": 9999, "full_scope": True, "prefix": "fin", "share_trap": 0.2, "share_decoy": 0.2,
+         "random_decoys": False, "n_unknown": 8}
 SETS = {"practice": (PRACTICE, SCENARIO_DIR), "practice2": (PRACTICE2, PRACTICE2_SCENARIO_DIR),
+        "final": (FINAL, FINAL_SCENARIO_DIR),
+        "practice_unknown": (PRACTICE_UNKNOWN, PRACTICE_UNKNOWN_SCENARIO_DIR),
         "test": (TEST, TEST_SCENARIO_DIR), "safety": (SAFETY, SAFETY_SCENARIO_DIR)}
 START_UTC = time(3, 0)  # 06:00 Riyadh
 DURATION_HOURS = 12.0
@@ -332,9 +349,36 @@ def load_scenarios(directory: Path = SCENARIO_DIR, prefix: str = "scn") -> list[
     return [Scenario.from_yaml(p) for p in sorted(directory.glob(f"{prefix}_*.yaml"))]
 
 
+def generate_unknown(n: int, seed: int, prefix: str, max_known: int = 2) -> list[Scenario]:
+    """n scenarios with exactly one unknown fault each (types cycled, so all appear) plus 0..max_known
+    known faults (no decoys; panel and sensor soiling never together, so no traps)."""
+    rng = np.random.default_rng(seed)
+    types = sorted(UNKNOWN_FAULTS)
+    wanted = [types[k % len(types)] for k in range(n)]
+    rng.shuffle(wanted)
+    real = sorted((CORE_FAULTS | FULL_SCOPE_FAULTS) - DECOY_FAULTS)
+    any_day, cool_day = candidate_days(), candidate_days(COOL_MONTHS)
+    scenarios = []
+    for i, unknown in enumerate(wanted, start=1):
+        known = _pick(rng, real, int(rng.integers(0, max_known + 1)))
+        if FaultType.SOILING in known and FaultType.SENSOR_SOILING in known:
+            known.remove(FaultType.SENSOR_SOILING)
+        days = cool_day if FaultType.SOILING in known else any_day
+        day = days[int(rng.integers(len(days)))]
+        faults = _Builder(rng).build(known, trap=False)
+        spec = unknown_fault(unknown, faults, rng)
+        scenario = Scenario(id=f"{prefix}_{i:04d}", seed=seed * 1000 + i,
+                            start=datetime.combine(day, START_UTC, tzinfo=timezone.utc),
+                            duration_hours=DURATION_HOURS, faults=sorted([*faults, spec], key=lambda f: f.start))
+        scenarios.append(scenario.model_copy(update={"answer_key": scenario.expected_answer_key()}))
+    return scenarios
+
+
 def generate_set(name: str) -> list[Scenario]:
     """One of the named, committed sets (SETS), exactly as frozen."""
     spec, _ = SETS[name]
+    if name == "practice_unknown":
+        return generate_unknown(**spec)
     return generate(**spec)
 
 

@@ -1,0 +1,18 @@
+# SYNTHETIC scenario from raqeeb.faults.generator. Fault times are UTC on the start date.
+# Faults and answer_key are for the injector and bench only; the agent gets Scenario.agent_view().
+id: abl_0006
+seed: 4242011
+start: '2025-10-08T03:00:00Z'
+duration_hours: 12.0
+faults:
+- type: TRACKER_STUCK
+  target: INV-16
+  start: '08:20'
+- type: COMMS_DROPOUT
+  target: INV-12
+  start: '08:45'
+  end: '11:00'
+answer_key:
+  root_causes:
+  - TRACKER_STUCK@INV-16
+  - COMMS_DROPOUT@INV-12

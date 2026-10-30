@@ -44,7 +44,7 @@ from raqeeb.contracts import (
 )
 from raqeeb.faults.injector import FaultInjector
 from raqeeb.telemetry.store import TelemetryStore
-from tests.leakcheck import assert_no_answer_leak
+from tests.leakcheck import assert_no_answer_leak, environment_rows
 from tests.tool_scenarios import make_scenario
 
 T0 = datetime(2025, 1, 15, 6, tzinfo=timezone.utc)
@@ -85,8 +85,7 @@ def assert_agent_saw_no_answer(spy: Spy, store: TelemetryStore, scenario: Scenar
         assert_no_answer_leak(view, scenario, strict=True)
     assert_no_answer_leak(spy.outcomes, scenario)
     for table in TABLE_MODELS:
-        # events.severity is the alarm's own severity (telemetry), not a fault severity
-        assert_no_answer_leak(store.read(table).rename(columns={"severity": "alarm_severity"}), scenario)
+        assert_no_answer_leak(environment_rows(store, table), scenario)
     assert_no_answer_leak(spy.agent.memory.results, scenario)
 
 

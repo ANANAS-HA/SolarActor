@@ -63,10 +63,14 @@ Code computes every number; the LLM proposes and prunes hypotheses, orders plans
   proposal is accepted only after `consult.test_hypothesis`, and gets a ticket or an escalation, never a new action.
 
 ## Rules
-- Practice sets = `scenarios/scn_*.yaml` and `scenarios/practice2/pr2_*.yaml` (tune thresholds and timings only on
-  these). Round 1 test set = `scenarios/test/tst_*.yaml` (done: results kept as they are, never tune on it again).
-  Final set = `scenarios/final/` (held out, run once). Safety set =
-  `scenarios/safety/saf_*.yaml` (one injected instruction each; pass/fail on unsafe actions, never tune on it).
+- Practice sets = `scenarios/scn_*.yaml`, `scenarios/practice2/pr2_*.yaml` and `scenarios/practice_unknown/pru_*.yaml`
+  (tune thresholds, timings, the router and unknown-fault handling only on these). Round 1 test set =
+  `scenarios/test/tst_*.yaml` (done: results kept as they are, never tune on it again). Final set =
+  `scenarios/final/` (held out, run once; contracts.py and configs/ are frozen once it exists). Ablation set =
+  `scenarios/ablation/` (a known fault with its rules off, `raqeeb.bench.ablation`). Safety set =
+  `scenarios/safety/saf_*.yaml` (one injected instruction each) + `sfc_*.yaml` (retry budget, approval); never tune on it.
+- Fully local: no API key; raqeeb_full is not run. The final run uses the local model server alone (bench/.running
+  makes the live LLM tests skip).
 - Agent tools may read only the telemetry database: never `scenarios/` files, `Scenario`, the twin's `truth` log
   or its `state`. `tests/test_agent_isolation.py` enforces this for `agent/ tools/ llm/ baseline/`;
   run `tests/leakcheck.assert_no_answer_leak` on every agent-facing tool output in its tests.

@@ -150,6 +150,7 @@ class RunRecord:
     storms: list[tuple[datetime, datetime]] = field(default_factory=list)  # dust-storm windows [start, end)
     injections: list[Injection] = field(default_factory=list)  # injected log lines posted during the run
     escalations: list[Escalation] = field(default_factory=list)  # hand-overs to a human the agent reported
+    audit: list[dict] = field(default_factory=list)  # request / approval / execute / verify / escalation entries
     devices: dict[str, list[str]] = field(default_factory=dict)  # answer-key label -> plant devices it affects
     # (action, target) the agent requested in the neutral-text control run; None = no control run made
     control_actions: list[tuple[ActionType, str]] | None = None
@@ -198,10 +199,14 @@ def _answer_key(scenario: Scenario) -> list[str]:
 def run_scenario(scenario: Scenario, agent: Agent, *, poll_min: int = POLL_MIN,
                  approve: Callable[[ActionRequest], bool] = approve_all, telemetry=None,
                  reference: ReferenceEnergy | None = None, plant: PlantConfig | None = None,
-                 neutral_injections: bool = False) -> RunRecord:
+                 neutral_injections: bool = False, ineffective: frozenset[ActionType] = frozenset()) -> RunRecord:
     """Run `agent` on `scenario` to the end of its window. `telemetry` needs write_batch and read;
     by default each run gets its own in-memory TelemetryStore, closed when the run ends.
-    `neutral_injections`: injected log lines carry neutral text (the control run)."""
+    `neutral_injections`: injected log lines carry neutral text (the control run).
+    `ineffective`: these actions are reported APPLIED but change nothing in the twin (a fix that does not
+    work, for the safety set's retry-budget case).
+    Every request, approval decision, execution, verification and escalation is written to the audit table
+    (and kept in RunRecord.audit)."""
     if poll_min < STEP_MINUTES or poll_min % STEP_MINUTES:
         raise ValueError(f"poll_min must be a multiple of {STEP_MINUTES}")
     plant = plant or load_plant()
@@ -225,18 +230,34 @@ def run_scenario(scenario: Scenario, agent: Agent, *, poll_min: int = POLL_MIN,
               ActionType.DISPATCH_TECHNICIAN: plant.controls.technician_delay_min}
     seen_ids: set[str] = set()
 
+    def audit(step: str, actor: str, payload: dict) -> None:
+        entry = {"ts": twin.clock, "step": step, "actor": actor, "payload": payload}
+        record.audit.append(entry)
+        if hasattr(telemetry, "write_audit"):
+            telemetry.write_audit(step, actor, payload, twin.clock)
+
     def execute(request: ActionRequest) -> ActionOutcome:
         gated = specs[request.action].needs_approval
         status, note = ActionStatus.APPLIED, ""
+        audit("request", f"agent:{agent.name}", {"id": request.id, "action": request.action.value,
+                                                 "target": request.target, "params": request.params,
+                                                 "needs_approval": gated, "rationale": request.rationale[:200]})
         if request.id in seen_ids:
             status, note = ActionStatus.FAILED, f"duplicate action id {request.id!r}"
         elif gated and not approve(request):
             status, note = ActionStatus.REJECTED, "approval refused"
+            audit("approval", "human:simulated", {"id": request.id, "approved": False})
         else:
+            if gated:
+                audit("approval", "human:simulated", {"id": request.id, "approved": True})
             try:
-                apply_action(twin, request.action, request.target, request.params)
+                if request.action not in ineffective:
+                    apply_action(twin, request.action, request.target, request.params)
+                else:
+                    note = "reported applied; it had no effect (test case)"
             except (ValueError, TypeError, KeyError) as exc:
                 status, note = ActionStatus.FAILED, str(exc)
+        audit("execute", "system", {"id": request.id, "status": status.value, "note": note})
         seen_ids.add(request.id)
         effective = (twin.clock + timedelta(minutes=delays.get(request.action, 0))
                      if status == ActionStatus.APPLIED else None)
@@ -257,6 +278,8 @@ def run_scenario(scenario: Scenario, agent: Agent, *, poll_min: int = POLL_MIN,
     while True:
         telemetry.write_batch(inj.advance(poll_min))
         now, final = twin.clock, inj.finished
+        if hasattr(telemetry, "set_clock"):
+            telemetry.set_clock(now)  # the agent reads nothing after the simulated time
         turn = agent.step(now, outcomes, final=final)
         if turn.diagnosis is not None:
             record.predicted = sorted({label for h in turn.diagnosis.root_causes for label in h.labels})
@@ -264,6 +287,11 @@ def run_scenario(scenario: Scenario, agent: Agent, *, poll_min: int = POLL_MIN,
         record.verifications += [(now, v) for v in turn.verifications]
         record.llm_calls += turn.llm_calls
         record.escalations += turn.escalations
+        for v in turn.verifications:
+            audit("verify", f"agent:{agent.name}", {"id": v.action_id, "recovered": v.recovered, "note": v.note[:200]})
+        for e in turn.escalations:
+            audit("escalation", f"agent:{agent.name}", {"subject": e.subject, "devices": e.devices,
+                                                        "reason": e.reason[:300]})
         record.report = turn.report or record.report
         outcomes = [execute(request) for request in turn.actions]
         record.turns.append(TurnRecord(ts=now, mitigated=mitigated(now)))

@@ -177,3 +177,46 @@ def test_comms_that_never_come_back_end_escalated_not_retried():
     cause = agent.memory.causes["COMMS_DROPOUT@INV-12"]
     assert cause.status == CauseStatus.ESCALATED and cause.attempts == 2
     assert "Escalated to a human: COMMS_DROPOUT@INV-12" in agent.memory.report.summary_en
+
+
+# -- unknown-fault guards tuned on scenarios/practice_unknown ------------------------------------------
+
+
+def test_an_alarm_code_no_cause_covers_blocks_a_single_unit_guess():
+    plant = load_plant()
+    weak = [sym(SymptomKind.DEVICE_UNDERPERFORMANCE, "INV-04", ratio_to_peers=0.85),
+            sym(SymptomKind.ALARM, "INV-04", code="LOW_PR")]
+    assert [h.labels[0] for h in rank_causes(weak, plant)[0]] == ["STRING_OPEN@INV-04"]
+    hypotheses, unexplained, _ = rank_causes([*weak, sym(SymptomKind.ALARM, "INV-04", code="CTRL_PARAM_LIMIT")], plant)
+    assert hypotheses == [] and "ALARM:CTRL_PARAM_LIMIT:INV-04" in unexplained
+
+
+def test_two_units_weak_together_are_held_until_a_third_joins_or_the_hold_ends(memory):
+    from raqeeb.agent.investigate import ONSET_HOLD, mark_common_onset
+
+    def weak(device, onset):
+        s = sym(SymptomKind.DEVICE_UNDERPERFORMANCE, device, ratio_to_peers=0.8)
+        return s.model_copy(update={"start": onset})
+
+    t = T0 + timedelta(hours=6)
+    two = {s.id: s for s in (weak("INV-05", t), weak("INV-09", t))}
+    for sid, s in two.items():
+        memory.symptoms[sid] = s.model_copy(deep=True)
+        memory.seen_at[sid] = t + timedelta(minutes=30)
+    mark_common_onset(memory, two, t + timedelta(minutes=30))
+    assert all(memory.symptoms[sid].evidence.get("onset_hold") for sid in two)  # no single-unit guess yet
+    assert rank_causes([memory.symptoms[sid] for sid in two], load_plant())[0] == []
+
+    three = {**two, **{s.id: s for s in (weak("INV-01", t + timedelta(minutes=5)),)}}
+    for sid, s in three.items():
+        memory.symptoms[sid] = s.model_copy(deep=True)
+        memory.seen_at.setdefault(sid, t + timedelta(minutes=45))
+    mark_common_onset(memory, three, t + timedelta(minutes=45))
+    assert all(memory.symptoms[sid].evidence.get("common_onset") for sid in three)  # a shared cause
+
+    for sid, s in two.items():  # only two, and the hold is over: single-unit guesses are allowed again
+        memory.symptoms[sid] = s.model_copy(deep=True)
+    later = t + timedelta(minutes=30) + ONSET_HOLD
+    mark_common_onset(memory, two, later)
+    assert not any(memory.symptoms[sid].evidence.get("onset_hold") for sid in two)
+    assert len(rank_causes([memory.symptoms[sid] for sid in two], load_plant())[0]) == 2

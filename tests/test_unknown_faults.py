@@ -34,7 +34,7 @@ from raqeeb.faults.injector import FaultInjector
 from raqeeb.faults.unknown import FIRMWARE_CODE, TRIP_CODE
 from raqeeb.telemetry.store import TelemetryStore
 from raqeeb.twin.controls import apply_action
-from tests.leakcheck import assert_no_answer_leak
+from tests.leakcheck import assert_no_answer_leak, environment_rows
 
 DAY = datetime(2025, 1, 15, 3, tzinfo=timezone.utc)  # clear, cool day, 06:00-18:00 Riyadh
 CASES = {
@@ -124,7 +124,7 @@ def test_rules_only_raqeeb_escalates_unknown_faults_without_guessing(name):
     assert row["n_unknown"] == 1 and row["unknown_named"] == 0 and row["unknown_escalated"] == 1
     assert "Escalated to a human: symptoms no known cause explains" in record.report.summary_en
     for table in TABLE_MODELS:
-        assert_no_answer_leak(store.read(table).rename(columns={"severity": "alarm_severity"}), s)
+        assert_no_answer_leak(environment_rows(store, table), s)
     assert_no_answer_leak(agent.memory.results, s)
     assert_no_answer_leak(record.escalations, s)
 

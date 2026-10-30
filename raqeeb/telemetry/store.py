@@ -37,10 +37,16 @@ class TelemetryStore:
         if path != MEMORY:
             Path(path).parent.mkdir(parents=True, exist_ok=True)
         self.path = path
+        self.clock: datetime | None = None  # simulated now: when set, every read returns only rows with ts <= clock
         self._conn = sqlite3.connect(str(path), check_same_thread=False)
         with self._conn:
             for ddl in TABLE_DDL.values():
                 self._conn.execute(ddl)
+
+    def set_clock(self, now: datetime | None) -> None:
+        """Clip every later read (read, the helpers built on it, span) to ts <= now; None lifts the clip.
+        The bench and the agent set it each poll, so nothing can read ahead of the simulated time."""
+        self.clock = now
 
     @classmethod
     def from_settings(cls) -> TelemetryStore:
@@ -107,6 +113,9 @@ class TelemetryStore:
         if end is not None:
             where.append("ts < ?")
             args.append(to_db_ts(end))
+        if self.clock is not None:
+            where.append("ts <= ?")
+            args.append(to_db_ts(self.clock))
         for column, value in filters.items():
             if column not in _FILTERABLE or column not in columns:
                 raise ValueError(f"cannot filter {table} on {column!r}")
@@ -166,5 +175,6 @@ class TelemetryStore:
         """First and last timestamp stored in `table`, or None if it is empty."""
         if table not in TABLE_MODELS:
             raise ValueError(f"unknown table {table!r}")
-        first, last = self._conn.execute(f"SELECT MIN(ts), MAX(ts) FROM {table}").fetchone()
+        clip, args = ("", []) if self.clock is None else (" WHERE ts <= ?", [to_db_ts(self.clock)])
+        first, last = self._conn.execute(f"SELECT MIN(ts), MAX(ts) FROM {table}{clip}", args).fetchone()
         return None if first is None else (from_db_ts(first), from_db_ts(last))

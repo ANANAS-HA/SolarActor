@@ -28,7 +28,7 @@ from raqeeb.agent.state import Memory, PollState
 from raqeeb.agent.triage import triage
 from raqeeb.agent.verify import verify
 from raqeeb.config import load_actions, load_alarm_codes, load_plant
-from raqeeb.contracts import ActionOutcome, AgentScenario, AgentTurn, PlantConfig, TelemetryReader
+from raqeeb.contracts import ActionOutcome, AgentScenario, AgentTurn, FaultType, PlantConfig, TelemetryReader
 
 
 def _after_verify(state: PollState) -> str:
@@ -68,10 +68,13 @@ NODES = ["triage", "investigate", "rank", "consult", "plan", "safety", "execute"
 
 
 class RaqeebAgent:
-    def __init__(self, plant: PlantConfig | None = None, router=None, name: str = "raqeeb"):
-        """`router`: a raqeeb.llm.router.Router for the model-assisted variants; None = rules only."""
+    def __init__(self, plant: PlantConfig | None = None, router=None, name: str = "raqeeb",
+                 disabled: frozenset[FaultType] = frozenset()):
+        """`router`: a raqeeb.llm.router.Router for the model-assisted variants; None = rules only.
+        `disabled`: fault types whose rules are switched off (the ablation set's stand-in for unknown faults)."""
         self.plant = plant or load_plant()
         self.router = router
+        self.disabled = frozenset(disabled)
         self.name = name
         self.memory: Memory | None = None
 
@@ -81,13 +84,15 @@ class RaqeebAgent:
             if not hasattr(telemetry, helper):
                 raise TypeError(f"Raqeeb needs a TelemetryStore (missing {helper}()); got {type(telemetry).__name__}")
         self.memory = Memory(view=view, telemetry=telemetry, plant=self.plant, action_specs=load_actions(),
-                             alarm_codes=load_alarm_codes(), router=self.router)
+                             alarm_codes=load_alarm_codes(), router=self.router, disabled=self.disabled)
         self.memory.log(view.start, "start", f"watching incident window {view.id} ({view.duration_hours:g} h)")
 
     def step(self, now: datetime, outcomes: list[ActionOutcome], final: bool = False) -> AgentTurn:
         if self.memory is None:
             raise RuntimeError("call start() first")
         memory = self.memory
+        if hasattr(memory.telemetry, "set_clock"):
+            memory.telemetry.set_clock(now)  # never read ahead of the simulated time, whatever the store holds
         report_before, escalated_before, calls_before = memory.report, len(memory.escalations), len(memory.llm_calls)
         state = GRAPH.invoke({"memory": memory, "now": now, "final": final, "outcomes": list(outcomes),
                               "actions": [], "verifications": [], "reopened": [], "replanned": False})

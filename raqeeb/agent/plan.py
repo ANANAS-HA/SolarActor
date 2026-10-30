@@ -106,7 +106,7 @@ def _active_limit(memory: Memory, cause: Cause) -> PendingAction | None:
 def fixes_for(memory: Memory, cause: Cause, now: datetime) -> tuple[list[ActionRequest], str]:
     """Requests for this cause now, or ([], reason it waits)."""
     fault, target = cause.hypothesis.fault_type, cause.hypothesis.targets[0]
-    ladder = LADDERS.get(fault, [])
+    ladder = [] if fault in memory.disabled else LADDERS.get(fault, [])
     if not ladder and cause.source == "llm" and target in memory.plant.inverters.ids:
         ladder = [[A.DISPATCH_TECHNICIAN]]  # a fault the planner does not know: a ticket is the only safe action
     if cause.attempts >= MAX_FAILED_FIXES:
@@ -141,7 +141,7 @@ def fixes_for(memory: Memory, cause: Cause, now: datetime) -> tuple[list[ActionR
 def follow_ups(memory: Memory, cause: Cause, now: datetime) -> list[ActionRequest]:
     """Derate only: protect the unit with a limit at its observed cap until the repair is verified,
     then lift the limit."""
-    if cause.hypothesis.fault_type != F.INVERTER_DERATE:
+    if cause.hypothesis.fault_type != F.INVERTER_DERATE or F.INVERTER_DERATE in memory.disabled:
         return []
     target = cause.hypothesis.targets[0]
     repaired = any(memory.pending[a].request.action == A.DISPATCH_TECHNICIAN

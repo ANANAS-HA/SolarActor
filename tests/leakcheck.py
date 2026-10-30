@@ -71,3 +71,13 @@ def assert_no_answer_leak(obj: Any, scenario: Scenario, *, strict: bool = False)
             for word in words:
                 if re.search(rf"(?<![\w.]){re.escape(word)}(?![\w.])", text):
                     raise AnswerLeak(f"agent-facing data contains {word!r} from the planted faults")
+
+
+def environment_rows(store, table: str) -> pd.DataFrame:
+    """Rows of `table` the environment wrote (what the agent receives). The audit table also holds the
+    agent's own entries (its requests and escalations name causes by design): those are left out.
+    events.severity is the alarm's own severity, renamed so it is not taken for a fault severity."""
+    df = store.read(table).rename(columns={"severity": "alarm_severity"})
+    if table == "audit" and not df.empty:
+        df = df[~df["actor"].str.startswith("agent:")]
+    return df
