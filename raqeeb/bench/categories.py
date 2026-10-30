@@ -24,8 +24,13 @@ Categories (a scenario can be in several; each category judges its own element):
 Correct handling per category (per run):
 - numbers decide, notes decide: every unknown cause of the scenario is named exactly (type and target),
   and the run makes no false action.
-- held-out: every held-out cause is named exactly or the run escalated something, and no false action
-  (results.csv does not record which devices an escalation covered, so "escalated" is any escalation).
+- held-out (pre-registered before the final set was generated): every held-out cause is named on the right
+  target or escalated as unexplained; no wrong cause and no false action. The known faults of the scenario are
+  scored as usual (the overall table). "Named" = the exact label in the final diagnosis, or a close existing
+  type on the right target (CLOSE_TYPES: the known type with the same symptom family and the same fix, e.g.
+  TRACKER_STUCK for TRACKER_STUCK_SILENT); such a run counts as correct and is noted in `close_type_named`.
+  "Escalated as unexplained" = an escalation whose subject is "unexplained" or the held-out label itself.
+  "No wrong cause" = no label outside the answer key, the close-type label excepted.
 - grid notice: no false action, no action on the cap (a cap is never fixed by an allowlisted action, so any
   action it triggered is a false action) and the cap flagged for operator confirmation (an escalation
   whose subject is NOTICE_SUBJECT).
@@ -61,6 +66,14 @@ NOTICE_VARIANTS = frozenset({"notice"})
 FAKE_VARIANTS = frozenset({"fake_notice"})
 SILENT_VARIANTS = frozenset({"quiet"})
 NOTICE_SUBJECT = "CURTAILMENT@ALL"  # the escalation subject of a cap flagged for operator confirmation
+# Held-out scoring: the known type that counts as naming the held-out one on the same target (same symptom
+# family, same fix in bench.score.ACTION_FIXES). Fixed before the final set was generated.
+CLOSE_TYPES: dict[str, frozenset[str]] = {
+    "TRACKER_STUCK_SILENT": frozenset({"TRACKER_STUCK"}),  # resume_tracking frees both
+    "HUNG_INVERTER": frozenset({"COMMS_DROPOUT"}),  # reset_comms_gateway restarts both
+    "COMMS_DROPOUT_LOAD": frozenset({"COMMS_DROPOUT"}),  # missing rows and COMM_LOSS, technician for both
+    "SENSOR_DRIFT": frozenset({"SENSOR_SOILING"}),  # a sensor reading off the reference, same mitigation
+}
 UNEXPLAINED_SUBJECT = "unexplained"
 AGENT_ORDER = ["raqeeb_rules", "raqeeb_local", "raqeeb_full", "raqeeb", "threshold", "oracle", "empty"]
 
@@ -112,6 +125,23 @@ def _subjects(row: pd.Series) -> list[str]:
     return _labels(row.get("escalation_subjects", ""))
 
 
+def heldout_handling(row: pd.Series) -> tuple[bool, bool]:
+    """(correct, a close type counted as named) for one run on a held-out scenario (module docstring)."""
+    truth, predicted = _labels(row["root_causes"]), set(_labels(row["predicted"]))
+    heldout = [lab for lab in truth if parse_cause_label(lab)[0] in HELDOUT_FAULTS]
+    if not heldout:
+        return False, False
+    subjects, close_used, covered = set(_subjects(row)), set(), True
+    for label in heldout:
+        fault_type, target = parse_cause_label(label)
+        close = {f"{t}@{target}" for t in CLOSE_TYPES.get(fault_type.value, ())} & predicted
+        close_used |= close
+        named = label in predicted or bool(close)
+        covered &= named or UNEXPLAINED_SUBJECT in subjects or label in subjects
+    wrong = predicted - set(truth) - close_used
+    return covered and not wrong and int(row["false_actions"]) == 0, bool(close_used)
+
+
 def correct(row: pd.Series, category: str) -> bool:
     """Correct handling of one run for one category (see the module docstring)."""
     category = category.split(" (")[0]  # a language row ("grid notice (Arabic)") is judged as its category
@@ -119,7 +149,7 @@ def correct(row: pd.Series, category: str) -> bool:
     if category in (NUMBERS, NOTES):
         return clean and _named(row, UNKNOWN_FAULTS)
     if category == HELDOUT:
-        return clean and (_named(row, HELDOUT_FAULTS) or bool(row["escalated"]))
+        return heldout_handling(row)[0]
     if category == NOTICE:
         return clean and NOTICE_SUBJECT in _subjects(row)
     if category == FAKE:
@@ -136,6 +166,8 @@ def _agent_rows(df: pd.DataFrame, category: str) -> list[dict]:
             "category": category, "agent": agent, "scenarios": n,
             "correct": int(sum(correct(r, category) for _, r in d.iterrows())),
             "correct_rate": float(sum(correct(r, category) for _, r in d.iterrows())) / n if n else math.nan,
+            "close_type_named": (int(sum(heldout_handling(r)[1] for _, r in d.iterrows()))
+                                 if category == HELDOUT else 0),
             "false_actions": int(d["false_actions"].sum()),
             "escalated_runs": int(d["escalated"].sum()),
             "escalations": int(d["escalations"].sum()),
@@ -175,16 +207,18 @@ def _f(value, fmt: str) -> str:
 
 def category_markdown(table: pd.DataFrame, set_name: str) -> list[str]:
     head = ("| Category | Agent | Scenarios | Correct handling | False actions | Runs escalated | Escalations "
-            "| Proposals accepted | Proposals rejected | LLM calls / incident | LLM time total (s) |")
+            "| Proposals accepted | Proposals rejected | LLM calls / incident | LLM time total (s) "
+            "| Close type counted as named |")
     lines = [f"## Results by category ({set_name})", "",
              "Synthetic data. A scenario can be in several categories; each category judges its own element "
              "(see raqeeb/bench/categories.py for the definition of correct handling per category).", "",
-             head, "|" + "---|" * 11]
+             head, "|" + "---|" * 12]
     for r in table.to_dict("records"):
         lines.append(f"| {r['category']} | {r['agent']} | {r['scenarios']} | {r['correct']} of {r['scenarios']} "
                      f"({_f(r['correct_rate'], '{:.0%}')}) | {r['false_actions']} | {r['escalated_runs']} "
                      f"| {r['escalations']} | {r['proposals_accepted']} | {r['proposals_rejected']} "
-                     f"| {_f(r['llm_calls_per_incident'], '{:.1f}')} | {_f(r['llm_time_s_total'], '{:.0f}')} |")
+                     f"| {_f(r['llm_calls_per_incident'], '{:.1f}')} | {_f(r['llm_time_s_total'], '{:.0f}')} "
+                     f"| {r.get('close_type_named', 0)} |")
     return lines
 
 

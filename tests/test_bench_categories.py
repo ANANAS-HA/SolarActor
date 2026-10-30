@@ -91,6 +91,40 @@ def test_correct_handling_per_category():
     assert not cat.correct(pd.Series(acted), cat.NOTICE)  # a cap must never trigger an action
 
 
+@pytest.mark.skipif(not HELDOUT, reason="no held-out faults in this build")
+def test_heldout_handling_is_the_pre_registered_definition():
+    """Named on the right target (exact or a close known type) or escalated as unexplained; no wrong cause,
+    no false action. The known faults are scored as usual elsewhere."""
+    truth = "TRACKER_STUCK_SILENT@INV-04;INVERTER_DERATE@INV-14"
+    exact = row("h1", root_causes=truth, predicted=truth)
+    assert cat.correct(pd.Series(exact), cat.HELDOUT) and cat.heldout_handling(pd.Series(exact)) == (True, False)
+    close = row("h1", root_causes=truth, predicted="TRACKER_STUCK@INV-04;INVERTER_DERATE@INV-14")
+    assert cat.heldout_handling(pd.Series(close)) == (True, True)  # close type on the right target, noted
+    wrong_target = row("h1", root_causes=truth, predicted="TRACKER_STUCK@INV-05;INVERTER_DERATE@INV-14")
+    assert cat.heldout_handling(pd.Series(wrong_target)) == (False, False)
+    escalated = row("h1", root_causes=truth, predicted="INVERTER_DERATE@INV-14",
+                    escalation_subjects="unexplained", escalated=True, escalations=1)
+    assert cat.correct(pd.Series(escalated), cat.HELDOUT)
+    by_label = row("h1", root_causes=truth, predicted="INVERTER_DERATE@INV-14",
+                   escalation_subjects="TRACKER_STUCK_SILENT@INV-04", escalated=True, escalations=1)
+    assert cat.correct(pd.Series(by_label), cat.HELDOUT)
+    silent = row("h1", root_causes=truth, predicted="INVERTER_DERATE@INV-14")
+    assert not cat.correct(pd.Series(silent), cat.HELDOUT)  # neither named nor escalated: a silent miss
+    extra = row("h1", root_causes=truth, predicted=truth + ";STRING_OPEN@INV-09")
+    assert not cat.correct(pd.Series(extra), cat.HELDOUT)  # a wrong cause
+    assert not cat.correct(pd.Series(exact | {"false_actions": 1}), cat.HELDOUT)
+    assert not cat.correct(pd.Series(row("k1", root_causes="STRING_OPEN@INV-02", predicted="STRING_OPEN@INV-02")),
+                           cat.HELDOUT)  # no held-out cause in the answer key
+    held = scenario("h1", {"type": "TRACKER_STUCK_SILENT", "target": "INV-04", "start": "05:00"},
+                    {"type": "INVERTER_DERATE", "target": "INV-14", "start": "05:00", "severity": 0.3})
+    table = cat.category_table(pd.DataFrame([close, row("h1", agent="raqeeb_local", root_causes=truth,
+                                                        predicted=truth)]), [held]).set_index(["category", "agent"])
+    assert table.loc[(cat.HELDOUT, "raqeeb_rules"), "close_type_named"] == 1
+    assert table.loc[(cat.HELDOUT, "raqeeb_local"), "close_type_named"] == 0
+    assert table.loc[(cat.HELDOUT, "raqeeb_rules"), "correct"] == 1
+    assert "Close type counted as named" in cat.category_markdown(table.reset_index(), "x")[4]
+
+
 def test_category_table_and_files(tmp_path):
     results = pd.DataFrame([
         row("k1", root_causes="STRING_OPEN@INV-02", predicted="STRING_OPEN@INV-02"),

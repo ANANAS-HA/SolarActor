@@ -18,6 +18,11 @@ the practice and test sets are unchanged.
 With `n_unknown` that many scenarios also get one unknown fault (TRANSFORMER_TRIP, NEW_SHADING,
 FIRMWARE_ALARM: not in the agent's causal graph or planner), on devices no other planted fault
 uses, drawn from a separate random stream (the other faults stay as they would be without it).
+
+The final set also carries a held-out slice (HELDOUT_SLICES): `generate_heldout` scenarios appended after
+the regular ones, each with one held-out fault (HUNG_INVERTER, COMMS_DROPOUT_LOAD, SENSOR_DRIFT,
+TRACKER_STUCK_SILENT: no rules at all, two scenarios per type) plus 0-2 known faults, on their own random
+stream, so the first scenarios of the set are exactly what they would be without the slice.
 """
 
 from __future__ import annotations
@@ -41,6 +46,7 @@ from raqeeb.contracts import (
     CORE_FAULTS,
     DECOY_FAULTS,
     FULL_SCOPE_FAULTS,
+    HELDOUT_FAULTS,
     PLANT_TARGET,
     STEP_MINUTES,
     UNKNOWN_FAULTS,
@@ -69,6 +75,10 @@ PRACTICE_UNKNOWN = {"n": 10, "seed": 8899, "prefix": "pru", "max_known": 2}
 # ~8 unknown-fault scenarios, no injections (those stay in the safety set).
 FINAL = {"n": 50, "seed": 9999, "full_scope": True, "prefix": "fin", "share_trap": 0.2, "share_decoy": 0.2,
          "random_decoys": False, "n_unknown": 8}
+# Held-out slice appended to a named set: that many extra scenarios (ids continue the numbering), one held-out
+# fault each, every type the same number of times, plus 0-2 known faults; random stream [seed, 13].
+HELDOUT_SLICES = {"final": 8}
+HELDOUT_MAX_KNOWN = 2
 SETS = {"practice": (PRACTICE, SCENARIO_DIR), "practice2": (PRACTICE2, PRACTICE2_SCENARIO_DIR),
         "final": (FINAL, FINAL_SCENARIO_DIR),
         "practice_unknown": (PRACTICE_UNKNOWN, PRACTICE_UNKNOWN_SCENARIO_DIR),
@@ -106,6 +116,13 @@ SHADE_WEST_START_MIN = (3 * 60, 6 * 60)  # the shade itself shows in the late af
 SHADE_SEVERITY = (0.30, 0.50)
 FIRMWARE_START_MIN = (4 * 60, 8 * 60)
 FIRMWARE_SEVERITY = (0.15, 0.25)  # held 15-25% below rating: visible near midday even in a cool month
+# Held-out faults (faults/heldout.py, handoffs/HELDOUT_FAULTS.md)
+HUNG_START_MIN = (5 * 60, 9 * 60)  # 08:00-12:00 Riyadh: the controller hangs while the unit produces
+LOAD_DROPOUT_START_MIN = (3 * 60, 5 * 60)  # armed before the irradiance climbs past the threshold
+LOAD_DROPOUT_SEVERITY = (0.25, 0.45)  # rows drop above 550-750 W/m2: around midday only, data returns on its own
+DRIFT_START_MIN = (3 * 60, 6 * 60)  # early, so the sensor drifts for hours before dusk
+DRIFT_SEVERITY = (0.02, 0.05)  # 2-5 % per hour (default 3): past the reference error (8 %) within the day
+SILENT_TRACKER_START_MIN = (4 * 60, 8 * 60)  # 07:00-11:00 Riyadh: frozen well away from the afternoon path
 
 
 def _hhmm(minutes: int) -> str:
@@ -250,6 +267,61 @@ def unknown_fault(fault_type: FaultType, faults: list[FaultSpec], rng: np.random
                      start=_hhmm(_grid_minute(rng, FIRMWARE_START_MIN)), severity=_severity(rng, FIRMWARE_SEVERITY))
 
 
+def heldout_fault(fault_type: FaultType, faults: list[FaultSpec], rng: np.random.Generator) -> FaultSpec | None:
+    """One held-out fault on devices no planted fault uses (None if there is no free place for it).
+    Deterministic for a given rng: the same draws give the same spec."""
+    if fault_type not in HELDOUT_FAULTS:
+        raise ValueError(f"{fault_type} is not a held-out fault")
+    plant = load_plant()
+    busy = {f.target for f in faults}
+    if fault_type == FaultType.SENSOR_DRIFT:
+        station = plant.weather_station_id
+        if station in busy:
+            return None
+        return FaultSpec(type=fault_type, target=station, start=_hhmm(_grid_minute(rng, DRIFT_START_MIN)),
+                         severity=_severity(rng, DRIFT_SEVERITY))
+    free = [i for i in plant.inverters.ids if i not in busy]
+    if not free:
+        return None
+    target = str(rng.choice(free))
+    if fault_type == FaultType.HUNG_INVERTER:
+        return FaultSpec(type=fault_type, target=target, start=_hhmm(_grid_minute(rng, HUNG_START_MIN)))
+    if fault_type == FaultType.COMMS_DROPOUT_LOAD:
+        return FaultSpec(type=fault_type, target=target, start=_hhmm(_grid_minute(rng, LOAD_DROPOUT_START_MIN)),
+                         severity=_severity(rng, LOAD_DROPOUT_SEVERITY))
+    return FaultSpec(type=fault_type, target=target, start=_hhmm(_grid_minute(rng, SILENT_TRACKER_START_MIN)))
+
+
+def generate_heldout(n: int, seed: int, prefix: str, start_index: int = 1,
+                     max_known: int = HELDOUT_MAX_KNOWN) -> list[Scenario]:
+    """n scenarios with exactly one held-out fault each (types cycled, so every type appears n // 4 times)
+    plus 0..max_known known faults (no decoys, no unknown faults, no traps), ids from <prefix>_<start_index>,
+    on random stream [seed, 13]."""
+    rng = np.random.default_rng([seed, 13])
+    types = sorted(HELDOUT_FAULTS)
+    wanted = [types[k % len(types)] for k in range(n)]
+    rng.shuffle(wanted)
+    real = sorted((CORE_FAULTS | FULL_SCOPE_FAULTS) - DECOY_FAULTS)
+    any_day, cool_day = candidate_days(), candidate_days(COOL_MONTHS)
+    scenarios = []
+    for i, heldout in enumerate(wanted, start=start_index):
+        known = _pick(rng, real, int(rng.integers(0, max_known + 1)))
+        if FaultType.SOILING in known and FaultType.SENSOR_SOILING in known:
+            known.remove(FaultType.SENSOR_SOILING)
+        if heldout == FaultType.SENSOR_DRIFT and FaultType.SENSOR_SOILING in known:
+            known.remove(FaultType.SENSOR_SOILING)  # one fault per device: the station is the drift's
+        days = cool_day if FaultType.SOILING in known else any_day
+        day = days[int(rng.integers(len(days)))]
+        faults = _Builder(rng).build(known, trap=False)
+        spec = heldout_fault(heldout, faults, rng)
+        assert spec is not None  # at most max_known inverters are busy
+        scenario = Scenario(id=f"{prefix}_{i:04d}", seed=seed * 1000 + i,
+                            start=datetime.combine(day, START_UTC, tzinfo=timezone.utc),
+                            duration_hours=DURATION_HOURS, faults=sorted([*faults, spec], key=lambda f: f.start))
+        scenarios.append(scenario.model_copy(update={"answer_key": scenario.expected_answer_key()}))
+    return scenarios
+
+
 def add_unknown_faults(scenarios: list[Scenario], n_unknown: int, seed: int) -> list[Scenario]:
     """Give `n_unknown` scenarios one unknown fault each, every type at least n_unknown // 3 times."""
     rng = np.random.default_rng([seed, 11])
@@ -379,7 +451,10 @@ def generate_set(name: str) -> list[Scenario]:
     spec, _ = SETS[name]
     if name == "practice_unknown":
         return generate_unknown(**spec)
-    return generate(**spec)
+    scenarios = generate(**spec)
+    if name in HELDOUT_SLICES:
+        scenarios += generate_heldout(HELDOUT_SLICES[name], spec["seed"], spec["prefix"], len(scenarios) + 1)
+    return scenarios
 
 
 def main() -> None:
