@@ -6,6 +6,9 @@ Three modes: "Live: rules only" (the real agent, no LLM), "Live: rules + local m
 .env names a reachable local model server) and "Replay" (a recorded run, ui/replays/*.json or an
 uploaded file). Live runs drive the twin and the agent step by step (ui/live.py); gated actions
 pause the run for an operator decision. The planted faults are shown only after the run has ended.
+The page opens with the plant map (ui/plantmap.py: telemetry and the agent's record only). Panels
+include technician and operator notes, and model proposals with the agent's tool test of each
+(ui/proposals.py): a rejected proposal changes nothing.
 Plant, telemetry and faults are synthetic; weather is NASA POWER. Times are shown in Asia/Riyadh.
 Alarm, note and log text is untrusted data: it is shown in tables or escaped, never as markdown or HTML.
 """
