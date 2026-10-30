@@ -11,6 +11,7 @@ device kept producing and only its data is lost.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import datetime
 from typing import Any
 
@@ -76,14 +77,29 @@ def _curtailed(store: TelemetryStore, index: pd.DatetimeIndex) -> pd.Series:
 
 
 def performance_series(store: TelemetryStore, start: datetime | None = None, end: datetime | None = None,
-                       plant: PlantConfig | None = None, basis: Basis = "reference") -> pd.DataFrame:
-    """Per meter step: meter kW, expected kW, ratio, and the usable / clipped / curtailed flags."""
+                       plant: PlantConfig | None = None, basis: Basis = "reference",
+                       exclude: Sequence[str] | None = None) -> pd.DataFrame:
+    """Per meter step: meter kW, expected kW, ratio, and the usable / clipped / curtailed flags.
+
+    With `exclude` (a list, possibly empty) the fleet is measured from the inverter readings instead
+    of the meter: per step, the inverters that reported and are not excluded, against their own
+    expected. A known device loss (stopped, derated, silent) then does not count as a plant-wide loss.
+    Daylight and clipping flags stay those of the whole plant.
+    """
     plant = get_plant(plant)
     meter = store.meter(start, end)["plant_ac_kw"]
     exp = expected_plant_ac(store, start, end, plant, basis).reindex(meter.index)
     daylight = exp > DAYLIGHT_FRACTION * plant.rated_ac_kw
     curtailed = _curtailed(store, meter.index)
     clipped = exp >= UNCLIPPED_FRACTION * plant.rated_ac_kw
+    if exclude is not None:
+        exp_inv = expected_inverter(store, "ac_kw", start, end, plant, basis).reindex(meter.index)
+        measured = store.inverter_wide("ac_kw", start, end).reindex(index=meter.index, columns=exp_inv.columns)
+        keep = [c for c in exp_inv.columns if c not in set(exclude)]
+        present = measured[keep].notna()
+        meter = measured[keep].where(present).sum(axis=1, min_count=1)
+        exp = exp_inv[keep].where(present).sum(axis=1)
+        daylight &= present.any(axis=1)
     usable = daylight & ~curtailed
     return pd.DataFrame(
         {
@@ -116,17 +132,18 @@ def _ratio_summary(perf: pd.DataFrame) -> dict[str, Any]:
 
 
 def plant_performance(store: TelemetryStore, start: datetime | None = None, end: datetime | None = None,
-                      plant: PlantConfig | None = None) -> ToolResult:
+                      plant: PlantConfig | None = None, exclude: Sequence[str] | None = None) -> ToolResult:
     """Meter vs expected from the trusted reference and from the on-site sensor.
 
     `vs_sensor` is the plant's usual health check (performance ratio on the sensor). When the
     sensor is dusty it can look normal, even above 1, while `vs_reference` shows the real loss.
+    With `exclude`, the fleet is the reporting inverters minus those (see performance_series).
     Verdicts: "underperforming" (devices = ALL), ok, inconclusive (no production steps).
     """
     plant = get_plant(plant)
     start, end = window(store, start, end)
-    ref = performance_series(store, start, end, plant, "reference")
-    sensor = performance_series(store, start, end, plant, "sensor")
+    ref = performance_series(store, start, end, plant, "reference", exclude)
+    sensor = performance_series(store, start, end, plant, "sensor", exclude)
     vs_ref, vs_sensor = _ratio_summary(ref), _ratio_summary(sensor)
     unclipped = ref["ratio"].where(~ref["clipped"])
     onset = loss_onset(unclipped, PLANT_LOW_RATIO)
@@ -158,6 +175,10 @@ def plant_performance(store: TelemetryStore, start: datetime | None = None, end:
             evidence += f", below {PLANT_LOW_RATIO:.0%} from {local_time(onset)}"
     if values["curtailed_steps"]:
         evidence += f"; {values['curtailed_steps']} curtailed steps excluded"
+    if exclude is not None:
+        values["excluded"] = sorted(exclude)
+        evidence += (f"; reporting inverters only, without {', '.join(sorted(exclude))} (known device loss)"
+                     if exclude else "; reporting inverters only")
     return ToolResult(tool="plant_performance", verdict="underperforming" if underperforming else VERDICT_OK,
                       devices=[PLANT_TARGET] if underperforming else [], start=start, end=end,
                       values=values, thresholds=thresholds, evidence=evidence)

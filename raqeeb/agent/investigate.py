@@ -9,13 +9,30 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import Any
 
-from raqeeb.agent.state import Memory, PollState
+from raqeeb.agent.state import PASSIVE, Memory, PollState
 from raqeeb.agent.triage import LOG_CODE, UNRECOGNISED
-from raqeeb.contracts import PLANT_TARGET, Symptom, SymptomKind, ToolResult
+from raqeeb.contracts import PLANT_TARGET, FaultType, InverterStatus, Symptom, SymptomKind, ToolResult
 from raqeeb.tools import AGENT_TOOLS
 
 PLANT_WIDE_SHARE = 0.75  # inverters_low on at least this share of the fleet is a plant-wide loss
 RECENT = timedelta(hours=2)  # plant_performance also runs on this recent window: a whole-day ratio reacts slowly
+LOSS_STATUS_WINDOW = timedelta(minutes=30)  # an inverter that reported a loss status this recently is a known loss
+LOSS_STATUSES = {InverterStatus.STOPPED.value, InverterStatus.DERATED.value, InverterStatus.FAULT.value}
+MAX_KNOWN_LOSS_SHARE = 0.25  # more known-loss inverters than this share of the fleet: plant-wide, exclude none
+PLANT_FAULTS = {FaultType.SOILING, FaultType.SENSOR_SOILING, FaultType.CURTAILMENT}
+
+
+def known_losses(memory: Memory, now: datetime) -> list[str]:
+    """Inverters whose loss is already accounted for: a confirmed device-level cause, or a stopped,
+    derated or faulted status in their recent readings. The plant-wide check leaves them out
+    (silent inverters drop out on their own: only reporting inverters are counted)."""
+    inverters = memory.plant.inverters.ids
+    out = {t for c in memory.causes.values() if c.status not in PASSIVE and c.hypothesis.fault_type not in PLANT_FAULTS
+           for t in c.hypothesis.targets if t in inverters}
+    readings = memory.telemetry.inverter_readings(max(memory.view.start, now - LOSS_STATUS_WINDOW), now)
+    if len(readings):
+        out |= set(readings.loc[readings["status"].isin(LOSS_STATUSES), "inverter_id"])
+    return sorted(out) if len(out) <= MAX_KNOWN_LOSS_SHARE * len(inverters) else []
 
 
 def symptom_id(kind: SymptomKind, device: str, code: str | None = None) -> str:
@@ -143,9 +160,14 @@ def symptoms_from(results: dict[str, ToolResult], alarm_groups: list[dict], memo
 
 def investigate(state: PollState) -> PollState:
     memory, now = state["memory"], state["now"]
-    results = {name: tool(memory.telemetry, memory.view.start, now) for name, tool in AGENT_TOOLS.items()}
+    results = {name: tool(memory.telemetry, memory.view.start, now) for name, tool in AGENT_TOOLS.items()
+               if name != "plant_performance"}
+    exclude = known_losses(memory, now)
+    memory.known_losses = exclude
+    plant_check = AGENT_TOOLS["plant_performance"]
+    results["plant_performance"] = plant_check(memory.telemetry, memory.view.start, now, exclude=exclude)
     recent_start = max(memory.view.start, now - RECENT)
-    results["plant_performance_recent"] = AGENT_TOOLS["plant_performance"](memory.telemetry, recent_start, now)
+    results["plant_performance_recent"] = plant_check(memory.telemetry, recent_start, now, exclude=exclude)
     memory.results = results
     current = {s.id: s for s in symptoms_from(results, memory.alarm_groups, memory, now)}
     new = [sid for sid in current if sid not in memory.symptoms]

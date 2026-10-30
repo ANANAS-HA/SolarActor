@@ -49,11 +49,13 @@ STATUS_EN = {
     CauseStatus.OPEN: "diagnosed", CauseStatus.WAITING: "fix waiting", CauseStatus.ACTING: "fix in progress",
     CauseStatus.RESOLVED: "resolved", CauseStatus.REOPENED: "fix did not work", CauseStatus.BLOCKED: "left to operators",
     CauseStatus.EXPECTED: "expected", CauseStatus.FLAGGED: "flagged for security review",
+    CauseStatus.ESCALATED: "escalated to a human",
 }
 STATUS_AR = {
     CauseStatus.OPEN: "تم التشخيص", CauseStatus.WAITING: "الإصلاح بالانتظار", CauseStatus.ACTING: "الإصلاح جارٍ",
     CauseStatus.RESOLVED: "تمت المعالجة", CauseStatus.REOPENED: "الإصلاح لم ينجح", CauseStatus.BLOCKED: "محال إلى المشغلين",
     CauseStatus.EXPECTED: "متوقع", CauseStatus.FLAGGED: "محال للمراجعة الأمنية",
+    CauseStatus.ESCALATED: "مُصعّد إلى مختص",
 }
 
 
@@ -83,6 +85,13 @@ def build_report(memory: Memory, now) -> IncidentReport:
     if expected:
         en.append("Expected behaviour, no action: " + "; ".join(FAULT_EN[c.hypothesis.fault_type] for c in expected) + ".")
         ar.append("سلوك متوقع دون إجراء: " + "؛ ".join(FAULT_AR[c.hypothesis.fault_type] for c in expected) + ".")
+    for old, new in memory.revised:
+        en.append(f"Diagnosis revised: {old} replaced by {new} as new evidence came in.")
+        ar.append(f"تم تعديل التشخيص: استُبدل {old} بـ {new} بعد ظهور أدلة جديدة.")
+    for c in causes:
+        if c.status == CauseStatus.ESCALATED:
+            en.append(f"Escalated to a human: {c.label}, {c.note}.")
+            ar.append(f"مُصعّد إلى مختص: {c.label}.")
     for device in flagged:
         en.append(f"Unrecognized log entry from {device}, not acted on, flagged for security review.")
         ar.append(f"سطر سجل غير معروف من {device}، لم يُتخذ بشأنه أي إجراء، وأُحيل للمراجعة الأمنية.")
@@ -112,7 +121,8 @@ def build_report(memory: Memory, now) -> IncidentReport:
 
 def is_done(memory: Memory) -> bool:
     """Every root cause is resolved or handed to operators, and no request is still in flight."""
-    settled = all(c.status in PASSIVE | {CauseStatus.RESOLVED, CauseStatus.BLOCKED} for c in memory.causes.values())
+    settled = all(c.status in PASSIVE | {CauseStatus.RESOLVED, CauseStatus.BLOCKED, CauseStatus.ESCALATED}
+                  for c in memory.causes.values())
     in_flight = any(p.status is None or (p.status == ActionStatus.APPLIED and p.verification is None)
                     for p in memory.pending.values())
     return bool(memory.causes) and settled and not in_flight

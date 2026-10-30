@@ -6,6 +6,9 @@ Fix ladders (HANDOFF sections 8 and 9): a cause starts on its first rung; a fail
 out at once, a power limit at the observed cap (needs approval) follows as soon as the cap level
 is known, and once the repair is verified the limit is lifted again. Curtailment is expected
 behaviour and gets nothing.
+
+Repair is bounded: after MAX_FAILED_FIXES fixes of one cause failed verification (or when its ladder
+is used up), the cause is escalated to a human with the reason, and nothing is retried.
 """
 
 from __future__ import annotations
@@ -27,6 +30,7 @@ LADDERS: dict[FaultType, list[list[ActionType]]] = {
     F.STRING_OPEN: [[A.DISPATCH_TECHNICIAN]],
     F.UNAUTHORIZED_CMD: [[A.ISOLATE_DEVICE]],
 }
+MAX_FAILED_FIXES = 2  # failed verifications per cause before it goes to a human
 CALM_AFTER_STORM = timedelta(minutes=15)  # wind below the stow limit this long before cleaning
 # Dispatch the first wash during the storm once it has blown this long (crew needs cleaning_delay_min to
 # arrive, so it can land as the storm ends). None: always wait for calm. Tuned on the practice set only.
@@ -71,7 +75,8 @@ def mwh_at_risk(memory: Memory, cause: Cause, now: datetime) -> float:
     fault, target = cause.hypothesis.fault_type, cause.hypothesis.targets[0]
     short_kw = 0.0
     if fault == F.SOILING:
-        perf = performance_series(memory.telemetry, max(memory.view.start, now - RECENT), now, memory.plant)
+        perf = performance_series(memory.telemetry, max(memory.view.start, now - RECENT), now, memory.plant,
+                                  exclude=memory.known_losses)
         usable = perf[perf["usable"]]
         if len(usable):
             short_kw = float((usable["expected_kw"] - usable["meter_kw"]).clip(lower=0).mean())
@@ -102,8 +107,11 @@ def fixes_for(memory: Memory, cause: Cause, now: datetime) -> tuple[list[ActionR
     """Requests for this cause now, or ([], reason it waits)."""
     fault, target = cause.hypothesis.fault_type, cause.hypothesis.targets[0]
     ladder = LADDERS.get(fault, [])
+    if cause.attempts >= MAX_FAILED_FIXES:
+        return [], f"escalated: {cause.attempts} fixes failed verification (last: {cause.note or 'no detail'})"
     if cause.attempts >= len(ladder):
-        return [], "no further automatic fix; left to the operators"
+        return [], ("escalated: no automatic fix for this fault" if not ladder else
+                    f"escalated: every automatic fix tried (last: {cause.note or 'no detail'})")
     rung = ladder[cause.attempts]
     out: list[ActionRequest] = []
     for action in rung:
@@ -159,8 +167,11 @@ def plan(state: PollState) -> PollState:
         requests: list[ActionRequest] = []
         if cause.status in (CauseStatus.OPEN, CauseStatus.WAITING, CauseStatus.REOPENED):
             requests, reason = fixes_for(memory, cause, now)
-            if not requests and reason and cause.status != CauseStatus.WAITING:
-                cause.status = CauseStatus.WAITING if "no further" not in reason else CauseStatus.BLOCKED
+            if not requests and reason.startswith("escalated"):
+                cause.status, cause.note = CauseStatus.ESCALATED, reason
+                memory.log(now, "plan", f"{cause.label}: {reason}; handed to a human, no more retries")
+            elif not requests and reason and cause.status != CauseStatus.WAITING:
+                cause.status = CauseStatus.WAITING
                 memory.log(now, "plan", f"{cause.label}: {reason}")
         elif cause.status in (CauseStatus.ACTING, CauseStatus.RESOLVED):
             requests = follow_ups(memory, cause, now)

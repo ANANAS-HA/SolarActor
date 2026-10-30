@@ -5,7 +5,7 @@
   Gated actions still go out: the environment asks a human (Approve / Reject).
 - Targets must be real devices of the right kind; a power limit must be within the rating.
 - No action on an expected-behaviour cause (curtailment), no duplicate of a request in flight.
-- Irreversible actions also need a confident diagnosis that has held for two polls.
+- Irreversible actions also need strong support for their own cause (not the whole diagnosis), held for two polls.
 """
 
 from __future__ import annotations
@@ -58,9 +58,8 @@ def check(memory: Memory, request: ActionRequest, label: str, now) -> tuple[Acti
         if same and in_flight:
             return None, "the same request is already in flight"
     if not spec.reversible:
-        diagnosis = memory.diagnosis
-        if diagnosis is None or diagnosis.confidence < IRREVERSIBLE_MIN_CONFIDENCE:
-            return None, "irreversible: diagnosis confidence too low"
+        if cause.confidence < IRREVERSIBLE_MIN_CONFIDENCE:  # this cause's own support, not the whole diagnosis
+            return None, f"irreversible: support for {label} too low ({cause.confidence:.2f})"
         if now - cause.first_seen < IRREVERSIBLE_MIN_AGE:
             return None, "irreversible: diagnosis too recent"
     return request.model_copy(update={"action": action, "reversible": spec.reversible,

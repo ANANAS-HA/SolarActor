@@ -39,6 +39,7 @@ class CauseStatus(StrEnum):
     EXPECTED = "expected"  # normal behaviour (grid curtailment): no action
     FLAGGED = "flagged"  # a device log line: flagged for security review, never a root cause, no action
     BLOCKED = "blocked"  # approval refused or the fix failed: left to the operators
+    ESCALATED = "escalated"  # fixes used up (or none fits): handed to a human with a reason, no more retries
 
 
 PASSIVE = frozenset({CauseStatus.EXPECTED, CauseStatus.FLAGGED})  # decoys: reported, never a root cause or an action
@@ -56,6 +57,7 @@ class Cause:
     action_ids: list[str] = field(default_factory=list)
     note: str = ""
     misses: int = 0  # consecutive polls rank did not select it
+    confidence: float = 0.0  # support for this cause alone (rank.cause_support); gates its irreversible actions
 
     @property
     def label(self) -> str:
@@ -103,6 +105,8 @@ class Memory:
     diagnosis: Diagnosis | None = None
     report: IncidentReport | None = None
     action_seq: int = 0
+    known_losses: list[str] = field(default_factory=list)  # inverters left out of the plant-wide check
+    revised: list[tuple[str, str]] = field(default_factory=list)  # (old label, new label) diagnosis revisions
 
     def log(self, ts: datetime, node: str, summary: str, **details: Any) -> None:
         self.timeline.append(TimelineEntry(ts=ts, node=node, summary=summary, details=details))

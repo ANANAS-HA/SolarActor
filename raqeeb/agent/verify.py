@@ -15,7 +15,7 @@ import pandas as pd
 from raqeeb.agent.execute import output_kw
 from raqeeb.agent.plan import storm_over
 from raqeeb.agent.state import CauseStatus, Memory, PendingAction, PollState
-from raqeeb.contracts import PLANT_TARGET, ActionStatus, ActionType, Verification
+from raqeeb.contracts import PLANT_TARGET, ActionStatus, ActionType, FaultType, Verification
 from raqeeb.tools.metrics import performance_series
 from raqeeb.tools.peers import HOT_EXCESS_C
 from raqeeb.tools.physics import TRACKER_DEVIATION_DEG, expected_inverter, expected_tracker_angle
@@ -24,6 +24,8 @@ RECOVERED_RATIO = 0.93  # actual / expected-from-reference at or above this = re
 BACK_TO_PEERS = 0.95  # a repaired inverter is within 5% of its peers
 LIMIT_TOLERANCE = 1.02  # output at or below limit x this = the limit holds
 AFTER_WINDOW = timedelta(minutes=30)
+NO_DATA_GRACE = timedelta(minutes=60)  # a device fix still without data this long after its give-up time has failed
+NO_DATA_FAILS = {ActionType.DISPATCH_TECHNICIAN, ActionType.RESUME_TRACKING}
 MIN_STEPS = 2
 
 Judgement = tuple[bool | None, float | None, float | None, str]  # recovered, after_kw, expected_kw, note
@@ -35,7 +37,7 @@ def _window(pending: PendingAction, now: datetime) -> tuple[datetime, datetime]:
 
 
 def _plant_vs_reference(memory: Memory, start: datetime, end: datetime) -> Judgement:
-    perf = performance_series(memory.telemetry, start, end, memory.plant)
+    perf = performance_series(memory.telemetry, start, end, memory.plant, exclude=memory.known_losses)
     usable = perf[perf["usable"]]
     if len(usable) < MIN_STEPS:
         return None, None, None, "no daylight steps yet to compare with the reference"
@@ -119,24 +121,38 @@ def judge(memory: Memory, pending: PendingAction, now: datetime) -> Judgement:
         frame = _device_frame(memory, target, start, end)
         if len(frame) < MIN_STEPS:
             return None, None, None, f"{target} has no readings after the visit yet"
+        # The check that fits the cause the technician was sent for
+        cause = memory.causes.get(pending.cause)
+        fault = cause.hypothesis.fault_type if cause is not None else None
+        if fault == FaultType.TRACKER_STUCK:
+            return _tracker_back(memory, target, start, end)
+        if fault in (FaultType.STRING_OPEN, FaultType.UNAUTHORIZED_CMD):
+            ratio = _peer_ratio(memory, target, start, end)
+            if ratio is None:
+                return None, None, None, "no daylight peers to compare yet"
+            return ratio >= BACK_TO_PEERS, float(frame["ac_kw"].mean()), None, f"{target} at {ratio:.0%} of its peers"
         excess = _temp_excess(memory, target, start, end)
         cool = excess is not None and excess < HOT_EXCESS_C
         return cool, float(frame["ac_kw"].mean()), None, (
             f"{target} reporting, {excess:.0f} C above peers" if excess is not None else f"{target} reporting")
 
     if action == ActionType.RESUME_TRACKING:
-        measured = _device_frame(memory, target, start, end)["tracker_angle_deg"].dropna()
-        if len(measured) < MIN_STEPS:
-            return None, None, None, "no tracker angles yet"
-        expected = expected_tracker_angle(memory.telemetry, start, end, memory.plant).reindex(measured.index)
-        deviation = float((measured - expected).abs().median())
-        return deviation < TRACKER_DEVIATION_DEG, None, None, f"{target} {deviation:.0f} deg from its tracking angle"
+        return _tracker_back(memory, target, start, end)
 
     if action == ActionType.ISOLATE_DEVICE:
         after = output_kw(memory, target, start, end)
         return after is None or after < 1.0, after, 0.0, f"{target} isolated"
 
     return None, None, None, f"no check for {action.value}"
+
+
+def _tracker_back(memory: Memory, target: str, start: datetime, end: datetime) -> Judgement:
+    measured = _device_frame(memory, target, start, end)["tracker_angle_deg"].dropna()
+    if len(measured) < MIN_STEPS:
+        return None, None, None, "no tracker angles yet"
+    expected = expected_tracker_angle(memory.telemetry, start, end, memory.plant).reindex(measured.index)
+    deviation = float((measured - expected).abs().median())
+    return deviation < TRACKER_DEVIATION_DEG, None, None, f"{target} {deviation:.0f} deg from its tracking angle"
 
 
 def verify(state: PollState) -> PollState:
@@ -149,6 +165,9 @@ def verify(state: PollState) -> PollState:
         if pending.verify_after is None or now < pending.verify_after:
             continue
         recovered, after, expected, note = judge(memory, pending, now)
+        if (recovered is None and pending.request.action in NO_DATA_FAILS
+                and now >= pending.give_up_at + NO_DATA_GRACE):
+            recovered, note = False, f"no data to confirm the fix ({note})"
         if recovered is None or (recovered is False and now < pending.give_up_at):
             continue  # no data yet, or give the fix more time
         verification = Verification(action_id=action_id, recovered=recovered, before_kw=pending.before_kw or 0.0,
