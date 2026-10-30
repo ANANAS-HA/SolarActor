@@ -29,7 +29,11 @@ def _check_device(twin: Twin, device_id: str) -> None:
 
 
 def reset_comms(twin: Twin, device_id: str, source: str = SOURCE) -> Command:
-    """Restart a device's comms gateway; data returns after comms_reset_delay_min."""
+    """Restart a device's comms gateway; data returns after comms_reset_delay_min.
+
+    The restart also reboots a hung inverter controller (a controlled restart), so it produces again.
+    It does not fix a link that fails under load (comms_load_limit_wm2 stays: a technician's job).
+    """
     _check_device(twin, device_id)
 
     def restore(state: PlantState) -> None:
@@ -37,6 +41,7 @@ def reset_comms(twin: Twin, device_id: str, source: str = SOURCE) -> Command:
             state.station.comms_up = True
         else:
             state.inverters[device_id].comms_up = True
+            state.inverters[device_id].hung = False
 
     twin.schedule_in(twin.plant.controls.comms_reset_delay_min, f"comms restored {device_id}", restore)
     return twin.log_command(source, device_id, ActionType.RESET_COMMS_GATEWAY.value)
@@ -78,8 +83,8 @@ def resume_tracking(twin: Twin, target: str, source: str = SOURCE) -> Command:
 
 
 def dispatch_technician(twin: Twin, device_id: str, source: str = SOURCE) -> Command:
-    """Technician repairs device hardware (strings, cooling, comms, controller parameters) after
-    technician_delay_min.
+    """Technician repairs device hardware (strings, cooling, comms, controller parameters, a hung
+    controller, sensor calibration) after technician_delay_min.
 
     Does not clean panels, clear an operator limit, undo isolation, re-energise a tripped
     transformer (a high-voltage crew's job) or remove shading.
@@ -90,6 +95,8 @@ def dispatch_technician(twin: Twin, device_id: str, source: str = SOURCE) -> Com
         if device_id == twin.plant.weather_station_id:
             state.station.comms_up = True
             state.station.sensor_soiling = 0.0
+            state.station.sensor_bias = 0.0  # recalibrated
+            state.station.sensor_drift_per_h = 0.0
             return
         inv = state.inverters[device_id]
         inv.string_loss = 0.0
@@ -98,6 +105,8 @@ def dispatch_technician(twin: Twin, device_id: str, source: str = SOURCE) -> Com
         inv.comms_up = True
         inv.tracker_override_deg = None
         inv.firmware_cap_kw = None  # parameters reloaded / firmware rolled back on site
+        inv.hung = False  # power-cycled
+        inv.comms_load_limit_wm2 = None  # comms module replaced
 
     delay = twin.plant.controls.technician_delay_min
     twin.schedule_in(delay, f"technician repaired {device_id}", repair)

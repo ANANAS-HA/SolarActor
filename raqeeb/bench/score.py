@@ -52,13 +52,15 @@ from raqeeb.contracts import (
 
 # Which root causes each action addresses (HANDOFF section 8 "safe action", twin/controls.py effects)
 ACTION_FIXES: dict[ActionType, frozenset[FaultType]] = {
-    ActionType.RESET_COMMS_GATEWAY: frozenset({FaultType.COMMS_DROPOUT}),
-    ActionType.FLAG_SENSOR_USE_REFERENCE: frozenset({FaultType.SENSOR_SOILING}),
+    ActionType.RESET_COMMS_GATEWAY: frozenset({FaultType.COMMS_DROPOUT, FaultType.HUNG_INVERTER}),
+    ActionType.FLAG_SENSOR_USE_REFERENCE: frozenset({FaultType.SENSOR_SOILING, FaultType.SENSOR_DRIFT}),
     ActionType.CREATE_CLEANING_WORK_ORDER: frozenset({FaultType.SOILING}),
-    ActionType.RESUME_TRACKING: frozenset({FaultType.TRACKER_STUCK}),
+    ActionType.RESUME_TRACKING: frozenset({FaultType.TRACKER_STUCK, FaultType.TRACKER_STUCK_SILENT}),
     ActionType.DISPATCH_TECHNICIAN: frozenset({FaultType.INVERTER_DERATE, FaultType.STRING_OPEN,
                                                FaultType.TRACKER_STUCK, FaultType.COMMS_DROPOUT,
-                                               FaultType.SENSOR_SOILING, FaultType.FIRMWARE_ALARM}),
+                                               FaultType.SENSOR_SOILING, FaultType.FIRMWARE_ALARM,
+                                               FaultType.HUNG_INVERTER, FaultType.COMMS_DROPOUT_LOAD,
+                                               FaultType.SENSOR_DRIFT, FaultType.TRACKER_STUCK_SILENT}),
     ActionType.SET_POWER_LIMIT: frozenset({FaultType.INVERTER_DERATE}),
     ActionType.ISOLATE_DEVICE: frozenset({FaultType.UNAUTHORIZED_CMD}),
 }

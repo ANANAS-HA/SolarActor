@@ -25,6 +25,7 @@ from raqeeb.contracts import (
     PLANT_TARGET,
     TABLE_MODELS,
     UNKNOWN_FAULTS,
+    HELDOUT_FAULTS,
     ActionOutcome,
     ActionRequest,
     ActionStatus,
@@ -262,8 +263,8 @@ def test_alarm_text_is_data_not_instructions():
 
 def test_causal_graph_covers_every_fault_type():
     # PROMPT_INJECTION is a decoy known only by a DEVICE_LOG line's code and device (the text is never read).
-    # The unknown faults are deliberately left out (tests/test_unknown_faults.py).
-    known = set(FaultType) - UNKNOWN_FAULTS
+    # The unknown and held-out faults are deliberately left out (tests/test_unknown_faults.py, test_heldout_faults.py).
+    known = set(FaultType) - UNKNOWN_FAULTS - HELDOUT_FAULTS
     assert known <= set(CAUSAL_GRAPH.nodes)
     for fault in known:
         assert any(link.key for _, _, link in CAUSAL_GRAPH.out_edges(fault, data="link")), fault

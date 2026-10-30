@@ -102,6 +102,13 @@ MITIGATED: dict[FaultType, Callable[[PlantState, str], bool]] = {
     FaultType.FIRMWARE_ALARM: lambda s, t: s.inverters[t].firmware_cap_kw is None,
     FaultType.TRANSFORMER_TRIP: lambda s, t: not any(inv.grid_lost for inv in s.inverters.values()),
     FaultType.NEW_SHADING: lambda s, t: False,
+    # Held-out faults: mitigated once the twin no longer has the fault (restart, repair or recalibration);
+    # a flagged drifting sensor counts too, as for a dusty one
+    FaultType.HUNG_INVERTER: lambda s, t: not s.inverters[t].hung,
+    FaultType.COMMS_DROPOUT_LOAD: lambda s, t: s.inverters[t].comms_load_limit_wm2 is None,
+    FaultType.SENSOR_DRIFT: lambda s, t: s.station.flagged or (s.station.sensor_drift_per_h == 0.0
+                                                                and s.station.sensor_bias == 0.0),
+    FaultType.TRACKER_STUCK_SILENT: lambda s, t: s.inverters[t].tracker_override_deg is None,
 }
 
 
