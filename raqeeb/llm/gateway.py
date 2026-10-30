@@ -72,6 +72,16 @@ class Gateway:
             return f"openai/{self.settings.local_llm_model}"
         return self.settings.api_llm_model
 
+    def model_label(self, role: LlmRole) -> str:
+        """The model as reports name it: "test model" when a scripted completion stands in for LiteLLM,
+        else the local model's file name (", local") or the API model string."""
+        if self._completion is not litellm.completion:
+            return "test model"
+        if LlmRole(role) == LlmRole.LOCAL:
+            name = self.settings.local_llm_model.replace("\\", "/").rsplit("/", 1)[-1]
+            return f"{name.removesuffix('.gguf') or 'local model'}, local"
+        return self.settings.api_llm_model
+
     def _endpoint(self, role: LlmRole) -> dict[str, Any]:
         if role == LlmRole.LOCAL:
             return {"api_base": self.settings.local_llm_base_url, "api_key": self.settings.local_llm_api_key,

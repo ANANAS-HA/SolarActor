@@ -333,7 +333,7 @@ def test_shift_report_in_english_and_arabic():
     report, calls = make_router(fake).write_shift_report(DRAFT, notes=["10:15 cleaning ordered"])
     assert report.summary_en.startswith("Between 07:00") and "synthetic" in report.summary_en
     assert report.summary_ar.startswith("بين") and "اصطناعية" in report.summary_ar
-    assert "(local)" in report.summary_en
+    assert "(test model)" in report.summary_en and "(test model)" in report.summary_ar  # a scripted model wrote it
     assert report.llm_calls == 2 and report.cost_usd == pytest.approx(0.01)
     assert report.causes == DRAFT.causes and len(calls) == 1
     assert "10:15 cleaning ordered" in fake.requests[0]["messages"][1]["content"]
@@ -386,3 +386,15 @@ def test_live_local_model_proposes_and_reports(run):
     report, calls = router.write_shift_report(draft)
     assert any(c.ok for c in calls), "the local model gave no valid report in two tries"
     assert re.search(r"[؀-ۿ]", report.summary_ar) and "synthetic" in report.summary_en
+
+
+def test_the_footer_names_the_model_that_actually_wrote_the_report():
+    from raqeeb.llm.gateway import Gateway
+
+    settings = Settings(local_llm_base_url="http://x", local_llm_model="/models/gguf/Qwen3.8-27B-ATX-4-XS.gguf",
+                        api_llm_model="anthropic/some-model", anthropic_api_key="k")
+    real = Gateway(settings)  # litellm itself, never called here
+    assert real.model_label(LlmRole.LOCAL) == "Qwen3.8-27B-ATX-4-XS, local"
+    assert real.model_label(LlmRole.API) == "anthropic/some-model"
+    scripted = Gateway(settings, completion=lambda **kw: None)
+    assert scripted.model_label(LlmRole.LOCAL) == scripted.model_label(LlmRole.API) == "test model"

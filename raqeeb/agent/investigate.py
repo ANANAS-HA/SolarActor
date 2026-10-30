@@ -9,6 +9,8 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import Any
 
+import pandas as pd
+
 from raqeeb.agent.state import PASSIVE, Memory, PollState
 from raqeeb.agent.triage import LOG_CODE, UNRECOGNISED
 from raqeeb.contracts import PLANT_TARGET, FaultType, InverterStatus, Symptom, SymptomKind, ToolResult
@@ -19,7 +21,10 @@ RECENT = timedelta(hours=2)  # plant_performance also runs on this recent window
 LOSS_STATUS_WINDOW = timedelta(minutes=30)  # an inverter that reported a loss status this recently is a known loss
 LOSS_STATUSES = {InverterStatus.STOPPED.value, InverterStatus.DERATED.value, InverterStatus.FAULT.value}
 MAX_KNOWN_LOSS_SHARE = 0.25  # more known-loss inverters than this share of the fleet: plant-wide, exclude none
+DAYLIGHT_KW = 50.0  # peers must be producing at least this for "zero output" to mean anything
 PLANT_FAULTS = {FaultType.SOILING, FaultType.SENSOR_SOILING, FaultType.CURTAILMENT}
+ZERO_LOOKBACK = timedelta(hours=2)  # zero output is judged at the latest step in this window where peers produce:
+ZERO_SHARE = 0.02  # the unit below this share of the peer median there is at zero output
 COMMON_ONSET = timedelta(minutes=20)  # units below their peers from within this of each other share an onset
 COMMON_ONSET_MIN = 3  # ... when at least this many do (independent device faults rarely start together)
 ONSET_HOLD = timedelta(minutes=30)  # two units weak together: wait this long after the later onset for a third
@@ -105,6 +110,30 @@ def symptoms_from(results: dict[str, ToolResult], alarm_groups: list[dict], memo
             out.append(_make(SymptomKind.DEVICE_UNDERPERFORMANCE, device, _ts(info.get("onset"), now), {
                 "tool": r.tool, "ratio_to_peers": info.get("ratio_since_onset"),
                 "summary": f"{device} at {info.get('ratio_since_onset') or 0:.0%} of the peer median"}))
+
+    # A weak unit at zero output (whichever tool flagged it): no open string explains that. Judged at the
+    # latest step where its peers produce (so dusk does not hide it); with no such step in the lookback,
+    # the verdict of the previous poll stands. The ratio there is kept for the open-string link too.
+    if any(s.kind == SymptomKind.DEVICE_UNDERPERFORMANCE for s in out):
+        recent = memory.telemetry.inverter_wide("ac_kw", max(memory.view.start, now - ZERO_LOOKBACK), now).astype(float)
+        for s in out:
+            if s.kind != SymptomKind.DEVICE_UNDERPERFORMANCE:
+                continue
+            ratio = None
+            if s.device_id in recent and not recent.empty:
+                peers = recent.drop(columns=s.device_id).median(axis=1)
+                both = pd.concat([recent[s.device_id], peers], axis=1).dropna()
+                both = both[both.iloc[:, 1] > DAYLIGHT_KW]
+                if len(both):
+                    ratio = float(both.iloc[-1, 0] / both.iloc[-1, 1])
+            old = memory.symptoms.get(s.id)
+            if ratio is not None:
+                s.evidence["latest_daylight_ratio"] = round(ratio, 4)
+                s.evidence["zero_output"] = ratio < ZERO_SHARE
+            elif old is not None and "zero_output" in old.evidence:
+                s.evidence["zero_output"] = old.evidence["zero_output"]
+                if "latest_daylight_ratio" in old.evidence:
+                    s.evidence["latest_daylight_ratio"] = old.evidence["latest_daylight_ratio"]
 
     if r := found("flat_caps"):
         for cap in r.values["caps"]:
