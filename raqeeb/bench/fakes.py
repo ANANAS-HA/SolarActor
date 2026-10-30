@@ -44,6 +44,10 @@ FIX: dict[FaultType, ActionType] = {
     FaultType.STRING_OPEN: ActionType.DISPATCH_TECHNICIAN,
     FaultType.UNAUTHORIZED_CMD: ActionType.ISOLATE_DEVICE,
     FaultType.FIRMWARE_ALARM: ActionType.DISPATCH_TECHNICIAN,  # TRANSFORMER_TRIP, NEW_SHADING: escalate only
+    FaultType.HUNG_INVERTER: ActionType.RESET_COMMS_GATEWAY,  # controlled restart
+    FaultType.COMMS_DROPOUT_LOAD: ActionType.DISPATCH_TECHNICIAN,
+    FaultType.SENSOR_DRIFT: ActionType.DISPATCH_TECHNICIAN,
+    FaultType.TRACKER_STUCK_SILENT: ActionType.RESUME_TRACKING,
 }
 
 

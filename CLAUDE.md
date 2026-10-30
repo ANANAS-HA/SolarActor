@@ -61,6 +61,8 @@ Code computes every number; the LLM proposes and prunes hypotheses, orders plans
   `agent/consult.py` reads `technician_notes`, to pass them to the router as delimited data.
 - `UNKNOWN_FAULTS` (TRANSFORMER_TRIP, NEW_SHADING, FIRMWARE_ALARM) stay out of the causal graph and planner; a model
   proposal is accepted only after `consult.test_hypothesis`, and gets a ticket or an escalation, never a new action.
+- `HELDOUT_FAULTS` (HUNG_INVERTER, COMMS_DROPOUT_LOAD, SENSOR_DRIFT, TRACKER_STUCK_SILENT; `faults/heldout.py`) have
+  no detection rules and are in no committed scenario set; they are held-out unknowns for the agent session.
 
 ## Rules
 - Practice sets = `scenarios/scn_*.yaml`, `scenarios/practice2/pr2_*.yaml` and `scenarios/practice_unknown/pru_*.yaml`

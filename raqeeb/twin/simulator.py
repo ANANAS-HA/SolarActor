@@ -6,7 +6,8 @@
 
 Each step: apply scheduled changes due at the clock, compute readings at the clock, then
 move the clock forward by STEP_MINUTES. Changes made between steps show up in the next one.
-A device with comms down produces power (the meter sees it) but writes no rows.
+A device with comms down produces power (the meter sees it) but writes no rows. A hung inverter
+is the opposite: it produces nothing, but keeps writing its last reading with a new timestamp.
 
 The weather passed in (NASA POWER) is what the weather_reference table reports. The plant and
 the on-site sensor see the TRUE irradiance, which differs from it by a few percent
@@ -116,6 +117,7 @@ class Twin:
         self._seq = itertools.count()
         self._outbox = TelemetryBatch()
         self._active_alarms: set[tuple[str, str]] = set()
+        self._last_sent: dict[str, InverterReading] = {}  # what a hung controller keeps repeating
         self.truth: list[StepTruth] = []
 
     # -- clock and scheduling -------------------------------------------------
@@ -141,6 +143,9 @@ class Twin:
         while self._queue and self._queue[0].at <= self.clock:
             heapq.heappop(self._queue).change(self.state)
         self._compute(self.clock)
+        station = self.state.station
+        if station.sensor_drift_per_h:
+            station.sensor_bias = max(station.sensor_bias + station.sensor_drift_per_h * STEP_MINUTES / 60, -1.0)
         self.clock += STEP
         batch, self._outbox = self._outbox, TelemetryBatch()
         return batch
@@ -216,7 +221,7 @@ class Twin:
         dc_avail = physics.dc_power_kw(effective, tcell, self._dc_rated, plant) * (1.0 - string_loss)
         ac_potential = physics.ac_power_kw(dc_avail, plant)
 
-        running = np.array([not (inv.stopped or inv.isolated or inv.grid_lost) for inv in invs])
+        running = np.array([not (inv.stopped or inv.isolated or inv.grid_lost or inv.hung) for inv in invs])
         grid_share = (
             state.grid_limit_kw / max(int(running.sum()), 1) if state.grid_limit_kw is not None else np.inf
         )
@@ -233,6 +238,11 @@ class Twin:
         dc = np.where(running, dc, 0.0)
         offsets = np.array([inv.temp_offset_c for inv in invs])
         temp = physics.inverter_temperature(ambient, ac, offsets, plant)
+
+        # A device writes rows while its comms are up, and (load-sensitive link) the sun is below its limit
+        ghi = float(w["ghi_wm2"]) * factor
+        online = [inv.comms_up and (inv.comms_load_limit_wm2 is None or ghi <= inv.comms_load_limit_wm2)
+                  for inv in invs]
 
         # Status and edge-triggered device alarms
         alarms: set[tuple[str, str]] = set()
@@ -252,7 +262,7 @@ class Twin:
             else:
                 status = InverterStatus.RUNNING
             statuses.append(status)
-            if not inv.comms_up:
+            if not online[k]:
                 alarms.add(("COMM_LOSS", inv_id))
             if derating:
                 alarms.add(("DERATE_TEMP", inv_id))
@@ -275,15 +285,22 @@ class Twin:
         n_dc = 1.0 + self._noise(len(ids), noise.inverter_power)
         n_t = self._noise(len(ids), noise.ambient_c_abs)
         for k, (inv_id, inv) in enumerate(zip(ids, invs)):
-            if inv.comms_up:
-                out.inverter_readings.append(InverterReading(
-                    ts=ts, inverter_id=inv_id, ac_kw=float(ac[k] * n_ac[k]), dc_kw=float(dc[k] * n_dc[k]),
-                    temp_c=float(temp[k] + n_t[k]), status=statuses[k], tracker_angle_deg=float(angle[k]),
-                ))
-        ghi = float(w["ghi_wm2"]) * factor
+            if not online[k]:
+                continue
+            if inv.hung and inv_id in self._last_sent:  # frozen: same values, same status, new timestamp
+                out.inverter_readings.append(self._last_sent[inv_id].model_copy(update={"ts": ts}))
+                continue
+            reading = InverterReading(
+                ts=ts, inverter_id=inv_id, ac_kw=float(ac[k] * n_ac[k]), dc_kw=float(dc[k] * n_dc[k]),
+                temp_c=float(temp[k] + n_t[k]), status=statuses[k], tracker_angle_deg=float(angle[k]),
+            )
+            out.inverter_readings.append(reading)
+            self._last_sent[inv_id] = reading
         ref = self._reference.loc[w.name]
         if state.station.comms_up:
-            sensor = ghi * (1.0 - state.station.sensor_soiling) * (1.0 + self._noise(None, noise.ghi_sensor))
+            station = state.station
+            sensor = (ghi * (1.0 - station.sensor_soiling) * (1.0 + station.sensor_bias)
+                      * (1.0 + self._noise(None, noise.ghi_sensor)))
             out.weather_station.append(WeatherStationReading(
                 ts=ts, ghi_sensor_wm2=max(float(sensor), 0.0),
                 ambient_c=ambient + float(self._noise(None, noise.ambient_c_abs)), wind_ms=wind,
