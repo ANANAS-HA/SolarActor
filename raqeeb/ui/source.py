@@ -1,90 +1,161 @@
 """Everything the console reads, behind one adapter.
 
-    run = replay("scn_0007")          # or inject_storm(seed)
-    run.tables["inverter_readings"]   # one DataFrame per telemetry table, ts = UTC
-    run.lines                         # actual vs expected (reference) vs expected (sensor)
-    inverter_status(run, at)          # plant map
+    run = start_live(scenario_id, Mode.RULES)    # ui/live.py LiveRun: the real agent on the twin
+    run = start_replay(path)                     # ui/live.py ReplayRun: a recorded run
+    tables(run)                                  # telemetry up to run.now, one DataFrame per table
+    power_lines(run)                             # actual vs expected (reference) vs expected (sensor)
+    inverter_status(run)                         # plant map
+    reveal(run)                                  # answer key vs the agent: None until the run has finished
+    load_results(path)                           # benchmark output (bench/<set>/summary.csv, results.csv)
 
-Each run drives a real scenario through the FaultInjector into an in-memory TelemetryStore
-(Lane C); the tables and expected lines are read back from the store, the expected lines with
-raqeeb.tools.physics, as the agent's tools see them. The agent timeline, approvals, report and
-benchmark are SAMPLE content from ui/samples.py.
+Scenarios offered for live runs are the practice sets (scenarios/scn_*, scenarios/practice2/pr2_*)
+and generated dust storms; the held-out sets are never listed or read here.
 """
 
 from __future__ import annotations
 
+import html
+import os
+import re
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
+from pathlib import Path
 
 import pandas as pd
 
-from raqeeb.config import load_plant
-from raqeeb.contracts import STEP_MINUTES, AgentScenario, InverterStatus, PlantConfig, Scenario, TelemetryBatch
+from raqeeb.bench.score import addresses
+from raqeeb.config import BENCH_DIR, PRACTICE2_SCENARIO_DIR, SCENARIO_DIR, load_plant
+from raqeeb.contracts import (
+    DECOY_FAULTS,
+    DISPLAY_TZ,
+    STEP_MINUTES,
+    TABLE_MODELS,
+    FaultType,
+    InverterStatus,
+    PlantConfig,
+    Scenario,
+)
 from raqeeb.faults.generator import is_trap, load_scenarios, storm_scenario
-from raqeeb.faults.injector import FaultInjector
-from raqeeb.telemetry.store import TelemetryStore
 from raqeeb.tools import physics as tool_physics
-from raqeeb.twin.controls import apply_action
-from raqeeb.ui import samples
+from raqeeb.ui.live import LiveRun, ReplayRun
+from raqeeb.ui.runlog import Mode, RunLog
+
+Run = LiveRun | ReplayRun
 
 # Plant map: an inverter is "degraded" when its status says so, or it is this far below its peers
 DEGRADED_STATUSES = frozenset({InverterStatus.DERATED, InverterStatus.FAULT, InverterStatus.STOPPED})
 PEER_SHORTFALL = 0.10
 MIN_PEER_FRACTION = 0.05  # of the rating; below this (dawn, dusk) peers are not compared
-
 HEALTHY, DEGRADED, NO_DATA = "healthy", "degraded", "no data"
 
+REPLAY_DIR_ENV = "RAQEEB_REPLAY_DIR"
+RESULTS_ENV = "RAQEEB_RESULTS"
+REPLAY_DIR = Path(__file__).resolve().parent / "replays"
+DEFAULT_REPLAY = "scn_0007_test.json"  # dusty panels + dusty sensor, comms loss, a derate that needs approval
+DEFAULT_RESULTS = BENCH_DIR / "final"
+STEP = timedelta(minutes=STEP_MINUTES)
 
-@dataclass
-class PlantRun:
-    incident: AgentScenario  # what the console shows and an agent may be given: id and window only
-    planted: Scenario  # injector side: faults and answer key. Revealed in the UI only after the run;
-    #                    never pass it (or anything built from it) to an agent
-    tables: dict[str, pd.DataFrame]
-    lines: pd.DataFrame
-    agent: samples.SampleAgent
+FOOTER = "Synthetic plant and faults; weather data from NASA POWER (2025, Riyadh)."
+NASA_CREDIT = ("Weather: NASA Langley Research Center (LaRC) POWER Project, funded through the NASA Earth "
+               "Science/Applied Science Program (hourly, community RE, 2025, 24.71 N 46.68 E).")
 
-    @property
-    def start(self) -> datetime:
-        return self.incident.start
 
-    @property
-    def end(self) -> datetime:
-        return self.incident.end
+# -- scenarios and replays ----------------------------------------------------------
 
-    @property
-    def times(self) -> pd.DatetimeIndex:
-        return self.lines.index
+
+def practice_scenarios() -> list[Scenario]:
+    return load_scenarios(SCENARIO_DIR, "scn") + load_scenarios(PRACTICE2_SCENARIO_DIR, "pr2")
 
 
 def scenario_ids() -> list[str]:
-    return [s.id for s in load_scenarios()]
+    return [s.id for s in practice_scenarios()]
 
 
 def default_scenario_id() -> str:
     """The first trap scenario (dusty panels and a dusty sensor), else the first one."""
-    scenarios = load_scenarios()
+    scenarios = load_scenarios(SCENARIO_DIR, "scn")
     return next((s.id for s in scenarios if is_trap(s)), scenarios[0].id)
 
 
-def replay(scenario_id: str) -> PlantRun:
-    scenario = next(s for s in load_scenarios() if s.id == scenario_id)
-    return _run(scenario)
+def scenario(scenario_id: str) -> Scenario:
+    if scenario_id.startswith("storm_"):
+        return storm_scenario(int(scenario_id.removeprefix("storm_")))
+    return next(s for s in practice_scenarios() if s.id == scenario_id)
 
 
-def inject_storm(seed: int) -> PlantRun:
-    return _run(storm_scenario(seed))
+def start_live(scenario_id: str, mode: Mode = Mode.RULES, **kwargs) -> LiveRun:
+    return LiveRun(scenario(scenario_id), mode, **kwargs)
 
 
-def until(frame: pd.DataFrame, at: datetime) -> pd.DataFrame:
-    return frame[frame["ts"] <= at]
+def replay_dir() -> Path:
+    return Path(os.environ.get(REPLAY_DIR_ENV) or REPLAY_DIR)
 
 
-def inverter_status(run: PlantRun, at: datetime, plant: PlantConfig | None = None) -> pd.DataFrame:
-    """One row per inverter at `at`: status, ac_kw, temp_c, map state (healthy / degraded / no data)."""
+def replay_files() -> list[Path]:
+    """Recorded runs, the trap demo (DEFAULT_REPLAY) first."""
+    return sorted(replay_dir().glob("*.json"), key=lambda p: (p.name != DEFAULT_REPLAY, p.name))
+
+
+def replay_title(path: Path) -> str:
+    log = RunLog.load(path)
+    return f"{log.incident.id} · {log.label}"
+
+
+def start_replay(source: Path | str | bytes) -> ReplayRun:
+    """A replay from a file path or the bytes of an uploaded file."""
+    log = RunLog.load(Path(source)) if isinstance(source, (str, Path)) else RunLog.from_json(source)
+    return ReplayRun(log)
+
+
+def mode_label(run: Run) -> str:
+    if isinstance(run, ReplayRun):
+        return f"Replay: {run.log.label}" + (f" ({run.log.model})" if run.log.model else "")
+    return run.log.label + (f" ({run.log.model})" if run.log.model else "")
+
+
+# -- telemetry views ----------------------------------------------------------------
+
+
+def tables(run: Run) -> dict[str, pd.DataFrame]:
+    """Every telemetry table up to and including `run.now`, with `ts` (UTC) as a column."""
+    return {name: run.store.read(name, end=run.now + STEP).reset_index() for name in TABLE_MODELS}
+
+
+def power_lines(run: Run, plant: PlantConfig | None = None) -> pd.DataFrame:
+    """Plant AC in kW over the whole incident window, NaN after `run.now`: actual (meter), expected from
+    the trusted reference, expected from the sensor; plus the irradiance behind them.
+
+    Both expected lines come from raqeeb.tools.physics, the same calculation the agent's tools and
+    the injector's symptom alarms use. The sensor line scales the reference by sensor GHI /
+    reference GHI, as a plant SCADA's performance check does, so a dusty sensor pulls it down to
+    meet a dusty plant (the trap).
+    """
+    start, end = run.incident.start, run.incident.end
+    grid = pd.date_range(start, end, freq=f"{STEP_MINUTES}min", inclusive="left", name="ts")
+    cut = min(run.now + STEP, end)
+    store = run.store
+    columns = ["actual_kw", "expected_ref_kw", "expected_sensor_kw", "sensor_ghi_wm2", "reference_ghi_wm2",
+               "clearsky_ghi_wm2"]
+    if store.span("meter") is None or cut <= start:
+        return pd.DataFrame(index=grid, columns=columns, dtype=float)
+    ref = store.weather_reference(start, cut).reindex(grid)
+    frame = pd.DataFrame({
+        "actual_kw": store.meter(start, cut)["plant_ac_kw"].reindex(grid),
+        "expected_ref_kw": tool_physics.expected_plant_ac(store, start, cut, plant, basis="reference").reindex(grid),
+        "expected_sensor_kw": tool_physics.expected_plant_ac(store, start, cut, plant, basis="sensor").reindex(grid),
+        "sensor_ghi_wm2": store.weather_station(start, cut)["ghi_sensor_wm2"].reindex(grid),
+        "reference_ghi_wm2": ref["ghi_wm2"],
+        "clearsky_ghi_wm2": ref["clearsky_ghi_wm2"],
+    }, index=grid)
+    return frame[columns]
+
+
+def inverter_status(run: Run, plant: PlantConfig | None = None) -> pd.DataFrame:
+    """One row per inverter at the latest step up to `run.now`: status, ac_kw, temp_c, map state."""
     plant = plant or load_plant()
-    readings = run.tables["inverter_readings"]
-    now = readings[readings["ts"] == at].set_index("inverter_id")
+    readings = run.store.read("inverter_readings", end=run.now + STEP).reset_index()
+    at = readings["ts"].max() if len(readings) else None
+    now = readings[readings["ts"] == at].set_index("inverter_id") if at is not None else readings
     rows = []
     peer_median = float(now["ac_kw"].median()) if len(now) else 0.0
     compare = peer_median > MIN_PEER_FRACTION * plant.inverters.ac_kw
@@ -100,57 +171,107 @@ def inverter_status(run: PlantRun, at: datetime, plant: PlantConfig | None = Non
     return pd.DataFrame(rows)
 
 
-def benchmark() -> pd.DataFrame:
-    return samples.benchmark_table()
+# -- answer key (only after the run) -----------------------------------------------------
 
 
-# -- building a run -----------------------------------------------------------
+@dataclass
+class Reveal:
+    faults: pd.DataFrame  # one row per planted fault: label, start, kind, named by the agent, actions on it
+    extra_causes: list[str]  # causes the agent named that were not planted
+    actions: pd.DataFrame  # every action the agent requested and which planted cause it addressed
+    found: int
+    root_causes: int
 
 
-def _run(scenario: Scenario) -> PlantRun:
-    plant = load_plant()
-    plan = samples.scripted_plan(scenario, plant)
-    with TelemetryStore() as store:  # in memory, one per run; frames are copied out before it closes
-        _telemetry(scenario, plan, store)
-        tables = _frames(store)
-        lines = power_lines(store, scenario.start, scenario.end, plant)
-    agent = samples.build_agent(scenario, plan, tables, lines, plant)
-    return PlantRun(incident=scenario.agent_view(), planted=scenario, tables=tables, lines=lines, agent=agent)
+def reveal(run: Run) -> Reveal | None:
+    """The answer key next to the agent's causes and actions; None while the run is in progress."""
+    key = run.log.answer_key
+    if not run.finished or key is None:
+        return None
+    diagnosis = run.log.diagnosis_until(run.now)
+    predicted = {label for h in (diagnosis.root_causes if diagnosis else []) for label in h.labels}
+    actions = run.log.actions_until(run.now)
+    truth = set(key.root_causes)
+    probe = Scenario(id="probe", seed=0, start=run.incident.start, duration_hours=24, faults=[])
+    rows = []
+    for f in key.faults:
+        kind = ("decoy (expected behaviour)" if f.type == FaultType.CURTAILMENT
+                else "decoy (injected instruction)" if f.type in DECOY_FAULTS
+                else "root cause" if f.label in truth else "planted, not scored")
+        acted = [f"{a.request.action.value} ({a.status.value.lower() if a.status else 'no decision'})"
+                 for a in actions if f.label in truth and addresses(a.request, f.label)]
+        rows.append({"Planted fault": f.label, "From": local_hhmm(probe.resolve_time(f.start)), "Kind": kind,
+                     "Agent named it": "yes" if f.label in predicted else "no",
+                     "Agent actions on it": ", ".join(acted) or "none"})
+    action_rows = [{"Time": local_hhmm(a.requested_at), "Action": a.request.action.value, "Target": a.request.target,
+                    "Status": a.status.value if a.status else "waiting",
+                    "Addresses": ", ".join(label for label in key.root_causes if addresses(a.request, label))
+                    or "no planted root cause"} for a in actions]
+    return Reveal(faults=pd.DataFrame(rows), extra_causes=sorted(predicted - truth),
+                  actions=pd.DataFrame(action_rows, columns=["Time", "Action", "Target", "Status", "Addresses"]),
+                  found=len(truth & predicted), root_causes=len(truth))
 
 
-def _telemetry(scenario: Scenario, plan: list[samples.PlannedAction], store: TelemetryStore) -> None:
-    """Run the scenario through the injector into the store; the sample plan's automatic actions hit the twin."""
-    inj = FaultInjector.for_scenario(scenario)
-    due = sorted((p for p in plan if not p.request.needs_approval), key=lambda p: p.at)
-    while not inj.finished:
-        while due and due[0].at <= inj.twin.clock:
-            request = due.pop(0).request
-            apply_action(inj.twin, request.action, request.target, request.params)
-        store.write_batch(inj.step())
+def local_hhmm(ts: datetime) -> str:
+    return pd.Timestamp(ts).tz_convert(DISPLAY_TZ).strftime("%H:%M")
 
 
-def _frames(store: TelemetryStore) -> dict[str, pd.DataFrame]:
-    """Every telemetry table as stored, with `ts` (UTC) as a column."""
-    return {name: store.read(name).reset_index() for name in TelemetryBatch.model_fields}
+# -- benchmark results ---------------------------------------------------------------
 
 
-def power_lines(store: TelemetryStore, start: datetime, end: datetime,
-                plant: PlantConfig | None = None) -> pd.DataFrame:
-    """Plant AC in kW: actual (meter), expected from the trusted reference, expected from the sensor.
+@dataclass
+class BenchResults:
+    path: Path
+    summary: pd.DataFrame  # one row per agent (bench/score.summarize)
+    results: pd.DataFrame | None  # one row per agent x scenario
+    markdown: str  # summary.md, if present
 
-    Both expected lines come from raqeeb.tools.physics, the same calculation the agent's tools and
-    the injector's symptom alarms use: the fault-free nominal plant on the stored weather. The
-    sensor line scales the reference by sensor GHI / reference GHI, as a plant SCADA's performance
-    check does, so a dusty sensor pulls it down to meet a dusty plant (the trap). Steps a source
-    did not report stay NaN.
-    """
-    grid = pd.date_range(start, end, freq=f"{STEP_MINUTES}min", inclusive="left", name="ts")
-    ref = store.weather_reference(start, end).reindex(grid)
-    return pd.DataFrame({
-        "actual_kw": store.meter(start, end)["plant_ac_kw"].reindex(grid),
-        "expected_ref_kw": tool_physics.expected_plant_ac(store, start, end, plant, basis="reference").reindex(grid),
-        "expected_sensor_kw": tool_physics.expected_plant_ac(store, start, end, plant, basis="sensor").reindex(grid),
-        "sensor_ghi_wm2": store.weather_station(start, end)["ghi_sensor_wm2"].reindex(grid),
-        "reference_ghi_wm2": ref["ghi_wm2"],
-        "clearsky_ghi_wm2": ref["clearsky_ghi_wm2"],
-    }, index=grid)
+
+def default_results_path() -> Path:
+    return Path(os.environ.get(RESULTS_ENV) or DEFAULT_RESULTS)
+
+
+def results_folders() -> list[Path]:
+    """Bench output folders that have a summary (bench/<set>/summary.csv)."""
+    return sorted(p.parent for p in BENCH_DIR.glob("*/summary.csv"))
+
+
+def load_results(path: Path | str) -> BenchResults | None:
+    """Bench output from a folder (summary.csv, results.csv, summary.md) or one summary file (.csv or .json).
+    None when there is nothing there yet."""
+    path = Path(path)
+    if path.is_dir():
+        summary = _table(path / "summary.csv") if (path / "summary.csv").exists() else _table(path / "summary.json")
+        results = _table(path / "results.csv") if (path / "results.csv").exists() else _table(path / "results.json")
+        md = path / "summary.md"
+        markdown = md.read_text(encoding="utf-8") if md.exists() else ""
+    else:
+        summary, results, markdown = _table(path), None, ""
+    if summary is None or summary.empty or "agent" not in summary.columns:
+        return None
+    return BenchResults(path=path, summary=summary, results=results, markdown=markdown)
+
+
+def _table(path: Path) -> pd.DataFrame | None:
+    if not path.exists():
+        return None
+    try:
+        return pd.read_json(path) if path.suffix == ".json" else pd.read_csv(path)
+    except ValueError:
+        return None
+
+
+# -- untrusted text ------------------------------------------------------------------
+
+_MD_SPECIAL = re.compile(r"([\\`*_{}\[\]()#+\-.!|<>~$:&])")
+
+
+def md_escape(text: object) -> str:
+    """Plain text for use inside st.markdown: no markdown, links, images, HTML, colour or emoji codes."""
+    escaped = _MD_SPECIAL.sub(r"\\\1", str(text))
+    return escaped.replace("\r\n", "\n").replace("\n", "  \n")
+
+
+def html_text(text: object) -> str:
+    """Plain text for use inside an HTML snippet."""
+    return html.escape(str(text)).replace("\n", "<br>")

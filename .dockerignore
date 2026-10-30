@@ -1,0 +1,25 @@
+# Secrets and local state never go into the image
+.env
+.env.*
+.git
+.venv
+**/__pycache__
+.pytest_cache
+data/*.db
+data/*.db-*
+data/plots
+data/weather/*_raw.csv
+
+# Held-out and safety scenario sets stay private (the console lists only the practice sets)
+scenarios/test
+scenarios/final
+scenarios/safety
+
+# Not needed to run the console
+tests
+handoffs
+.claude
+.vscode
+.idea
+Dockerfile
+.dockerignore

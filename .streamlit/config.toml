@@ -1,0 +1,12 @@
+# Console settings (local runs and the Docker image). The app makes no network calls of its own:
+# no usage statistics, and serverAddress is set so a headless start does not look up the external IP.
+[browser]
+gatherUsageStats = false
+serverAddress = "localhost"
+
+[server]
+headless = true
+maxUploadSize = 20  # MB; a 12-hour replay file is about 1 MB
+
+[client]
+toolbarMode = "minimal"

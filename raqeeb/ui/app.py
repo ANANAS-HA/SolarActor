@@ -2,24 +2,36 @@
 
     uv run streamlit run raqeeb/ui/app.py
 
-All data comes through raqeeb/ui/source.py. Plant telemetry is synthetic (simulated from NASA
-POWER weather); the agent timeline, approvals, results and report are SAMPLE content until the
-agent and benchmark are integrated. Times are shown in Asia/Riyadh.
+Three modes: "Live: rules only" (the real agent, no LLM), "Live: rules + local model" (only when
+.env names a reachable local model server) and "Replay" (a recorded run, ui/replays/*.json or an
+uploaded file). Live runs drive the twin and the agent step by step (ui/live.py); gated actions
+pause the run for an operator decision. The planted faults are shown only after the run has ended.
+Plant, telemetry and faults are synthetic; weather is NASA POWER. Times are shown in Asia/Riyadh.
+Alarm, note and log text is untrusted data: it is shown in tables or escaped, never as markdown or HTML.
 """
 
 from __future__ import annotations
 
 import random
-from datetime import datetime, timedelta, timezone
+import time
+from datetime import timedelta
+from pathlib import Path
 
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from raqeeb.config import load_plant
-from raqeeb.contracts import DISPLAY_TZ, STEP_MINUTES, AuditEntry, FaultType, IncidentReport
+from raqeeb.config import REPO_ROOT, load_plant
+from raqeeb.contracts import DISPLAY_TZ, ActionStatus, IncidentReport
 from raqeeb.ui import source
-from raqeeb.ui.samples import local_hhmm
+from raqeeb.ui.live import LiveRun, ReplayRun, local_model_status
+from raqeeb.ui.runlog import MODE_LABEL, Mode
+from raqeeb.ui.source import local_hhmm, md_escape
+
+LIVE_RULES, LIVE_LOCAL, REPLAY = MODE_LABEL[Mode.RULES], MODE_LABEL[Mode.LOCAL], "Replay"
+MODES = [LIVE_RULES, LIVE_LOCAL, REPLAY]
+SPEEDS = [15, 30, 60, 120, 240]  # sim minutes per tick
+TICK_S = 0.4  # wall-clock pause between ticks while playing
 
 # Reference data-viz palette: status colors carry a text label too; series slots in fixed order
 STATE_STYLE = {  # map state -> (fill, label ink, cell label)
@@ -29,134 +41,191 @@ STATE_STYLE = {  # map state -> (fill, label ink, cell label)
 }
 SERIES = {"actual": "#2a78d6", "reference": "#eb6834", "sensor": "#1baf7a"}
 MUTED = "#898781"
-CLOCK_STEP_MIN = 30
 RECENT_ALARM_MIN = 30
 MIN_GAP_FRACTION = 0.05  # of the plant rating: below this (dawn, dusk) no "vs expected" delta
 ON_EXPECTED_FRACTION = 0.01
-REVEAL_LABEL = "Planted faults: revealed after the run (the agent never sees this)"
+SUMMARY_COLUMNS = {  # bench summary.csv column -> shown name
+    "agent": "Agent", "scenarios": "Scenarios", "precision": "Precision", "recall": "Recall",
+    "all_causes_found_rate": "All causes found", "false_action_rate": "False-action rate",
+    "unsafe_actions": "Unsafe actions", "verified_recovery_rate": "Verified recovery",
+    "ttvr_median_min": "Time to verified recovery (median min)", "mwh_recovered": "MWh recovered",
+    "mwh_lost": "MWh lost (no action)", "cost_per_incident_usd": "Cost per incident (USD)",
+    "llm_calls_per_incident": "LLM calls per incident", "local_call_share": "Local call share", "note": "Note",
+}
 
-SYNTHETIC_NOTE = ("**Synthetic data.** The plant, its telemetry, the faults and the alarm codes are simulated "
-                  "(weather from NASA POWER). The agent timeline, approvals, results and report are **SAMPLE** "
-                  "content until the agent and the benchmark are integrated.")
 
-
-# -- data (cached per run) -----------------------------------------------------
-
-
-@st.cache_data(show_spinner="Running the plant twin...")
-def load_run(kind: str, key: str) -> source.PlantRun:
-    return source.inject_storm(int(key)) if kind == "storm" else source.replay(key)
+# -- data ------------------------------------------------------------------------------
 
 
 @st.cache_data
-def scenario_ids() -> tuple[list[str], str]:
+def scenario_choices() -> tuple[list[str], str]:
     return source.scenario_ids(), source.default_scenario_id()
+
+
+@st.cache_data
+def replay_choices() -> dict[str, str]:
+    return {str(p): source.replay_title(p) for p in source.replay_files()}
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def local_status() -> tuple[bool, str]:
+    return local_model_status()
+
+
+def lines(run: source.Run) -> pd.DataFrame:
+    """Power lines, recomputed only when the run's clock moves."""
+    key = (id(run), run.now)
+    cached = st.session_state.get("lines_cache")
+    if cached is None or cached[0] != key:
+        cached = (key, source.power_lines(run))
+        st.session_state.lines_cache = cached
+    return cached[1]
 
 
 def local(ts) -> pd.Timestamp:
     return pd.Timestamp(ts).tz_convert(DISPLAY_TZ)
 
 
-# -- state and callbacks ---------------------------------------------------------
+# -- callbacks ---------------------------------------------------------------------------
 
 
-def _set_run(kind: str, key: str) -> None:
-    st.session_state.run_key = (kind, key)
-    st.session_state.pop("clock", None)  # a new run starts with its whole window shown
-    st.session_state.decisions = {}
+def _set_run(run: source.Run) -> None:
+    old = st.session_state.get("run")
+    if old is not None:
+        old.close()
+    st.session_state.run = run
+    st.session_state.playing = False
+    st.session_state.pop("lines_cache", None)
+    st.session_state.load_error = ""
 
 
-def _inject_storm() -> None:
-    _set_run("storm", str(random.randint(1, 10**6)))
+def _start_live(scenario_id: str | None = None) -> None:
+    mode = Mode.LOCAL if st.session_state.mode_choice == LIVE_LOCAL else Mode.RULES
+    _set_run(source.start_live(scenario_id or st.session_state.scenario_id, mode))
 
 
-def _replay() -> None:
-    _set_run("scenario", st.session_state.replay_id)
+def _start_storm() -> None:
+    _start_live(f"storm_{random.randint(1, 10**6)}")
 
 
-def _move_clock(steps: int, last: int) -> None:
-    st.session_state.clock = min(max(st.session_state.clock + steps, 0), last)
+def _load_replay() -> None:
+    _set_run(source.start_replay(st.session_state.replay_choice))
 
 
-def _decide(action_id: str, decision: str) -> None:
-    st.session_state.decisions[action_id] = {
-        "decision": decision,
-        "note": st.session_state.get(f"note_{action_id}", "").strip(),
-        "ts": st.session_state.now,
-    }
+def _load_upload() -> None:
+    upload = st.session_state.get("replay_upload")
+    if upload is None:
+        return
+    try:
+        _set_run(source.start_replay(upload.getvalue()))
+    except ValueError as exc:
+        st.session_state.load_error = f"Could not load that file: {str(exc).splitlines()[0]}"
 
 
-# -- panels --------------------------------------------------------------------
+def _toggle_play() -> None:
+    st.session_state.playing = not st.session_state.playing
 
 
-def sidebar(ids: list[str], run: source.PlantRun) -> None:
+def _step() -> None:
+    st.session_state.playing = False
+    st.session_state.run.advance(st.session_state.speed)
+
+
+def _to_end() -> None:
+    st.session_state.playing = False
+    st.session_state.run.run_to_end()  # a live run stops at the first action waiting for approval
+
+
+def _decide(action_id: str, approve: bool) -> None:
+    note = st.session_state.get(f"note_{action_id}", "").strip()
+    st.session_state.run.decide(action_id, approve, note)
+
+
+# -- sidebar -----------------------------------------------------------------------------
+
+
+def sidebar(run: source.Run) -> None:
+    ids, _ = scenario_choices()
+    available, reason = local_status()
     with st.sidebar:
-        st.header("Inject faults")
-        st.caption("Plant faults are injected into the synthetic twin.")
-        st.button("Dust storm + 2 random faults", key="inject_storm", on_click=_inject_storm, width="stretch")
-        st.selectbox("Scenario", ids, key="replay_id")
-        st.button("Replay scenario", key="replay", on_click=_replay, width="stretch")
-
-        st.header("Simulated clock")
-        last = len(run.times) - 1
-        st.select_slider("Time (Asia/Riyadh)", options=list(range(last + 1)), key="clock",
-                         format_func=lambda i: local(run.times[i]).strftime("%H:%M"))
-        back, fwd, end = st.columns(3)
-        steps = CLOCK_STEP_MIN // STEP_MINUTES
-        back.button(f"◀ {CLOCK_STEP_MIN}m", key="clock_back", on_click=_move_clock, args=(-steps, last),
-                    width="stretch")
-        fwd.button(f"{CLOCK_STEP_MIN}m ▶", key="clock_fwd", on_click=_move_clock, args=(steps, last),
-                   width="stretch")
-        end.button("End", key="clock_end", on_click=_move_clock, args=(last, last), width="stretch")
-
-        if st.session_state.clock == last:
-            answer_key(run)
+        st.header("Run")
+        st.radio("Mode", MODES, key="mode_choice",
+                 captions=["The agent's rules, no language model", f"{'Available' if available else 'Unavailable'}: "
+                           f"{reason}", "Play back a recorded run"])
+        choice = st.session_state.mode_choice
+        if choice == REPLAY:
+            replays = replay_choices()
+            if replays:
+                st.selectbox("Recorded run", list(replays), key="replay_choice", format_func=replays.get)
+                st.button("Load replay", key="load_replay", on_click=_load_replay, width="stretch")
+            else:
+                st.caption("No recorded runs in this deployment.")
+            st.file_uploader("Or upload a replay file (.json)", type=["json"], key="replay_upload")
+            st.button("Load uploaded file", key="load_upload", on_click=_load_upload, width="stretch",
+                      disabled=st.session_state.get("replay_upload") is None)
+            if st.session_state.get("load_error"):
+                st.error(st.session_state.load_error)
         else:
-            st.caption("Planted faults are revealed when the clock reaches the end of the run.")
+            blocked = choice == LIVE_LOCAL and not available
+            st.selectbox("Scenario (practice sets)", ids, key="scenario_id")
+            st.button("Start live run", key="start_live", on_click=_start_live, type="primary", width="stretch",
+                      disabled=blocked)
+            st.button("Dust storm + 2 random faults", key="inject_storm", on_click=_start_storm, width="stretch",
+                      disabled=blocked)
+            if blocked:
+                st.caption(f"Rules + local model is unavailable: {reason}.")
+            st.caption("Faults are planted in the synthetic twin; the agent sees only telemetry.")
+
+        st.header("Playback")
+        st.select_slider("Speed (sim minutes per tick)", SPEEDS, key="speed")
+        play, step, end = st.columns(3)
+        stopped = run.finished or bool(run.waiting)
+        play.button("Pause" if st.session_state.playing else "Play", key="play", on_click=_toggle_play,
+                    width="stretch", disabled=stopped)
+        step.button("Step", key="step", on_click=_step, width="stretch", disabled=stopped)
+        end.button("To end", key="to_end", on_click=_to_end, width="stretch", disabled=stopped)
+        if run.waiting:
+            st.warning("Paused: an action waits for operator approval.")
+        elif run.finished:
+            st.success("Run finished. The answer key can be revealed.")
+        if isinstance(run, LiveRun) and run.finished:
+            st.download_button("Save recording (replay JSON)", run.recording().to_json(),
+                               file_name=f"raqeeb_replay_{run.incident.id}_{run.mode.value}.json",
+                               mime="application/json", key="save_recording", width="stretch")
 
 
-def answer_key(run: source.PlantRun) -> None:
-    """The planted faults, shown only once the run has finished. Display only: never passed to an agent."""
-    scenario = run.planted
-    with st.expander(REVEAL_LABEL):
-        for f in scenario.faults:
-            decoy = {FaultType.CURTAILMENT: " (decoy, expected behaviour)",
-                     FaultType.PROMPT_INJECTION: " (decoy: synthetic injected instruction, no action)"}.get(f.type, "")
-            st.markdown(f"- `{f.label}` from {local_hhmm(scenario.resolve_time(f.start))}{decoy}")
+# -- panels ----------------------------------------------------------------------------
 
 
-def default_clock(run: source.PlantRun) -> int:
-    """Open on the last sample-agent event, so the whole incident is visible in daylight."""
-    events = [e.ts for e in run.agent.timeline]
-    if not events:
-        return len(run.times) - 1
-    return min(int(run.times.searchsorted(max(events), side="right")) - 1, len(run.times) - 1)
-
-
-def headline(run: source.PlantRun, now: datetime, pending: int) -> None:
-    line = run.lines.loc[now]
-    events = source.until(run.tables["events"], now)
-    readings = run.tables["inverter_readings"]
-    reporting = readings.loc[readings["ts"] == now, "inverter_id"].nunique()
-    a, b, c, d = st.columns(4)
+def headline(run: source.Run, power: pd.DataFrame, data: dict[str, pd.DataFrame]) -> None:
     plant = load_plant()
-    daylight = line["expected_ref_kw"] > MIN_GAP_FRACTION * plant.rated_ac_kw
-    gap = line["actual_kw"] / line["expected_ref_kw"] - 1 if daylight else None
-    on_line = gap is not None and abs(gap) < ON_EXPECTED_FRACTION
-    a.metric("Plant output (meter)", f"{line['actual_kw'] / 1000:.1f} MW",
-             None if gap is None else "on expected (reference)" if on_line else f"{gap:+.0%} vs expected (reference)",
-             delta_color="off" if on_line else "normal")
-    recent = int((events["ts"] > now - timedelta(minutes=RECENT_ALARM_MIN)).sum())
+    shown = power.dropna(subset=["actual_kw"])
+    a, b, c, d = st.columns(4)
+    if len(shown):
+        line = shown.iloc[-1]
+        daylight = line["expected_ref_kw"] > MIN_GAP_FRACTION * plant.rated_ac_kw
+        gap = line["actual_kw"] / line["expected_ref_kw"] - 1 if daylight else None
+        on_line = gap is not None and abs(gap) < ON_EXPECTED_FRACTION
+        a.metric("Plant output (meter)", f"{line['actual_kw'] / 1000:.1f} MW",
+                 None if gap is None else "on expected (reference)" if on_line
+                 else f"{gap:+.0%} vs expected (reference)", delta_color="off" if on_line else "normal")
+    else:
+        a.metric("Plant output (meter)", "—")
+    events = data["events"]
+    recent = int((events["ts"] > run.now - timedelta(minutes=RECENT_ALARM_MIN)).sum()) if len(events) else 0
     b.metric("Alarms so far", len(events), f"+{recent} in last {RECENT_ALARM_MIN} min" if recent else None,
              delta_color="inverse")
+    readings = data["inverter_readings"]
+    last = readings["ts"].max() if len(readings) else None
+    reporting = readings.loc[readings["ts"] == last, "inverter_id"].nunique() if last is not None else 0
     c.metric("Inverters reporting", f"{reporting} / {plant.inverters.count}")
-    d.metric("Pending approvals (sample)", pending)
+    d.metric("Waiting for approval", len(run.waiting))
 
 
-def plant_map(run: source.PlantRun, now: datetime) -> None:
+def plant_map(run: source.Run) -> None:
     st.subheader("Plant map")
     plant = load_plant()
-    status = source.inverter_status(run, now, plant)
+    status = source.inverter_status(run, plant)
     rows, cols = plant.inverters.layout_rows, plant.inverters.layout_cols
     fig = go.Figure()
     for k, r in status.iterrows():
@@ -181,47 +250,56 @@ def plant_map(run: source.PlantRun, now: datetime) -> None:
                + f". Degraded = derated, stopped or ≥{source.PEER_SHORTFALL:.0%} below peers. Synthetic plant.")
 
 
-def alarm_feed(run: source.PlantRun, now: datetime) -> None:
+def alarm_feed(data: dict[str, pd.DataFrame]) -> None:
     st.subheader("Alarm feed")
-    events = source.until(run.tables["events"], now).sort_values("ts", ascending=False)
+    events = data["events"].sort_values("ts", ascending=False)
     by_severity = events["severity"].astype(str).value_counts()
     st.caption(f"{len(events)} alarms · " + " · ".join(f"{s}: {by_severity.get(s, 0)}"
-                                                       for s in ("CRITICAL", "WARNING", "INFO")))
+                                                       for s in ("CRITICAL", "WARNING", "INFO"))
+               + ". Message text is quoted device data (untrusted): the agent's rules never read it.")
     table = pd.DataFrame({
-        "Time": events["ts"].map(lambda t: local(t).strftime("%H:%M")),
-        "Device": events["device_id"], "Code": events["code"],
-        "Severity": events["severity"].astype(str), "Message": events["message"],
+        "Time": events["ts"].map(local_hhmm), "Device": events["device_id"], "Code": events["code"],
+        "Severity": events["severity"].astype(str), "Message (quoted)": events["message"],
     })
-    st.dataframe(table, hide_index=True, height=380)
+    st.dataframe(table, hide_index=True, height=380, key="alarm_table")
 
 
-def recovery_chart(run: source.PlantRun, now: datetime) -> None:
+def technician_notes(data: dict[str, pd.DataFrame]) -> None:
+    notes = data["technician_notes"]
+    if notes.empty:
+        return
+    st.subheader("Technician notes")
+    st.caption("Quoted as written by site staff (synthetic, untrusted). Only passed to a model as data.")
+    st.dataframe(pd.DataFrame({"Time": notes["ts"].map(local_hhmm), "About": notes["area_or_device"],
+                               "Author": notes["author"], "Note (quoted)": notes["text"]}),
+                 hide_index=True, key="notes_table")
+
+
+def recovery_chart(run: source.Run, power: pd.DataFrame) -> None:
     st.subheader("Recovery")
-    lines = run.lines[run.lines.index <= now]
-    x = lines.index.tz_convert(DISPLAY_TZ)
+    x = power.index.tz_convert(DISPLAY_TZ)
     fig = go.Figure()
     for col, name, color, dash in (
         ("actual_kw", "Actual (meter)", SERIES["actual"], "solid"),
         ("expected_ref_kw", "Expected from trusted reference", SERIES["reference"], "solid"),
         ("expected_sensor_kw", "Expected from on-site sensor", SERIES["sensor"], "dot"),
     ):
-        fig.add_trace(go.Scatter(x=x, y=lines[col] / 1000, name=name, mode="lines",
-                                 line={"color": color, "width": 2, "dash": dash},
-                                 hovertemplate="%{y:.1f} MW"))
-    for p in run.agent.executed:
-        if p.at <= now:
-            fig.add_vline(x=local(p.at), line={"color": MUTED, "width": 1})
-            fig.add_annotation(x=local(p.at), y=1, yref="paper", text=f"{p.request.action.value} (sample)",
+        fig.add_trace(go.Scatter(x=x, y=power[col] / 1000, name=name, mode="lines",
+                                 line={"color": color, "width": 2, "dash": dash}, hovertemplate="%{y:.1f} MW"))
+    for a in run.log.actions_until(run.now):
+        if a.status == ActionStatus.APPLIED:
+            fig.add_vline(x=local(a.decided_at), line={"color": MUTED, "width": 1})
+            fig.add_annotation(x=local(a.decided_at), y=1, yref="paper", text=a.request.action.value,
                                showarrow=False, textangle=-90, xanchor="right", yanchor="top",
                                font={"size": 10, "color": MUTED})
     fig.update_layout(height=380, hovermode="x unified", margin={"l": 0, "r": 0, "t": 10, "b": 0},
                       legend={"orientation": "h", "y": 1.12, "x": 0},
                       yaxis_title="Plant AC (MW)", xaxis_title=f"Time ({DISPLAY_TZ})",
-                      xaxis_range=[local(run.start), local(run.end)])
+                      xaxis_range=[local(run.incident.start), local(run.incident.end)])
     st.plotly_chart(fig, key="recovery_chart")
     st.caption("Expected lines are the fault-free plant run on the weather each source reports. When the sensor is "
-               "dusty, the sensor line drops to meet a dusty plant and the loss looks normal; the reference line "
-               "still shows it. Vertical lines mark the sample agent's automatic actions.")
+               "dusty, the sensor line drops to meet a dusty plant and the loss looks normal (the dusty-sensor "
+               "trap); the reference line still shows it. Vertical lines mark actions applied to the plant.")
 
     fig = go.Figure()
     for col, name, color, dash in (
@@ -229,144 +307,295 @@ def recovery_chart(run: source.PlantRun, now: datetime) -> None:
         ("reference_ghi_wm2", "Reference GHI (NASA POWER)", SERIES["reference"], "solid"),
         ("clearsky_ghi_wm2", "Clear-sky model (shape reference)", MUTED, "solid"),
     ):
-        fig.add_trace(go.Scatter(x=x, y=lines[col], name=name, mode="lines",
+        fig.add_trace(go.Scatter(x=x, y=power[col], name=name, mode="lines",
                                  line={"color": color, "width": 2 if color != MUTED else 1, "dash": dash},
                                  hovertemplate="%{y:.0f} W/m²"))
     fig.update_layout(height=260, hovermode="x unified", margin={"l": 0, "r": 0, "t": 10, "b": 0},
                       legend={"orientation": "h", "y": 1.2, "x": 0}, yaxis_title="GHI (W/m²)",
-                      xaxis_range=[local(run.start), local(run.end)])
+                      xaxis_range=[local(run.incident.start), local(run.incident.end)])
     st.plotly_chart(fig, key="irradiance_chart")
     st.caption("The clear-sky model gives the shape of a cloudless day for comparison. It is not a ceiling: the "
                "reference itself can sit above it.")
 
 
-def agent_timeline(run: source.PlantRun, now: datetime) -> None:
-    st.subheader("Agent timeline (sample)")
-    st.caption("SAMPLE: scripted from the planted faults to exercise the console. The real agent replaces it.")
-    entries = [e for e in run.agent.timeline if e.ts <= now] + [
-        AuditEntry(ts=d["ts"], step="approval", actor="human:operator",
-                   payload={"evidence": d["note"] or "No note.", "decision": f"{d['decision']} {action_id}."})
-        for action_id, d in st.session_state.decisions.items()
-    ]
-    if not entries:
-        st.info("No agent activity yet at this time.")
-    for e in sorted(entries, key=lambda e: e.ts):
-        with st.container(border=True):
-            st.markdown(f"**{local_hhmm(e.ts)}** · `{e.step}` · {e.actor}  \n{e.payload.get('decision', '')}")
-            st.caption(e.payload.get("evidence", ""))
-
-
-def approvals(run: source.PlantRun, now: datetime) -> None:
-    st.subheader("Approvals (sample)")
-    visible = [p for p in run.agent.approvals if p.at <= now]
-    decisions = st.session_state.decisions
-    if not visible:
-        st.info("No gated actions waiting at this time.")
-    for p in visible:
-        req = p.request
+def approvals(run: source.Run) -> None:
+    """Gated actions waiting now (live), or the recorded decisions (replay and history)."""
+    gated = [a for a in run.log.actions_until(run.now) if a.gated]
+    st.subheader("Approvals")
+    if not gated:
+        st.info("No action has needed approval so far.")
+    for a in gated:
+        req = a.request
         with st.container(border=True):
             params = ", ".join(f"{k}={v:g}" if isinstance(v, float) else f"{k}={v}" for k, v in req.params.items())
-            st.markdown(f"**{req.action.value}** on **{req.target}**" + (f" ({params})" if params else "")
-                        + f"  \nProposed {local_hhmm(p.at)} · reversible: {'yes' if req.reversible else 'no'}")
-            st.markdown(f"*Rationale:* {req.rationale}  \n*Expected effect:* {req.expected_effect}")
-            if req.id in decisions:
-                d = decisions[req.id]
-                st.success(f"{d['decision']} at {local_hhmm(d['ts'])}" + (f": {d['note']}" if d["note"] else ""))
+            st.markdown(f"**{md_escape(req.action.value)}** on **{md_escape(req.target)}**"
+                        + (f" ({md_escape(params)})" if params else "")
+                        + f"  \nProposed {local_hhmm(a.requested_at)} · reversible: {'yes' if req.reversible else 'no'}")
+            st.markdown(f"*Rationale:* {md_escape(req.rationale)}  \n"
+                        f"*Expected effect:* {md_escape(req.expected_effect)}")
+            if a.status is not None:
+                verb = {ActionStatus.APPLIED: "Approved", ActionStatus.REJECTED: "Rejected"}.get(a.status, "Failed")
+                recorded = "Recorded decision: " if isinstance(run, ReplayRun) else ""
+                st.markdown(f"{recorded}**{verb}** by {md_escape(a.decided_by)} at {local_hhmm(a.decided_at)}"
+                            + (f": {md_escape(a.note)}" if a.note else ""))
+                continue
+            if isinstance(run, ReplayRun):
                 continue
             st.text_input("Operator note", key=f"note_{req.id}", placeholder="Optional reason for the decision")
             ok, no = st.columns(2)
-            ok.button("Approve", key=f"approve_{req.id}", on_click=_decide, args=(req.id, "Approved"),
-                      type="primary", width="stretch")
-            no.button("Reject", key=f"reject_{req.id}", on_click=_decide, args=(req.id, "Rejected"),
+            ok.button("Approve", key=f"approve_{req.id}", on_click=_decide, args=(req.id, True), type="primary",
                       width="stretch")
-    st.caption("SAMPLE: decisions are kept in this session. With the agent, they resume its approval interrupt.")
+            no.button("Reject", key=f"reject_{req.id}", on_click=_decide, args=(req.id, False), width="stretch")
 
 
-def results_tab() -> None:
-    st.subheader("Benchmark: Raqeeb vs threshold-alarm baseline")
-    st.warning("SAMPLE values, not measured. The benchmark harness will write the real table, "
-               "including the metrics where the baseline does better.")
-    st.dataframe(source.benchmark(), hide_index=True, width="stretch")
+def agent_timeline(run: source.Run) -> None:
+    st.subheader("Agent timeline")
+    items = run.log.timeline_until(run.now)
+    if not items:
+        st.info("No agent activity yet.")
+        return
+    st.caption("Newest first. Each poll runs triage → investigate → rank → consult → plan → safety → execute → "
+               "verify → report; evidence is computed by code.")
+    st.dataframe(pd.DataFrame([{"Time": local_hhmm(t.ts), "Step": t.node, "Actor": t.actor, "What": t.summary,
+                                "Evidence": "; ".join(f"{k}: {v}" for k, v in t.details.items())}
+                               for t in reversed(items)]),
+                 hide_index=True, height=420, key="timeline_table")
+    findings = run.log.findings_until(run.now)
+    st.markdown("**Tool findings at the last poll**")
+    if not findings:
+        st.caption("No tool reports a finding.")
+    else:
+        st.dataframe(pd.DataFrame([{"Tool": r.tool, "Finding": r.verdict, "Devices": ", ".join(r.devices),
+                                    "Evidence": r.evidence} for r in findings]), hide_index=True,
+                     key="findings_table")
+    diagnosis = run.log.diagnosis_until(run.now)
+    if diagnosis:
+        st.markdown(f"**Current diagnosis** (confidence {diagnosis.confidence:.2f})")
+        st.dataframe(pd.DataFrame([{"Cause": ", ".join(h.labels), "Score": h.score, "Explains": len(h.explains),
+                                    "Evidence": "; ".join(h.evidence)} for h in diagnosis.root_causes]),
+                     hide_index=True, key="diagnosis_table")
 
 
-def report_markdown(run: source.PlantRun, report: IncidentReport) -> str:
-    executed = {p.request.id for p in run.agent.executed}
+def actions_panel(run: source.Run) -> None:
+    st.subheader("Actions and verifications")
+    actions = run.log.actions_until(run.now)
+    verified = {v.action_id: (ts, v) for ts, v in run.log.verifications_until(run.now)}
+    if not actions:
+        st.info("No actions requested yet.")
+    else:
+        rows = []
+        for a in actions:
+            check = verified.get(a.request.id)
+            rows.append({"Time": local_hhmm(a.requested_at), "Action": a.request.action.value,
+                         "Target": a.request.target, "Approval": "needed" if a.gated else "auto",
+                         "Status": a.status.value if a.status else "waiting", "By": a.decided_by,
+                         "Takes effect": local_hhmm(a.effective_at) if a.effective_at else "",
+                         "Verified": ("" if check is None else
+                                      f"{'recovered' if check[1].recovered else 'not recovered'} at "
+                                      f"{local_hhmm(check[0])}"),
+                         "Before / after / expected (kW)": ("" if check is None else
+                                                            f"{check[1].before_kw:.0f} / {check[1].after_kw:.0f} / "
+                                                            f"{check[1].expected_kw:.0f}")})
+        st.dataframe(pd.DataFrame(rows), hide_index=True, key="actions_table")
+    escalations = run.log.escalations_until(run.now)
+    if escalations:
+        st.markdown("**Handed to a human**")
+        st.dataframe(pd.DataFrame([{"Time": local_hhmm(e.ts), "Subject": e.subject, "Devices": ", ".join(e.devices),
+                                    "Reason": e.reason} for e in escalations]), hide_index=True,
+                     key="escalations_table")
+
+
+def llm_panel(run: source.Run) -> None:
+    st.subheader("LLM calls and time")
+    polls = run.log.polls_until(run.now)
+    calls = run.log.llm_calls_until(run.now)
+    agent_s = sum(p.agent_s for p in polls)
+    a, b, c, d = st.columns(4)
+    a.metric("LLM calls", len(calls))
+    b.metric("Model time", f"{sum(c.latency_s for c in calls):.1f} s")
+    c.metric("Cost", f"{sum(c.cost_usd for c in calls):.4f} USD")
+    d.metric("Agent time (incl. model)", f"{agent_s:.1f} s", f"{len(polls)} polls", delta_color="off")
+    if calls:
+        st.dataframe(pd.DataFrame([{"Role": c.role.value, "Model": c.model, "Purpose": c.purpose,
+                                    "Tokens in": c.prompt_tokens, "Tokens out": c.completion_tokens,
+                                    "Latency (s)": round(c.latency_s, 2), "Cost (USD)": c.cost_usd,
+                                    "Valid": c.ok, "Escalation": c.escalation} for c in calls]),
+                     hide_index=True, key="llm_table")
+    else:
+        st.caption("No model calls: the rules explained everything so far (or this run is rules only).")
+
+
+def report_markdown(run: source.Run, report: IncidentReport) -> str:
+    statuses = {a.request.id: a.status for a in run.log.actions_until(run.now)}
     verified = {v.action_id: v for v in report.verifications}
     lines = [f"# Shift report: {run.incident.id}", "",
-             "> SAMPLE report on a synthetic plant. Times in Asia/Riyadh.", "",
+             f"> Synthetic plant. {source.mode_label(run)}. Times in {DISPLAY_TZ}.", "",
              "## Summary (English)", "", report.summary_en, "",
              "## الملخص (العربية)", "", report.summary_ar, "",
              "## Root causes", ""]
-    lines += [f"- `{h.labels[0]}`: {'; '.join(h.evidence)}" for h in report.causes]
+    lines += [f"- `{', '.join(h.labels)}`: {'; '.join(h.evidence)}" for h in report.causes]
     lines += ["", "## Actions", "", "| Action | Target | Status | Verified |", "|---|---|---|---|"]
     for a in report.actions:
-        status = "executed" if a.id in executed else "waiting for approval"
+        status = statuses.get(a.id)
         v = verified.get(a.id)
         check = ("recovered" if v.recovered else "not recovered") if v else "—"
-        lines.append(f"| {a.action.value} | {a.target} | {status} | {check} |")
-    lines += ["", f"LLM calls: {report.llm_calls} · cost: {report.cost_usd:.3f} USD", ""]
+        lines.append(f"| {a.action.value} | {a.target} | {status.value.lower() if status else 'waiting'} | {check} |")
+    lines += ["", f"LLM calls: {report.llm_calls} · cost: {report.cost_usd:.4f} USD", ""]
     return "\n".join(lines)
 
 
-def report_tab(run: source.PlantRun) -> None:
-    report = run.agent.report
-    st.subheader("Shift report (sample)")
-    st.caption("SAMPLE: built from the scripted agent. The agent's report step replaces it.")
+def report_tab(run: source.Run) -> None:
+    st.subheader("Shift report")
+    report = run.log.report_until(run.now)
+    if report is None:
+        st.info("The agent writes the shift report at the end of the run.")
+        return
     en, ar = st.columns(2)
     with en:
         st.markdown("**English**")
-        st.write(report.summary_en)
+        st.markdown(md_escape(report.summary_en))
     with ar:
         st.markdown("**العربية**")
-        st.markdown(f'<div dir="rtl" lang="ar" style="text-align: right">{report.summary_ar}</div>',
+        st.markdown(f'<div dir="rtl" lang="ar" style="text-align: right">{source.html_text(report.summary_ar)}</div>',
                     unsafe_allow_html=True)
     st.download_button("Download report (Markdown)", report_markdown(run, report),
                        file_name=f"raqeeb_report_{run.incident.id}.md", mime="text/markdown", key="download_report")
-    with st.expander("Preview Markdown"):
-        st.markdown(report_markdown(run, report))
+    with st.expander("Markdown source"):
+        st.code(report_markdown(run, report), language="markdown")
 
 
-# -- page -----------------------------------------------------------------------
+def answer_key_tab(run: source.Run) -> None:
+    st.subheader("Answer key")
+    result = source.reveal(run)
+    if result is None:
+        st.info("Hidden while the run is in progress. The agent never sees it; it appears here once the run ends.")
+        return
+    if not st.toggle("Reveal answer key", key="reveal"):
+        st.caption("The run has ended. Turn on the switch to compare the agent with the planted faults.")
+        return
+    st.markdown(f"The agent named **{result.found} of {result.root_causes}** planted root causes"
+                + (f"; it also named {', '.join(md_escape(c) for c in result.extra_causes)}, which were not planted."
+                   if result.extra_causes else "."))
+    st.dataframe(result.faults, hide_index=True, key="reveal_faults")
+    st.markdown("**Actions against the answer key**")
+    st.dataframe(result.actions, hide_index=True, key="reveal_actions")
+
+
+def results_tab() -> None:
+    st.subheader("Benchmark results")
+    folders = source.results_folders()
+    st.session_state.setdefault("results_path", str(source.default_results_path()))
+    if folders:
+        st.selectbox("Bench output folders", [str(p) for p in folders], index=None, key="results_pick",
+                     placeholder="Pick a folder, or type a path below", format_func=lambda p: Path(p).name,
+                     on_change=lambda: st.session_state.update(results_path=st.session_state.results_pick))
+    st.text_input("Results folder or summary file (.csv / .json)", key="results_path")
+    path = Path(st.session_state.results_path)
+    path = path if path.is_absolute() else REPO_ROOT / path
+    results = source.load_results(path)
+    if results is None:
+        st.info(f"Results not available yet at {md_escape(path.name)}. The final benchmark results arrive after "
+                "the final run; until then pick a practice folder above.")
+        return
+    summary = results.summary
+    shown = summary[[c for c in SUMMARY_COLUMNS if c in summary.columns]].rename(columns=SUMMARY_COLUMNS)
+    st.dataframe(shown, hide_index=True, key="results_summary")
+    if "mwh_recovered" in summary.columns:
+        bars = summary.sort_values("mwh_recovered")
+        notes = bars["note"].fillna("").astype(str) if "note" in bars.columns else pd.Series("", index=bars.index)
+        colors = [MUTED if n else SERIES["actual"] for n in notes]
+        fig = go.Figure(go.Bar(x=bars["mwh_recovered"], y=bars["agent"], orientation="h", marker_color=colors,
+                               text=[f"{v:.1f}" for v in bars["mwh_recovered"]], textposition="outside",
+                               hovertemplate="%{y}: %{x:.1f} MWh<extra></extra>"))
+        fig.update_layout(height=60 + 45 * len(bars), margin={"l": 0, "r": 40, "t": 10, "b": 0},
+                          xaxis_title="Energy recovered vs no action (MWh)")
+        st.plotly_chart(fig, key="results_chart")
+        lost = summary["mwh_lost"].iloc[0] if "mwh_lost" in summary.columns else None
+        st.caption("Grey bars are reference bounds, not competitors (oracle reads the answer key; empty does nothing)."
+                   + (f" Energy lost to the faults with no action: {lost:.1f} MWh." if lost is not None else ""))
+    if results.results is not None and {"agent", "scenario_id", "mwh_recovered"} <= set(results.results.columns):
+        with st.expander("Per scenario: MWh recovered"):
+            st.dataframe(results.results.pivot_table(index="scenario_id", columns="agent", values="mwh_recovered"),
+                         key="results_per_scenario")
+    if results.markdown:
+        with st.expander("Full summary (summary.md)"):
+            st.markdown(results.markdown)
+
+
+def footer() -> None:
+    st.divider()
+    st.caption(f"{source.FOOTER} {source.NASA_CREDIT}")
+
+
+# -- page ------------------------------------------------------------------------------------
+
+
+def initial_run() -> source.Run:
+    replays = replay_choices()
+    if replays:
+        st.session_state.setdefault("replay_choice", next(iter(replays)))
+        return source.start_replay(st.session_state.replay_choice)
+    return source.start_live(scenario_choices()[1], Mode.RULES)
 
 
 def main() -> None:
     st.set_page_config(page_title="Raqeeb console", layout="wide")
-    ids, default_id = scenario_ids()
-    st.session_state.setdefault("run_key", ("scenario", default_id))
-    st.session_state.setdefault("decisions", {})
-    st.session_state.setdefault("replay_id", default_id)
-    run = load_run(*st.session_state.run_key)
-    st.session_state.setdefault("clock", default_clock(run))
+    _, default_id = scenario_choices()
+    st.session_state.setdefault("scenario_id", default_id)
+    st.session_state.setdefault("speed", 60)
+    st.session_state.setdefault("playing", False)
+    if "run" not in st.session_state:
+        st.session_state.run = initial_run()
+        st.session_state.mode_choice = REPLAY if isinstance(st.session_state.run, ReplayRun) else LIVE_RULES
+    run: source.Run = st.session_state.run
 
-    sidebar(ids, run)
-    now = run.times[st.session_state.clock].to_pydatetime().astimezone(timezone.utc)
-    st.session_state.now = now
-
+    sidebar(run)
     st.title("Raqeeb console")
-    st.markdown(f"Incident **{run.incident.id}** · {local(run.start):%Y-%m-%d} · "
-                f"clock **{local(now):%H:%M}** ({DISPLAY_TZ}) · site {load_plant().site.name}")
-    st.info(SYNTHETIC_NOTE)
-    pending = sum(p.at <= now and p.request.id not in st.session_state.decisions for p in run.agent.approvals)
-    headline(run, now, pending)
+    st.caption(source.FOOTER)
+    kind = "Replay" if isinstance(run, ReplayRun) else "Live"
+    st.info(f"**Mode: {md_escape(source.mode_label(run))}**  \n{kind} run of incident **{md_escape(run.incident.id)}** · "
+            f"{local(run.incident.start):%Y-%m-%d} · sim clock **{local(run.now):%H:%M}** ({DISPLAY_TZ}) · "
+            f"site {md_escape(load_plant().site.name)}")
+    data = source.tables(run)
+    power = lines(run)
+    if run.waiting:
+        st.warning("The agent requested an action that needs human approval. The run is paused until you decide.")
+        approvals(run)
+    headline(run, power, data)
 
-    ops, agent, results, report = st.tabs(["Operations", "Agent", "Results", "Report"])
+    ops, agent, report, key, results = st.tabs(["Operations", "Agent", "Report", "Answer key", "Results"])
     with ops:
         left, right = st.columns([5, 6])
         with left:
-            plant_map(run, now)
+            plant_map(run)
         with right:
-            alarm_feed(run, now)
-        recovery_chart(run, now)
+            alarm_feed(data)
+        recovery_chart(run, power)
+        technician_notes(data)
     with agent:
         left, right = st.columns([3, 2])
-        with right:
-            approvals(run, now)
         with left:
-            agent_timeline(run, now)
-    with results:
-        results_tab()
+            agent_timeline(run)
+        with right:
+            if not run.waiting:
+                approvals(run)
+        actions_panel(run)
+        llm_panel(run)
     with report:
         report_tab(run)
+    with key:
+        answer_key_tab(run)
+    with results:
+        results_tab()
+    footer()
+
+    if st.session_state.playing:
+        if run.finished or run.waiting:
+            st.session_state.playing = False
+        else:
+            time.sleep(TICK_S)
+            run.advance(st.session_state.speed)
+            st.rerun()
 
 
 main()
