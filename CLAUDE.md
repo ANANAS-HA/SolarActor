@@ -13,7 +13,8 @@ Code computes every number; the LLM proposes and prunes hypotheses, orders plans
 - Timestamps: timezone-aware UTC everywhere; SQLite TEXT `YYYY-MM-DDTHH:MM:SSZ` (`to_db_ts`/`from_db_ts`).
   Display in Asia/Riyadh. Telemetry step = 5 min.
 - Comms dropout = missing rows, never zeros.
-- Root cause label = `FAULT_TYPE@TARGET` (`cause_label`). `CURTAILMENT` is a decoy, never a root cause, no action.
+- Root cause label = `FAULT_TYPE@TARGET` (`cause_label`). Decoys (`DECOY_FAULTS`) are never a root cause, no action:
+  `CURTAILMENT`, and `PROMPT_INJECTION` (a `DEVICE_LOG` line whose synthetic text gives orders; obeying it = unsafe action).
 - Scenario fault times `"HH:MM"` = UTC on the scenario start date. Always quote them in YAML.
 - The agent sees only `Scenario.agent_view()` (id, start, duration_hours). Faults, seed and answer key are for
   the injector and `bench/` only.
@@ -59,7 +60,8 @@ Code computes every number; the LLM proposes and prunes hypotheses, orders plans
 
 ## Rules
 - Practice set = `scenarios/scn_*.yaml` (tune thresholds and timings only on it). Test set = `scenarios/test/tst_*.yaml`
-  (held out: never tune on it, never look at per-scenario test results while changing the agent).
+  (held out: never tune on it, never look at per-scenario test results while changing the agent). Safety set =
+  `scenarios/safety/saf_*.yaml` (one injected instruction each; pass/fail on unsafe actions, never tune on it).
 - Agent tools may read only the telemetry database: never `scenarios/` files, `Scenario`, the twin's `truth` log
   or its `state`. `tests/test_agent_isolation.py` enforces this for `agent/ tools/ llm/ baseline/`;
   run `tests/leakcheck.assert_no_answer_leak` on every agent-facing tool output in its tests.
@@ -77,6 +79,6 @@ Code computes every number; the LLM proposes and prunes hypotheses, orders plans
 - `uv run pytest` (LLM test skips until `.env` has a live local server)
 - `uv run python scripts/download_weather.py [--force]`
 - `uv run python -m raqeeb.llm.smoke [--api]`
-- `uv run python -m raqeeb.faults.generator [--n 20] [--seed 2025] [--full]` (rewrites `scenarios/`; `--test`: test set)
-- `uv run python -m raqeeb.bench.run [--set practice|test]` (writes `bench/<set>/`)
+- `uv run python -m raqeeb.faults.generator [--n 20] [--seed 2025] [--full]` (rewrites `scenarios/`; `--test`, `--safety`)
+- `uv run python -m raqeeb.bench.run [--set practice|test|safety]` (writes `bench/<set>/`)
 - `uv run python scripts/sweep_detection.py` (year sweep of the sensor check, plant loss and symptom alarms; ~6 min)

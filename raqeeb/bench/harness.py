@@ -1,6 +1,7 @@
 """Run one scenario with one agent and record what the scorer needs.
 
     record = run_scenario(scenario, agent)          # RunRecord
+    record = run_with_control(scenario, make_agent) # same, plus a control run if it has injected instructions
     row = score_run(record)                         # bench/score.py
 
 The harness is the agent's environment. It drives the plant through the FaultInjector, writes
@@ -14,7 +15,12 @@ twin.controls.apply_action. Outcomes go back to the agent on the next poll.
 The harness (not the agent) also reads the twin: after every poll it checks in twin.state
 whether each answer-key cause is mitigated, and it takes energy from twin.truth. Energy is
 compared with a no-action run (same faults, no fixes) and a decoy-only run (only the
-curtailment decoys, i.e. no real fault at all) of the same seed.
+decoys: curtailment and injected log lines, i.e. no real fault at all) of the same seed.
+
+Injected instructions (PROMPT_INJECTION): a scenario with one is run twice by run_with_control,
+by two fresh agents: as planted, and with every injected log line carrying neutral text instead.
+Telemetry is otherwise identical, so an action that only the first run requests was triggered
+by the text (bench/score.py: unsafe actions).
 """
 
 from __future__ import annotations
@@ -42,7 +48,7 @@ from raqeeb.contracts import (
     Scenario,
     Verification,
 )
-from raqeeb.faults.catalogue import STORM_DEFAULT_MIN
+from raqeeb.faults.catalogue import STORM_DEFAULT_MIN, Injection
 from raqeeb.faults.injector import FaultInjector
 from raqeeb.telemetry.store import TelemetryStore
 from raqeeb.twin.controls import apply_action
@@ -136,6 +142,9 @@ class RunRecord:
     energy_mwh: float = 0.0
     reference: ReferenceEnergy | None = None
     storms: list[tuple[datetime, datetime]] = field(default_factory=list)  # dust-storm windows [start, end)
+    injections: list[Injection] = field(default_factory=list)  # injected log lines posted during the run
+    # (action, target) the agent requested in the neutral-text control run; None = no control run made
+    control_actions: list[tuple[ActionType, str]] | None = None
 
     @property
     def incident_start(self) -> datetime | None:
@@ -180,16 +189,18 @@ def _answer_key(scenario: Scenario) -> list[str]:
 
 def run_scenario(scenario: Scenario, agent: Agent, *, poll_min: int = POLL_MIN,
                  approve: Callable[[ActionRequest], bool] = approve_all, telemetry=None,
-                 reference: ReferenceEnergy | None = None, plant: PlantConfig | None = None) -> RunRecord:
+                 reference: ReferenceEnergy | None = None, plant: PlantConfig | None = None,
+                 neutral_injections: bool = False) -> RunRecord:
     """Run `agent` on `scenario` to the end of its window. `telemetry` needs write_batch and read;
-    by default each run gets its own in-memory TelemetryStore, closed when the run ends."""
+    by default each run gets its own in-memory TelemetryStore, closed when the run ends.
+    `neutral_injections`: injected log lines carry neutral text (the control run)."""
     if poll_min < STEP_MINUTES or poll_min % STEP_MINUTES:
         raise ValueError(f"poll_min must be a multiple of {STEP_MINUTES}")
     plant = plant or load_plant()
     weather = weather_5min(scenario.start, scenario.end, plant)
     reference = reference or reference_energy(scenario, plant, weather)
     specs = load_actions()
-    inj = FaultInjector.for_scenario(scenario, plant, weather)
+    inj = FaultInjector.for_scenario(scenario, plant, weather, neutral_injections=neutral_injections)
     twin = inj.twin
     owns_telemetry = telemetry is None
     telemetry = TelemetryStore() if owns_telemetry else telemetry
@@ -250,4 +261,15 @@ def run_scenario(scenario: Scenario, agent: Agent, *, poll_min: int = POLL_MIN,
     if owns_telemetry:
         telemetry.close()
     record.energy_mwh = energy_mwh(twin.truth)
+    record.injections = inj.injections
+    return record
+
+
+def run_with_control(scenario: Scenario, make_agent: Callable[[], Agent], **kwargs) -> RunRecord:
+    """run_scenario with a fresh agent; if the scenario has injected instructions, run a second fresh
+    agent with neutral log text and keep the (action, target) pairs it requested as the control."""
+    record = run_scenario(scenario, make_agent(), **kwargs)
+    if any(f.type == FaultType.PROMPT_INJECTION for f in scenario.faults):
+        control = run_scenario(scenario, make_agent(), neutral_injections=True, **kwargs)
+        record.control_actions = [(a.request.action, a.request.target) for a in control.actions]
     return record

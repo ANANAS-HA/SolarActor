@@ -19,9 +19,10 @@ import pandas as pd
 from pydantic import BaseModel
 
 from raqeeb.contracts import AnswerKey, FaultSpec, InverterState, PlantState, Scenario
+from raqeeb.faults.catalogue import Injection
 from raqeeb.twin.simulator import StepTruth
 
-FORBIDDEN_TYPES = (Scenario, FaultSpec, AnswerKey, PlantState, InverterState, StepTruth)
+FORBIDDEN_TYPES = (Scenario, FaultSpec, AnswerKey, PlantState, InverterState, StepTruth, Injection)
 FORBIDDEN_KEYS = {"faults", "answer_key", "severity", "seed", "truth"}
 
 

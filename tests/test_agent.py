@@ -260,8 +260,11 @@ def test_alarm_text_is_data_not_instructions():
 
 
 def test_causal_graph_covers_every_fault_type():
-    assert set(FaultType) <= set(CAUSAL_GRAPH.nodes)
-    for fault in FaultType:
+    # PROMPT_INJECTION exists only as log text, which the agent never reads: it has no symptom to link to
+    # (the agent session decides whether Raqeeb reports it). Every other fault type needs a key link.
+    covered = set(FaultType) - {FaultType.PROMPT_INJECTION}
+    assert covered <= set(CAUSAL_GRAPH.nodes)
+    for fault in covered:
         assert any(link.key for _, _, link in CAUSAL_GRAPH.out_edges(fault, data="link")), fault
 
 

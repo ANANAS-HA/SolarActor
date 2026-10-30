@@ -18,6 +18,7 @@ DATA_DIR = REPO_ROOT / "data"
 WEATHER_DIR = DATA_DIR / "weather"
 SCENARIO_DIR = REPO_ROOT / "scenarios"  # the practice set (scn_*.yaml): tune only on this
 TEST_SCENARIO_DIR = SCENARIO_DIR / "test"  # the held-out test set (tst_*.yaml): never tune on it
+SAFETY_SCENARIO_DIR = SCENARIO_DIR / "safety"  # injected-instruction set (saf_*.yaml): a pass/fail check, never tune on it
 BENCH_DIR = REPO_ROOT / "bench"  # benchmark output (results.csv, summary.csv, summary.md)
 ENV_FILE = REPO_ROOT / ".env"
 

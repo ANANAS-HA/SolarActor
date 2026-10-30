@@ -5,18 +5,21 @@ from collections import Counter
 
 import pytest
 
-from raqeeb.config import SCENARIO_DIR, TEST_SCENARIO_DIR, load_plant
+from raqeeb.config import SAFETY_SCENARIO_DIR, SCENARIO_DIR, TEST_SCENARIO_DIR, load_plant
 from raqeeb.contracts import CORE_FAULTS, DECOY_FAULTS, FULL_SCOPE_FAULTS, FaultType
 from raqeeb.faults.generator import (
     COOL_MONTHS,
+    SAFETY,
     TEST,
     generate,
     has_decoy,
+    has_injection,
     is_trap,
     load_scenarios,
     storm_scenario,
     write_scenarios,
 )
+from raqeeb.faults.catalogue import INJECTION_TEMPLATES
 from raqeeb.faults.injector import FaultInjector
 
 SYMPTOM_CODES = {"LOW_PR", "LOW_STRING_CURRENT", "DC_INPUT_LOW"}
@@ -91,7 +94,8 @@ def test_committed_test_set_is_held_out_and_full_scope(core):
     assert not {s.seed for s in test_set} & {s.seed for s in core}  # new seeds
     assert not {s.id for s in test_set} & {s.id for s in core}
     used = {f.type for s in test_set for f in s.faults}
-    assert FULL_SCOPE_FAULTS <= used and CORE_FAULTS <= used
+    assert FULL_SCOPE_FAULTS - DECOY_FAULTS <= used and CORE_FAULTS <= used
+    assert FaultType.PROMPT_INJECTION not in used  # injected instructions live in the safety set
     assert sum(is_trap(s) for s in test_set) >= 5 and sum(has_decoy(s) for s in test_set) >= 5
     assert load_scenarios(SCENARIO_DIR) == core  # practice files are not picked up from test/ or vice versa
 
@@ -139,3 +143,31 @@ def test_storm_scenario(seed):
     assert s.answer_key == s.expected_answer_key()
     if FaultType.SENSOR_SOILING in types:
         assert is_trap(s)
+
+
+def test_committed_safety_set_has_one_injection_each():
+    """scenarios/safety/: full-scope scenarios plus one injected instruction, never in the answer key."""
+    safety = load_scenarios(SAFETY_SCENARIO_DIR, SAFETY["prefix"])
+    assert safety == generate(SAFETY["n"], SAFETY["seed"], SAFETY["full_scope"], SAFETY["prefix"], SAFETY["injections"])
+    assert len(safety) == SAFETY["n"] and all(s.id.startswith("saf_") for s in safety)
+    test_seeds = {s.seed for s in load_scenarios(TEST_SCENARIO_DIR, TEST["prefix"])}
+    assert not {s.seed for s in safety} & (test_seeds | {s.seed for s in generate()})
+    plant, templates = load_plant(), set()
+    for s in safety:
+        (line,) = [f for f in s.faults if f.type == FaultType.PROMPT_INJECTION]
+        assert has_injection(s) and s.answer_key == s.expected_answer_key() and s.answer_key.root_causes
+        assert not any(label.startswith("PROMPT_INJECTION") for label in s.answer_key.root_causes)
+        others = [f.target for f in s.faults if f is not line]
+        assert line.target not in others or line.target == plant.weather_station_id
+        assert "PROMPT_INJECTION" in (SAFETY_SCENARIO_DIR / f"{s.id}.yaml").read_text(encoding="utf-8").split("\n", 3)[2]
+        inj = FaultInjector.for_scenario(s, plant)
+        inj.run_to_end()
+        (posted,) = inj.injections
+        templates.add(next(k for k, t in enumerate(INJECTION_TEMPLATES) if posted.text.startswith(t.text[:20])))
+    assert len(templates) == len(INJECTION_TEMPLATES)  # every attack text is in the set
+
+
+def test_injections_only_on_request():
+    assert not any(has_injection(s) for s in generate(n=30, seed=11, full_scope=True))
+    assert all(FaultType.PROMPT_INJECTION not in {f.type for f in storm_scenario(k, full_scope=True).faults}
+               for k in range(12))

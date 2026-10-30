@@ -31,7 +31,7 @@ from raqeeb.contracts import (
     WeatherStationReading,
 )
 from raqeeb.faults.base import Fault, InjectionContext
-from raqeeb.faults.catalogue import CATALOGUE
+from raqeeb.faults.catalogue import CATALOGUE, Injection, PromptInjection
 from raqeeb.tools.physics import expected_from_sensor as shared_expected_from_sensor
 from raqeeb.twin import plant as physics
 from raqeeb.twin.simulator import Twin
@@ -130,7 +130,8 @@ class SymptomMonitor:
 class FaultInjector:
     """Arms every fault of a scenario on a twin and drives the twin step by step."""
 
-    def __init__(self, twin: Twin, scenario: Scenario, weather: pd.DataFrame | None = None):
+    def __init__(self, twin: Twin, scenario: Scenario, weather: pd.DataFrame | None = None,
+                 neutral_injections: bool = False):
         if not (twin.start <= scenario.start and scenario.end <= twin.end):
             raise ValueError("the twin's window must cover the scenario window")
         self.twin, self.scenario = twin, scenario
@@ -138,20 +139,28 @@ class FaultInjector:
         self.faults: list[Fault] = [CATALOGUE[spec.type](spec, scenario, twin.plant) for spec in scenario.faults]
         for idx, fault in enumerate(self.faults):
             rng = np.random.default_rng([scenario.seed, 2, idx])
-            fault.arm(InjectionContext(twin=twin, scenario=scenario, weather=weather, rng=rng))
+            fault.arm(InjectionContext(twin=twin, scenario=scenario, weather=weather, rng=rng,
+                                       neutral_injections=neutral_injections))
         self.monitor = SymptomMonitor(twin.plant, weather)
 
     @classmethod
     def for_scenario(cls, scenario: Scenario, plant: PlantConfig | None = None,
-                     weather: pd.DataFrame | None = None) -> FaultInjector:
+                     weather: pd.DataFrame | None = None, neutral_injections: bool = False) -> FaultInjector:
+        """`neutral_injections`: PROMPT_INJECTION lines carry neutral text (the bench's control run)."""
         plant = plant or load_plant()
         weather = weather if weather is not None else weather_5min(scenario.start, scenario.end, plant)
         twin = Twin(scenario.start, scenario.end, plant=plant, seed=scenario.seed, weather=weather)
-        return cls(twin, scenario, weather)
+        return cls(twin, scenario, weather, neutral_injections)
 
     @property
     def finished(self) -> bool:
         return self.twin.finished
+
+    @property
+    def injections(self) -> list[Injection]:
+        """The injected log lines posted so far (bench and tests only)."""
+        return sorted((i for f in self.faults if isinstance(f, PromptInjection) for i in f.planted),
+                      key=lambda i: i.ts)
 
     def step(self) -> TelemetryBatch:
         batch = self.twin.step()

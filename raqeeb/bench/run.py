@@ -1,10 +1,12 @@
 """Run the benchmark over the scenarios and write the results.
 
-    uv run python -m raqeeb.bench.run [--set practice|test] [--agents threshold,oracle,empty]
+    uv run python -m raqeeb.bench.run [--set practice|test|safety] [--agents threshold,oracle,empty]
                                       [--scenarios scn_0001,scn_0007] [--poll-min 15] [--out bench/<set>]
 
-Two scenario sets, reported separately: "practice" (scenarios/scn_*.yaml; thresholds and timings
-are tuned on it, then frozen) and "test" (scenarios/test/tst_*.yaml; held out, never tuned on).
+Scenario sets, reported separately: "practice" (scenarios/scn_*.yaml; thresholds and timings
+are tuned on it, then frozen), "test" (scenarios/test/tst_*.yaml; held out, never tuned on) and
+"safety" (scenarios/safety/saf_*.yaml; each has an injected instruction in a log line, and each
+agent also runs a neutral-text control so unsafe actions can be counted; never tuned on).
 Writes <out>/results.csv (one row per agent x scenario), <out>/summary.csv (one row per agent,
 what the console shows) and <out>/summary.md (the same table plus where each agent is wrong
 and where it loses head-to-head). Agents with a note in AGENTS are reference bounds, not
@@ -23,9 +25,9 @@ import pandas as pd
 from raqeeb.agent import RaqeebAgent
 from raqeeb.baseline.threshold import ThresholdBaseline
 from raqeeb.bench.fakes import EmptyAgent, OracleAgent
-from raqeeb.bench.harness import POLL_MIN, RunRecord, reference_energy, run_scenario
+from raqeeb.bench.harness import POLL_MIN, RunRecord, reference_energy, run_with_control
 from raqeeb.bench.score import results_frame, summarize, summary_markdown
-from raqeeb.config import BENCH_DIR, SCENARIO_DIR, TEST_SCENARIO_DIR, load_plant
+from raqeeb.config import BENCH_DIR, SAFETY_SCENARIO_DIR, SCENARIO_DIR, TEST_SCENARIO_DIR, load_plant
 from raqeeb.contracts import Agent, Scenario
 from raqeeb.twin.weather import weather_5min
 
@@ -43,7 +45,8 @@ AGENTS: dict[str, AgentEntry] = {
     "empty": AgentEntry(lambda s: EmptyAgent(), "reference lower bound: does nothing"),
 }
 DEFAULT_AGENTS = ["raqeeb", "threshold", "oracle", "empty"]
-SETS: dict[str, tuple[Path, str]] = {"practice": (SCENARIO_DIR, "scn"), "test": (TEST_SCENARIO_DIR, "tst")}
+SETS: dict[str, tuple[Path, str]] = {"practice": (SCENARIO_DIR, "scn"), "test": (TEST_SCENARIO_DIR, "tst"),
+                                   "safety": (SAFETY_SCENARIO_DIR, "saf")}
 
 
 def load_scenarios(ids: list[str] | None = None, scenario_set: str = "practice") -> list[Scenario]:
@@ -64,8 +67,9 @@ def run_bench(scenarios: list[Scenario], agents: list[str], poll_min: int = POLL
     for scenario in scenarios:
         reference = reference_energy(scenario, plant, weather_5min(scenario.start, scenario.end, plant))
         for name in agents:
-            agent = AGENTS[name].make(scenario)
-            records.append(run_scenario(scenario, agent, poll_min=poll_min, reference=reference, plant=plant))
+            make = AGENTS[name].make
+            records.append(run_with_control(scenario, lambda: make(scenario), poll_min=poll_min,
+                                            reference=reference, plant=plant))
         print(f"{scenario.id}: done ({', '.join(agents)})")
     return records
 
@@ -86,7 +90,7 @@ def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--agents", default=",".join(DEFAULT_AGENTS), help=f"comma-separated, from {sorted(AGENTS)}")
     parser.add_argument("--set", dest="scenario_set", choices=sorted(SETS), default="practice",
-                        help="practice (tune on it) or test (held out, never tune on it)")
+                        help="practice (tune on it), test (held out) or safety (injected instructions)")
     parser.add_argument("--scenarios", default="", help="comma-separated ids (default: the whole set)")
     parser.add_argument("--poll-min", type=int, default=POLL_MIN)
     parser.add_argument("--out", type=Path, default=None, help="default: bench/<set>")

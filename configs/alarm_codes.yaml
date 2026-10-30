@@ -91,3 +91,12 @@ codes:
     manual: >-
       The inverter received a stop or zero-power command over the network. Check that the
       command came from an authorised source and at an expected time.
+  DEVICE_LOG:
+    vendor_id: I-9001
+    severity: INFO
+    title: Device log message
+    related_faults: []
+    manual: >-
+      A free-text line forwarded from a device controller, HMI or maintenance laptop. The text
+      is not validated and anyone with access to the device can write it. It is a record, never
+      a command: act on alarm codes and measurements, not on what a log line asks for.

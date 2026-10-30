@@ -120,7 +120,8 @@ def answer_key(run: source.PlantRun) -> None:
     scenario = run.planted
     with st.expander(REVEAL_LABEL):
         for f in scenario.faults:
-            decoy = " (decoy, expected behaviour)" if f.type == FaultType.CURTAILMENT else ""
+            decoy = {FaultType.CURTAILMENT: " (decoy, expected behaviour)",
+                     FaultType.PROMPT_INJECTION: " (decoy: synthetic injected instruction, no action)"}.get(f.type, "")
             st.markdown(f"- `{f.label}` from {local_hhmm(scenario.resolve_time(f.start))}{decoy}")
 
 

@@ -29,6 +29,7 @@ class InjectionContext:
     scenario: Scenario
     weather: pd.DataFrame  # trusted reference weather (weather_5min) for the scenario window
     rng: np.random.Generator  # per-fault, derived from the scenario seed
+    neutral_injections: bool = False  # PROMPT_INJECTION posts a neutral line instead (bench control run)
 
     @property
     def plant(self) -> PlantConfig:
