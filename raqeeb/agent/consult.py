@@ -29,12 +29,14 @@ result stands. Every LlmCall goes into the turn.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, time, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from raqeeb.agent.rank import CAUSAL_GRAPH, candidates, near_tie_candidates, rank
 from raqeeb.agent.state import PASSIVE, Cause, CauseStatus, Memory, PollState
 from raqeeb.contracts import (
     DECOY_FAULTS,
+    DISPLAY_TZ,
     PLANT_TARGET,
     Diagnosis,
     FaultType,
@@ -50,6 +52,9 @@ AREA_MIN_SHARE = 0.75  # an area cause must cover at least this share of the are
 WEAK_KINDS = {SymptomKind.DEVICE_UNDERPERFORMANCE, SymptomKind.FLAT_CAP_DEVICE, SymptomKind.ALARM,
               SymptomKind.DATA_GAP}
 SOURCE_LLM = "llm"
+NOTICE_TIME_TOL = timedelta(minutes=20)  # a notice's start / end within this of the measured cap's
+NOTICE_LEVEL_TOL = 0.05  # its limit within this share of the measured plant level
+_TZ = ZoneInfo(DISPLAY_TZ)
 
 
 def notes_until(memory: Memory, now: datetime) -> list[TechnicianNote]:
@@ -72,8 +77,54 @@ def _devices(memory: Memory, target: str) -> list[str]:
 # -- testing a proposal ------------------------------------------------------------------------------
 
 
-def test_hypothesis(memory: Memory, h: Hypothesis, unexplained: set[str]) -> tuple[list[str], str]:
-    """(symptom ids it is accepted to explain, "") or ([], why it was rejected)."""
+def _local_to_utc(memory: Memory, hhmm: str) -> datetime:
+    day = memory.view.start.astimezone(_TZ).date()
+    hour, minute = (int(x) for x in hhmm.split(":"))
+    return datetime.combine(day, time(hour, minute), tzinfo=_TZ).astimezone(timezone.utc)
+
+
+def _put(numbers: dict | None, **values) -> None:
+    """Record the numbers a test used (for the structured log details); no effect on the decision."""
+    if numbers is not None:
+        numbers.update(values)
+
+
+def test_notice(memory: Memory, h: Hypothesis, unexplained: set[str],
+                numbers: dict | None = None) -> tuple[list[str], str]:
+    """A CURTAILMENT proposed from a grid-operator notice: accepted only if the notice's window and limit
+    match a plant-wide flat cap the tools measured with no grid setpoint behind it. It can only reduce
+    actions (the cause is expected behaviour), never trigger one."""
+    if h.notice is None or h.targets != [PLANT_TARGET]:
+        return [], "curtailment without a grid setpoint needs a grid-operator notice for the whole plant"
+    caps = [memory.symptoms[sid] for sid in unexplained if memory.symptoms[sid].kind == SymptomKind.FLAT_CAP_PLANT
+            and not memory.symptoms[sid].evidence.get("grid_limit")]
+    if not caps:
+        return [], "no unexplained plant-wide flat cap to explain"
+    start, end = _local_to_utc(memory, h.notice.start_local), _local_to_utc(memory, h.notice.end_local)
+    _put(numbers, path="notice", notice_limit_kw=h.notice.limit_kw, caps=len(caps))
+    for cap in caps:
+        level = cap.evidence.get("plant_kw")
+        cap_end = cap.evidence.get("end")
+        ok_start = abs(cap.start - start) <= NOTICE_TIME_TOL
+        ok_end = cap_end is None or cap.evidence.get("ongoing") or abs(cap_end - end) <= NOTICE_TIME_TOL
+        ok_level = level is not None and abs(level - h.notice.limit_kw) <= NOTICE_LEVEL_TOL * h.notice.limit_kw
+        _put(numbers, start_delta_min=round((start - cap.start).total_seconds() / 60, 1),
+             end_delta_min=None if cap_end is None else round((end - cap_end).total_seconds() / 60, 1),
+             cap_level_kw=level, level_delta_share=None if level is None else round(h.notice.limit_kw / level - 1, 4))
+        if ok_start and ok_end and ok_level:
+            explains = {cap.id} | {sid for sid in unexplained & set(h.explains)
+                                   if memory.symptoms[sid].kind == SymptomKind.PLANT_UNDERPERFORMANCE}
+            return sorted(explains), ""
+    return [], (f"the notice ({h.notice.start_local}-{h.notice.end_local}, {h.notice.limit_kw / 1000:.1f} MW) "
+                "does not match the measured plant cap")
+
+
+def test_hypothesis(memory: Memory, h: Hypothesis, unexplained: set[str],
+                    numbers: dict | None = None) -> tuple[list[str], str]:
+    """(symptom ids it is accepted to explain, "") or ([], why it was rejected). `numbers`, if given, receives
+    the figures the test used (for the log); it never changes the decision."""
+    if h.fault_type == FaultType.CURTAILMENT:
+        return test_notice(memory, h, unexplained, numbers)
     if h.fault_type in DECOY_FAULTS or len(h.targets) != 1:
         return [], "decoys and multi-target proposals are left to the rules"
     target = h.targets[0]
@@ -81,9 +132,11 @@ def test_hypothesis(memory: Memory, h: Hypothesis, unexplained: set[str]) -> tup
     if h.fault_type in CAUSAL_GRAPH and h.fault_type not in memory.disabled:
         match = next((c for c in candidates(active, memory.plant, memory.disabled)
                       if (c.fault, c.target) == (h.fault_type, target)), None)
+        _put(numbers, path="causal_graph", candidate=match is not None)
         if match is None:
             return [], "the causal graph finds no key symptom for it, or a symptom rules it out"
         explains = sorted({s.id for s in match.explains} & unexplained)
+        _put(numbers, support=match.support, explains_unexplained=len(explains), min_support=ACCEPT_MIN_SUPPORT)
         if match.support < ACCEPT_MIN_SUPPORT or not explains:
             return [], f"support {match.support:.2f}, explains {len(explains)} unexplained symptoms"
         return explains, ""
@@ -99,6 +152,7 @@ def test_hypothesis(memory: Memory, h: Hypothesis, unexplained: set[str]) -> tup
         explains = sorted(sid for sid in unexplained if memory.symptoms[sid].device_id in here)
         weak = [sid for sid in unexplained if memory.symptoms[sid].kind in WEAK_KINDS
                 and memory.symptoms[sid].device_id in plant.inverters.ids]
+        _put(numbers, path="footprint", explains_on_target=len(explains), weak_inverters_unexplained=len(weak))
         if not explains or (target == plant.weather_station_id and weak):
             return [], f"footprint does not match: {len(explains)} unexplained symptoms on {target}"
         return explains, ""
@@ -110,6 +164,7 @@ def test_hypothesis(memory: Memory, h: Hypothesis, unexplained: set[str]) -> tup
         theirs = set(c.hypothesis.explains) & memory.active
         if c.source != SOURCE_LLM and c.status not in PASSIVE and c.hypothesis.targets[0] in devices \
                 and not theirs <= cited:
+            _put(numbers, path="footprint", conflicts_with=c.label, uncovered=len(theirs - cited))
             return [], f"{c.label} already explains {c.hypothesis.targets[0]} and the proposal does not cover it"
     claimed = (unexplained | cited) & set(memory.active)
     weak = {memory.symptoms[sid].device_id for sid in unexplained
@@ -119,6 +174,8 @@ def test_hypothesis(memory: Memory, h: Hypothesis, unexplained: set[str]) -> tup
     inside = {d for d in weak if d in devices}
     outside = weak - devices
     inverters = devices & set(plant.inverters.ids)
+    _put(numbers, path="footprint", units_in_target=len(inverters), weak_inside=len(inside), weak_outside=len(outside),
+         min_share=AREA_MIN_SHARE)
     if not inverters or len(inside) < AREA_MIN_SHARE * len(inverters) or outside:
         return [], (f"footprint does not match: {len(inside)} of {len(inverters)} units in {target} weak, "
                     f"{len(outside)} weak units outside it")
@@ -156,13 +213,15 @@ def consult(state: PollState) -> PollState:
 
     # Re-test what the model proposed before; keep what still fits, drop what no longer does
     for cause in _accepted(memory):
-        explains, why = test_hypothesis(memory, cause.hypothesis, unexplained | set(cause.hypothesis.explains))
+        numbers: dict = {}
+        explains, why = test_hypothesis(memory, cause.hypothesis, unexplained | set(cause.hypothesis.explains), numbers)
         if explains:
             cause.hypothesis = cause.hypothesis.model_copy(update={"explains": explains})
             unexplained -= set(explains)
         elif not cause.action_ids and cause.status in (CauseStatus.OPEN, CauseStatus.WAITING):
             del memory.causes[cause.label]
-            memory.log(now, "consult", f"dropped model-proposed {cause.label}: {why}")
+            memory.log(now, "consult", f"dropped model-proposed {cause.label}: {why}", decision="dropped",
+                       label=cause.label, reason=why, numbers=numbers)
             changed = True
 
     stuck = {sid for sid in unexplained if memory.unexplained_polls.get(sid, 0) + 1 >= CONSULT_AFTER_POLLS}
@@ -186,17 +245,22 @@ def consult(state: PollState) -> PollState:
             label = h.labels[0] if h.targets else h.id
             if label in memory.causes:
                 continue
-            explains, why = test_hypothesis(memory, h, unexplained)
+            numbers = {}
+            explains, why = test_hypothesis(memory, h, unexplained, numbers)
             if not explains:
-                memory.log(now, "consult", f"rejected model proposal {label}: {why}")
+                memory.log(now, "consult", f"rejected model proposal {label}: {why}", decision="rejected", label=label,
+                           reason=why, hypothesis=h.model_dump(mode="json"), numbers=numbers)
                 continue
             tested = h.model_copy(update={"id": f"H-{label}", "explains": explains, "score": 0.0,
                                           "evidence": [*h.evidence, "proposed by a language model, tested on tool data"]})
+            status = CauseStatus.EXPECTED if h.fault_type == FaultType.CURTAILMENT else CauseStatus.OPEN
             memory.causes[label] = Cause(hypothesis=tested, first_seen=now, last_selected=now, source=SOURCE_LLM,
-                                         confidence=0.0)
+                                         confidence=0.0, status=status)
             unexplained -= set(explains)
             changed = accepted_now = True
-            memory.log(now, "consult", f"accepted model proposal {label} after testing: explains {', '.join(explains)}")
+            memory.log(now, "consult", f"accepted model proposal {label} after testing: explains {', '.join(explains)}",
+                       decision="accepted", label=label, reason="passed testing", explains=explains,
+                       hypothesis=h.model_dump(mode="json"), numbers=numbers)
     if accepted_now:
         # Re-rank with the accepted causes pinned: the deterministic ranker (not the model) drops rule guesses
         # they make redundant, and moves any ticket on such a guess to the accepted cause

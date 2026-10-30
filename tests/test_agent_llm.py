@@ -269,3 +269,20 @@ def test_a_cause_outside_the_rules_is_not_stacked_on_a_unit_a_rule_cause_explain
     record, agent, _ = run(s, FakeRouter([("FIRMWARE_ALARM", "INV-03"), ("TRANSFORMER_TRIP", "T3")]))
     assert "FIRMWARE_ALARM@INV-03" not in record.predicted
     assert {"TRACKER_STUCK@INV-03", "TRANSFORMER_TRIP@T3"} <= set(record.predicted)
+
+
+def test_every_accept_reject_and_drop_line_carries_structured_details():
+    """Text unchanged; details hold decision, label, reason, the hypothesis and the numbers the test used."""
+    s = scenario(TRIP)
+    router = FakeRouter([("TRANSFORMER_TRIP", "T2"), ("TRANSFORMER_TRIP", "T3"), ("SOILING", "ALL")])
+    record, agent, _ = run(s, router)
+    lines = [e for e in agent.memory.timeline if e.summary.startswith(("accepted model proposal", "rejected model proposal",
+                                                                      "dropped", "diagnosis revised"))]
+    assert {e.details["decision"] for e in lines} >= {"accepted", "rejected"}
+    for e in lines:
+        assert e.details["label"] in e.summary and e.details["reason"]
+        if e.details["decision"] in ("accepted", "rejected") and e.node == "consult":
+            assert e.details["hypothesis"]["fault_type"] and isinstance(e.details["numbers"], dict)
+    wrong_area = next(e for e in lines if e.details["label"] == "TRANSFORMER_TRIP@T3")
+    assert wrong_area.details["numbers"]["path"] == "footprint" and wrong_area.details["numbers"]["weak_inside"] == 0
+    assert record.predicted == ["TRANSFORMER_TRIP@T2"]  # behaviour unchanged by the logging

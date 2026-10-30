@@ -18,6 +18,7 @@ import numpy as np
 from raqeeb.contracts import DISPLAY_TZ, PlantConfig, Scenario, TechnicianNote
 
 AUTHORS = ("Khalid (O&M)", "Faisal (O&M)", "Noura (shift lead)", "Saad (security)", "Reem (HSE)", "Omar (contractor liaison)")
+GRID_OPERATOR = "grid_operator"  # author of grid-operator notices (curtailment variants "notice" / "fake_notice")
 BACKGROUND_PER_SCENARIO = (1, 3)  # inclusive range
 _TZ = ZoneInfo(DISPLAY_TZ)
 

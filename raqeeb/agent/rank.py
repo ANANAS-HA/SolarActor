@@ -65,6 +65,14 @@ SOILING_PEER_RATIO = 0.90
 STRING_MIN_PEER_RATIO = 0.30  # an open string leaves the other strings producing: a unit near zero is something else
 
 F, K = FaultType, SymptomKind
+# The only known faults that can put a unit at zero output while its peers produce (a remote stop). Soiling,
+# a derate, a stuck tracker or an open string scale output; they never stop it (see rank_detail)
+STOPS_UNIT = frozenset({F.UNAUTHORIZED_CMD})
+
+
+def _peer_ratio(s: Symptom) -> float:
+    r = s.evidence.get("ratio_to_peers")
+    return 1.0 if r is None else r  # no peer comparison: no evidence against; 0.0 is a unit at zero
 
 
 @dataclass(frozen=True)
@@ -88,7 +96,7 @@ LINKS: list[Link] = [
     Link(F.SOILING, K.PLANT_UNDERPERFORMANCE, "plant", key=True, predicted=True),
     Link(F.SOILING, K.HIGH_WIND, "weather", predicted=True, required=True),  # dust comes with the storm
     Link(F.SOILING, K.DEVICE_UNDERPERFORMANCE, "any_inverter",  # uneven dust
-         when=lambda s: (s.evidence.get("ratio_to_peers") or 1.0) >= SOILING_PEER_RATIO),
+         when=lambda s: _peer_ratio(s) >= SOILING_PEER_RATIO),
     _alarm(F.SOILING, PERFORMANCE_CODES, "plant", key=True),  # the whole fleet below its sensor-based expected
     _alarm(F.SOILING, PERFORMANCE_CODES, "any_inverter"),
     # Dusty irradiance sensor
@@ -115,7 +123,7 @@ LINKS: list[Link] = [
     Link(F.STRING_OPEN, K.DEVICE_UNDERPERFORMANCE, "device", key=True, predicted=True,
          when=lambda s: not s.evidence.get("common_onset") and not s.evidence.get("onset_hold")
          and not s.evidence.get("zero_output")  # an open string leaves the other strings producing
-         and (s.evidence.get("ratio_to_peers") or 1.0) >= STRING_MIN_PEER_RATIO
+         and _peer_ratio(s) >= STRING_MIN_PEER_RATIO
          and s.evidence.get("latest_daylight_ratio", 1.0) >= STRING_MIN_PEER_RATIO),
     _alarm(F.STRING_OPEN, PERFORMANCE_CODES, "device"),
     Link(F.UNAUTHORIZED_CMD, K.UNEXPECTED_COMMAND, "device", key=True, predicted=True),
@@ -293,9 +301,12 @@ def rank_detail(symptoms: list[Symptom], plant: PlantConfig, disabled: frozenset
     ids explained by accepted model causes (see select); they count as explained."""
     chosen = select(candidates(symptoms, plant, disabled), pinned)
     supports = {c.label: c.support for c, _ in chosen}
+    # Invariant: a unit at zero output in daylight while its peers produce is covered only by a cause that can
+    # stop a unit, or by a tested model cause (pinned); otherwise it stays unexplained and goes to a human
+    zero = {s.id for s in symptoms if s.evidence.get("zero_output")}
     hypotheses = [
         Hypothesis(id=f"H-{c.label}", fault_type=c.fault, targets=[c.target],
-                   explains=sorted(s.id for s in c.explains),
+                   explains=sorted(s.id for s in c.explains if c.fault in STOPS_UNIT or s.id not in zero),
                    evidence=[s.evidence.get("summary", s.id) for s in c.explains]
                    + [f"expected but not seen: {link.kind.value}" for link in c.absent],
                    score=round(score, 3))
@@ -339,7 +350,9 @@ def revise(memory: Memory, now, selected: dict[str, Hypothesis]) -> None:
         del memory.causes[label]
         memory.revised.append((label, cause.label))
         memory.log(now, "rank", f"diagnosis revised: {label} -> {cause.label} ({cause.label} explains all its "
-                   f"symptoms); tickets reassigned: {moved or 'none'}; cancelled: {cancelled or 'none'}")
+                   f"symptoms); tickets reassigned: {moved or 'none'}; cancelled: {cancelled or 'none'}",
+                   decision="dropped", label=label, reason=f"replaced by {cause.label}", replacement=cause.label,
+                   reassigned=moved, cancelled=cancelled)
 
 
 def rank(state: PollState) -> PollState:
@@ -348,7 +361,8 @@ def rank(state: PollState) -> PollState:
     proposal) such a redundant rule cause with no action yet is dropped at once."""
     memory, now = state["memory"], state["now"]
     symptoms = [memory.symptoms[sid] for sid in sorted(memory.active)]
-    accepted = [c for c in memory.causes.values() if c.source == "llm" and c.status not in PASSIVE]
+    accepted = [c for c in memory.causes.values()
+                if c.source == "llm" and c.status != CauseStatus.FLAGGED]  # incl. expected (a notice-backed cap)
     pinned = {sid for c in accepted for sid in c.hypothesis.explains} & memory.active
     hypotheses, unexplained, confidence, supports = rank_detail(symptoms, memory.plant, memory.disabled, pinned)
     memory.hypotheses = hypotheses
@@ -374,13 +388,15 @@ def rank(state: PollState) -> PollState:
         if state.get("rerank"):
             if redundant and not cause.action_ids and cause.status in (CauseStatus.OPEN, CauseStatus.WAITING):
                 del memory.causes[label]
-                memory.log(now, "rank", f"dropped {label}: a tested model cause explains all its symptoms")
+                memory.log(now, "rank", f"dropped {label}: a tested model cause explains all its symptoms",
+                           decision="dropped", label=label, reason="a tested model cause explains all its symptoms")
             continue
         cause.misses += 1
         if cause.misses >= DROP_AFTER_MISSES and cause.status in (CauseStatus.OPEN, CauseStatus.WAITING) \
                 and not cause.action_ids:
             del memory.causes[label]
-            memory.log(now, "rank", f"dropped {label}: no longer supported by the evidence")
+            memory.log(now, "rank", f"dropped {label}: no longer supported by the evidence", decision="dropped",
+                       label=label, reason="no longer supported by the evidence")
 
     roots = [c.hypothesis for c in memory.causes.values() if c.status not in PASSIVE]
     diagnosis = Diagnosis(root_causes=roots, unexplained=unexplained, confidence=confidence)

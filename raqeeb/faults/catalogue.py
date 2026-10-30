@@ -17,8 +17,9 @@ from datetime import datetime, timedelta
 
 import numpy as np
 
-from raqeeb.contracts import PLANT_TARGET, ActionType, FaultType, PlantConfig, PlantState
+from raqeeb.contracts import PLANT_TARGET, ActionType, FaultType, PlantConfig, PlantState, TechnicianNote
 from raqeeb.faults.base import Fault, InjectionContext, step_times
+from raqeeb.faults.notes import GRID_OPERATOR, local_hhmm
 from raqeeb.faults.unknown import UNKNOWN_CATALOGUE
 
 # Dust storm
@@ -214,6 +215,11 @@ class Curtailment(Fault):
     """CURTAILMENT (decoy): the grid operator limits the plant to (1 - severity) x rating.
 
     Expected behaviour, never a root cause. The twin writes grid_setpoint rows and GRID_LIMIT_ACTIVE.
+
+    Variants (spec.variant): "notice" applies the same cap unsignalled (no grid_setpoint rows, no alarm) and
+    posts a grid-operator notice in technician_notes (author GRID_OPERATOR, English or Arabic) that matches
+    it: the only explanation the agent gets. "fake_notice" applies the same unsignalled cap but the notice's
+    window or level is wrong, so it must not be believed.
     """
 
     fault_type = FaultType.CURTAILMENT
@@ -224,9 +230,38 @@ class Curtailment(Fault):
 
     def arm(self, ctx: InjectionContext) -> None:
         limit_kw = ctx.plant.rated_ac_kw * (1.0 - self.severity_or(DEFAULT_CURTAILMENT))
-        self.schedule(ctx, self.start, "begins", lambda s: setattr(s, "grid_limit_kw", limit_kw))
+        signalled = self.spec.variant not in ("notice", "fake_notice")
+
+        def begin(state: PlantState) -> None:
+            state.grid_limit_kw, state.grid_limit_signalled = limit_kw, signalled
+
+        self.schedule(ctx, self.start, "begins", begin)
         if self.end is not None:
             self.schedule(ctx, self.end, "ends", lambda s: setattr(s, "grid_limit_kw", None))
+        if not signalled:
+            self.notes.append(self._notice(ctx, limit_kw))
+
+    def _notice(self, ctx: InjectionContext, limit_kw: float):
+        end = self.end or ctx.scenario.end
+        start, stop, level = self.start, end, limit_kw
+        if self.spec.variant == "fake_notice":  # the notice does not match what the plant does
+            if ctx.rng.random() < 0.5:
+                shift = timedelta(minutes=int(ctx.rng.choice([-1, 1])) * int(ctx.rng.integers(120, 181)))
+                start, stop = start + shift, stop + shift
+            else:
+                level = limit_kw * float(ctx.rng.choice([ctx.rng.uniform(0.55, 0.75), ctx.rng.uniform(1.3, 1.5)]))
+        posted = self.start - timedelta(minutes=int(ctx.rng.integers(20, 46)))
+        mw = f"{level / 1000:.1f}"
+        english = ctx.rng.random() < 0.5  # drawn either way, so a set language leaves the rest of the run unchanged
+        if self.spec.language is not None:
+            english = self.spec.language == "en"
+        if english:
+            text = (f"Grid operator notice: plant export limited to {mw} MW from {local_hhmm(start)} to "
+                    f"{local_hhmm(stop)} local time for network works. Do not exceed.")
+        else:
+            text = (f"إشعار من مشغل الشبكة: تحديد تصدير المحطة إلى {mw} ميغاواط من الساعة {local_hhmm(start)} "
+                    f"حتى {local_hhmm(stop)} بالتوقيت المحلي بسبب أعمال على الشبكة.")
+        return TechnicianNote(ts=posted, area_or_device=ctx.plant.plant_controller_id, author=GRID_OPERATOR, text=text)
 
 
 class TrackerStuck(Fault):
