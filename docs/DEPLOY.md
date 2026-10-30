@@ -7,7 +7,11 @@ The public demo runs the console from the `Dockerfile` in the repository root:
 - The image holds no secrets and no `.env`. The running app makes no network calls: Streamlit usage
   statistics are off and LiteLLM uses its bundled price table. Network is used only while the image builds.
 - `.dockerignore` keeps `scenarios/test`, `scenarios/final`, `scenarios/safety`, `tests/` and `handoffs/` out
-  of the image. The console lists only the practice sets (`scenarios/scn_*`, `scenarios/practice2/pr2_*`).
+  of the image. The console lists only the practice sets (`scenarios/scn_*`, `scenarios/practice2/pr2_*`,
+  `scenarios/practice_unknown/pru_*`).
+- Benchmark outputs stay out too: every per-scenario file (`results.csv`, `proposals.csv`, `summary.md`, which
+  names missed and wrong causes per scenario, and `audit/`). The image keeps only `bench/final/summary.csv`
+  (one row per agent), which is what the Results tab needs.
 - Weather: `data/weather/nasa_power_24.71_46.68_2025.csv` (NASA POWER, hourly, community RE). The UI footer
   credits the NASA Langley Research Center POWER Project, as POWER asks users to do.
 
@@ -46,24 +50,24 @@ uvx --from huggingface_hub hf upload $space docs/SPACE_README.md README.md --rep
 uvx --from huggingface_hub hf upload $space . . --repo-type space `
   --exclude ".env" ".env.*" ".venv/*" "**/__pycache__/*" ".pytest_cache/*" "data/*.db" "data/*.db-*" `
             "data/plots/*" "scenarios/test/*" "scenarios/final/*" "scenarios/safety/*" "tests/*" "handoffs/*" `
-            ".claude/*" ".vscode/*" "README.md" "CLAUDE.md" `
+            "bench/*" "**/results.csv" "**/proposals.csv" ".claude/*" ".vscode/*" "README.md" "CLAUDE.md" `
   --commit-message "Raqeeb console"
 ```
 
 The Space builds the image (a few minutes; the log is on the Space page under **Logs**). When the status
 shows **Running**, the public URL is `https://huggingface.co/spaces/<your-user>/<space-name>`.
 
-Before uploading, check what `bench/` holds: every folder there is shown on the Results tab. `bench/test/results.csv`
-lists the round 1 test scenarios with their root causes; leave it out (`--exclude "bench/test/*"`) if that set
-should stay private.
+`bench/` is left out on purpose: its per-scenario files list each scenario's root causes. Only the final summary
+goes up, in step 4.
 
 ## 4. Updates
 
-- **Final benchmark results.** The Results tab reads `bench/final/` by default (summary.csv, results.csv,
-  summary.md) and shows "results not available yet" until it exists. After the final run:
+- **Final benchmark results.** The Results tab reads `bench/final/summary.csv` by default and shows "results
+  not available yet" until it exists. After the final run, upload that one file (not results.csv or summary.md,
+  which list each held-out scenario's causes):
 
   ```powershell
-  uvx --from huggingface_hub hf upload $space bench/final bench/final --repo-type space --commit-message "Final results"
+  uvx --from huggingface_hub hf upload $space bench/final/summary.csv bench/final/summary.csv --repo-type space --commit-message "Final results"
   ```
 
   Another folder or file can be set with the environment variable `RAQEEB_RESULTS` (Space **Settings →
@@ -82,7 +86,10 @@ should stay private.
   uvx --from huggingface_hub hf upload $space raqeeb/ui/replays/scn_0007_local.json raqeeb/ui/replays/scn_0007_local.json --repo-type space
   ```
 
-  The replays now shipped are labelled "recorded with test model" (a scripted stand-in, not a language model).
+  The replays now shipped (scn_0007, scn_0006, pr2_0001, pru_0001) are labelled "recorded with test model": a
+  scripted stand-in, not a language model. Its proposals come from a fixed rule (the site area holding the
+  unexplained weak inverters, plus one deliberately wrong area), so they show the agent's tool test at work,
+  not what a model would propose.
   Delete them from the Space when the real ones are there, or keep them:
   `uvx --from huggingface_hub hf repo-files delete $space raqeeb/ui/replays/scn_0007_test.json --repo-type space`
   (older CLI: `huggingface-cli repo-files <space> delete <file> --repo-type space`). To make another file the

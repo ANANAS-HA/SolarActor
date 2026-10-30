@@ -3,9 +3,9 @@
 A live run (ui/live.py) fills a RunLog poll by poll; a replay loads one from a JSON file. The
 console draws both the same way: from the log and a telemetry store, cut at the current sim time.
 
-Replay file (format "raqeeb-replay", version 1), one JSON object:
+Replay file (format "raqeeb-replay", version 2), one JSON object:
 
-    format, version      "raqeeb-replay", 1
+    format, version      "raqeeb-replay", 2
     label                how it was recorded, shown on screen, e.g. "recorded with test model"
     mode                 "rules" | "local" | "test" (test = scripted stand-in for the model, no LLM)
     agent, model         agent name; model name ("" for rules only)
@@ -15,10 +15,16 @@ Replay file (format "raqeeb-replay", version 1), one JSON object:
     telemetry            {table: [row, ...]} for every table in contracts.TABLE_MODELS, audit included
     polls                one per agent poll, in order: ts, outcomes the agent received, timeline entries,
                          diagnosis (when it changed), actions requested, verifications, escalations,
-                         llm_calls, tool findings (when they changed), report (when written), agent_s
-    actions              every action request: gate, decision (who, when, note), status, effective_at
+                         llm_calls, tool findings (when they changed), report (when written), agent_s,
+                         notes (technician notes posted since the last poll), proposals (model proposals
+                         and how the agent's tool test decided them, see ProposalRecord)
+    actions              every action request: gate, decision (who, when, note), status, effective_at,
+                         cause (label of the cause the agent requested it for)
     finished             true once the run reached the end of its window
     answer_key           planted faults and root causes; null until the run has finished
+
+Version 1 files (no notes, proposals or action causes) still load: from_json upgrades them, taking
+the notes from the recorded technician_notes table and the proposals from the recorded timeline.
 
 Model types are the contracts' (ActionRequest, Diagnosis, Verification, LlmCall, ...); the types
 here are the console's own record of a run, used only by raqeeb/ui.
@@ -52,7 +58,8 @@ from raqeeb.contracts import (
 from raqeeb.telemetry.store import TelemetryStore
 
 REPLAY_FORMAT = "raqeeb-replay"
-REPLAY_VERSION = 1
+REPLAY_VERSION = 2
+READABLE_VERSIONS = (1, 2)
 
 
 class Mode(StrEnum):
@@ -79,6 +86,38 @@ class TimelineItem(_Record):
     details: dict[str, Any] = Field(default_factory=dict)
 
 
+class NoteRecord(_Record):
+    """A note from site staff (technician_notes table) or an operator's approval note. Untrusted text."""
+
+    ts: UtcDatetime
+    source: str  # "technician" or "operator"
+    author: str = ""
+    about: str = ""  # area or device the note is about (technician), or the action decided (operator)
+    text: str
+
+
+class ProposalCheck(_Record):
+    check: str  # what was checked: the agent's test, or a tool whose result covers the target
+    result: str  # computed by code
+    passed: bool | None = None  # None = context (a tool result), not a pass/fail test
+
+
+class ProposalRecord(_Record):
+    """One cause proposed by a model and what the agent's tool test made of it (agent/consult.py)."""
+
+    ts: UtcDatetime  # poll at which the agent decided
+    label: str  # FAULT_TYPE@TARGET
+    fault_type: str
+    target: str
+    decision: str  # "accepted" (added to the diagnosis), "rejected" (nothing changed), "dropped" (later re-test failed)
+    reason: str = ""  # the test's reason for rejecting or dropping
+    explains: list[str] = Field(default_factory=list)  # symptom ids it was accepted to explain
+    checks: list[ProposalCheck] = Field(default_factory=list)
+    model_evidence: list[str] = Field(default_factory=list)  # the model's own words (untrusted); accepted only
+    model: str = ""
+    llm_s: float = 0.0  # time of the model call(s) that proposed it
+
+
 class PollRecord(_Record):
     ts: UtcDatetime
     final: bool = False
@@ -92,6 +131,8 @@ class PollRecord(_Record):
     findings: list[ToolResult] | None = None  # tool results with a finding; None = same as the last poll
     report: IncidentReport | None = None
     agent_s: float = 0.0  # wall-clock seconds the agent took for this poll
+    notes: list[NoteRecord] = Field(default_factory=list)  # technician notes posted since the last poll
+    proposals: list[ProposalRecord] = Field(default_factory=list)  # model proposals decided at this poll
 
 
 class ActionEntry(_Record):
@@ -103,6 +144,7 @@ class ActionEntry(_Record):
     decided_at: UtcDatetime | None = None
     note: str = ""  # operator note, or why it failed
     effective_at: UtcDatetime | None = None  # when a delayed action takes effect in the plant
+    cause: str = ""  # label of the cause the agent requested it for
 
 
 class AnswerKey(_Record):
@@ -155,6 +197,17 @@ class RunLog(_Record):
     def escalations_until(self, now: datetime) -> list[Escalation]:
         return [e for p in self.polls_until(now) for e in p.escalations]
 
+    def notes_until(self, now: datetime) -> list[NoteRecord]:
+        """Technician notes and operator decision notes, oldest first."""
+        notes = [n for p in self.polls_until(now) for n in p.notes]
+        notes += [NoteRecord(ts=a.decided_at, source="operator", author=a.decided_by,
+                             about=f"{a.request.action.value} on {a.request.target} ({a.request.id})", text=a.note)
+                  for a in self.actions if a.decided_by == "operator" and a.note and a.decided_at <= now]
+        return sorted(notes, key=lambda n: n.ts)
+
+    def proposals_until(self, now: datetime) -> list[ProposalRecord]:
+        return [r for p in self.polls_until(now) for r in p.proposals]
+
     def actions_until(self, now: datetime) -> list[ActionEntry]:
         """Requests made by `now`; a decision made later is not shown yet (status None)."""
         out = []
@@ -182,13 +235,32 @@ class RunLog(_Record):
         data = json.loads(text)
         if data.get("format") != REPLAY_FORMAT:
             raise ValueError("not a Raqeeb replay file")
-        if data.get("version") != REPLAY_VERSION:
-            raise ValueError(f"replay version {data.get('version')!r} not supported (expected {REPLAY_VERSION})")
-        return cls.model_validate(data)
+        if data.get("version") not in READABLE_VERSIONS:
+            raise ValueError(f"replay version {data.get('version')!r} not supported (expected one of "
+                             f"{', '.join(map(str, READABLE_VERSIONS))})")
+        log = cls.model_validate(data)
+        return _upgrade_v1(log) if data["version"] == 1 else log
 
     @classmethod
     def load(cls, path: Path) -> RunLog:
         return cls.from_json(path.read_text(encoding="utf-8"))
+
+
+def _upgrade_v1(log: RunLog) -> RunLog:
+    """Version 1 had no notes or proposals per poll: take them from the recorded telemetry and timeline."""
+    from raqeeb.ui.proposals import proposals_from_poll
+
+    notes = sorted((NoteRecord(ts=r["ts"], source="technician", author=r["author"], about=r["area_or_device"],
+                               text=r["text"]) for r in log.telemetry.get("technician_notes", [])),
+                   key=lambda n: n.ts)
+    previous = None
+    findings: list[ToolResult] = []
+    for poll in log.polls:
+        poll.notes = [n for n in notes if (previous is None or n.ts > previous) and n.ts <= poll.ts]
+        findings = poll.findings if poll.findings is not None else findings
+        poll.proposals = proposals_from_poll(poll.ts, poll.timeline, poll.llm_calls, findings)
+        previous = poll.ts
+    return log.model_copy(update={"version": REPLAY_VERSION})
 
 
 def _decision_item(a: ActionEntry) -> TimelineItem:

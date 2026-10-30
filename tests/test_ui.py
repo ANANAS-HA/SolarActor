@@ -1,5 +1,6 @@
-"""Console: live runs drive the real agent, replays round-trip, the answer key stays hidden until the end,
-untrusted text is escaped, every page renders. No model server is contacted (RAQEEB_UI_NO_LLM)."""
+"""Console: live runs drive the real agent, replays round-trip (v1 files still load), notes and model
+proposals are recorded and shown, the answer key stays hidden until the end, untrusted text is escaped,
+every page renders. No model server is contacted (RAQEEB_UI_NO_LLM)."""
 
 from __future__ import annotations
 
@@ -14,12 +15,14 @@ from raqeeb.contracts import ActionStatus, FaultSpec, FaultType, LlmRole, Scenar
 from raqeeb.faults import catalogue
 from raqeeb.ui import live, source
 from raqeeb.ui.live import LiveRun, ReplayRun, local_model_status
-from raqeeb.ui.runlog import RECORDED_LABEL, Mode, RunLog
+from raqeeb.ui.proposals import NOTHING_CHANGED, effect, proposals_from_poll
+from raqeeb.ui.runlog import RECORDED_LABEL, REPLAY_VERSION, Mode, NoteRecord, RunLog, TimelineItem
 from raqeeb.ui.testmodel import TEST_MODEL
 from tests.leakcheck import assert_no_answer_leak
 
 APP = REPO_ROOT / "raqeeb" / "ui" / "app.py"
 TRAP_ID = "scn_0007"  # dusty panels + dusty sensor, comms loss, a derate whose power limit needs approval
+UNKNOWN_REPLAY = "pru_0001_test.json"  # comms loss, dusty sensor, a transformer trip the rules do not know
 
 
 @pytest.fixture(autouse=True)
@@ -89,6 +92,21 @@ def test_test_model_runs_the_llm_path_without_a_server():
     run.close()
 
 
+def test_test_model_proposal_is_tested_before_it_counts():
+    run = source.start_live("pru_0009", Mode.TEST)  # firmware alarm on INV-05: no rule knows it
+    run.run_to_end(approve=True)
+    proposals = run.log.proposals_until(run.now)
+    accepted = [p for p in proposals if p.decision == "accepted"]
+    rejected = [p for p in proposals if p.decision == "rejected"]
+    assert [p.label for p in accepted] == ["FIRMWARE_ALARM@INV-05"] and rejected
+    assert accepted[0].checks[0].passed and accepted[0].model_evidence and accepted[0].model.endswith(TEST_MODEL)
+    assert all(p.checks[0].passed is False and p.reason for p in rejected)
+    assert all(a.cause for a in run.log.actions)  # every request names the cause it is for
+    roots = {label for h in run.log.diagnosis_until(run.now).root_causes for label in h.labels}
+    assert "FIRMWARE_ALARM@INV-05" in roots and not roots & {p.label for p in rejected}
+    run.close()
+
+
 def test_trap_hides_the_loss_from_the_sensor_line(finished):
     """Panels and sensor equally dusty (late in the storm, before the wash lands): actual meets the sensor
     line but not the reference line."""
@@ -142,11 +160,93 @@ def _json(models) -> list[dict]:
 
 def test_replay_files_are_valid_and_labelled():
     files = source.replay_files()
-    assert len(files) >= 2 and files[0].name == source.DEFAULT_REPLAY
+    assert len(files) >= 4 and files[0].name == source.DEFAULT_REPLAY
     for path in files:
         log = RunLog.load(path)
+        assert log.version == REPLAY_VERSION and json.loads(path.read_text(encoding="utf-8"))["version"] == 2
         assert log.finished and log.answer_key and log.label == "recorded with test model"
         assert log.incident.id in source.scenario_ids()  # practice sets only
+        assert log.notes_until(log.polls[-1].ts)  # every shipped run has notes
+
+
+def test_v1_replays_still_load(finished):
+    """A version 1 file (no notes, proposals or action causes) loads; notes come from its technician_notes table."""
+    data = json.loads(finished.recording().to_json())
+    data["version"] = 1
+    for poll in data["polls"]:
+        del poll["notes"], poll["proposals"]
+    for action in data["actions"]:
+        del action["cause"]
+    log = RunLog.from_json(json.dumps(data))
+    assert log.version == REPLAY_VERSION
+    end = finished.now
+    technician = [n for n in finished.log.notes_until(end) if n.source == "technician"]
+    assert technician and [n for n in log.notes_until(end) if n.source == "technician"] == technician
+    assert [n.source for n in log.notes_until(end)].count("operator") >= 1  # approval notes from the actions
+    with pytest.raises(ValueError, match="not supported"):
+        RunLog.from_json(json.dumps({**data, "version": 99}))
+
+
+def test_notes_come_from_staff_and_operators(finished):
+    notes = finished.log.notes_until(finished.now)
+    assert {"technician", "operator"} <= {n.source for n in notes}
+    assert all(n.text == "checked on site" for n in notes if n.source == "operator")
+    assert len([n for n in notes if n.source == "technician"]) == len(finished.store.read("technician_notes"))
+    assert notes == sorted(notes, key=lambda n: n.ts)
+    assert not finished.log.notes_until(finished.incident.start)
+
+
+def test_proposals_are_read_from_the_agent_timeline():
+    ts = datetime(2025, 6, 6, 9, tzinfo=timezone.utc)
+    timeline = [TimelineItem(ts=ts, node="consult", summary=s) for s in (
+        "asked the model about 5 unexplained symptoms: 2 proposals, 1 calls",
+        "accepted model proposal NEW_SHADING@EDGE-W after testing: explains S1, S2",
+        "rejected model proposal NEW_SHADING@EDGE-E: footprint does not match: 0 of 4 units in EDGE-E weak",
+        "dropped model-proposed FIRMWARE_ALARM@INV-03: it cites symptoms that are not active")]
+    timeline.append(TimelineItem(ts=ts, node="plan", summary="rejected model proposal X@Y: not from consult"))
+    out = proposals_from_poll(ts, timeline, [], [], {"NEW_SHADING@EDGE-W": ["shade on the west fence"]})
+    assert [(p.decision, p.label) for p in out] == [("accepted", "NEW_SHADING@EDGE-W"),
+                                                   ("rejected", "NEW_SHADING@EDGE-E"),
+                                                   ("dropped", "FIRMWARE_ALARM@INV-03")]
+    assert out[0].explains == ["S1", "S2"] and out[0].model_evidence == ["shade on the west fence"]
+    assert out[1].reason.startswith("footprint does not match") and out[1].checks[0].passed is False
+    assert effect(out[1], [], []) == NOTHING_CHANGED
+
+
+def test_shipped_unknown_fault_replay_shows_an_accepted_and_a_rejected_proposal():
+    log = RunLog.load(source.replay_dir() / UNKNOWN_REPLAY)
+    end = log.polls[-1].ts
+    proposals = log.proposals_until(end)
+    accepted = next(p for p in proposals if p.decision == "accepted")
+    rejected = next(p for p in proposals if p.decision == "rejected")
+    assert accepted.label in log.answer_key.root_causes and rejected.label not in log.answer_key.root_causes
+    assert accepted.checks[0].passed and len(accepted.checks) > 1  # the test, then the tool results on the target
+    # A rejected proposal changed nothing: not in any diagnosis, no action, no escalation names it
+    assert all(rejected.label not in h.labels for p in log.polls if p.diagnosis for h in p.diagnosis.root_causes)
+    assert not [a for a in log.actions if a.cause == rejected.label]
+    assert not [e for e in log.escalations_until(end) if e.subject == rejected.label]
+    assert effect(rejected, log.actions_until(end), log.escalations_until(end)) == NOTHING_CHANGED
+    assert accepted.label in effect(accepted, log.actions_until(end), log.escalations_until(end))
+    assert not log.proposals_until(accepted.ts - timedelta(minutes=1))  # not shown before the agent decided
+
+
+def test_app_shows_notes_and_proposals_as_data():
+    log = RunLog.load(source.replay_dir() / UNKNOWN_REPLAY)
+    log.polls[0].notes.append(NoteRecord(ts=log.polls[0].ts, source="technician", author="x", about="T3", text=HOSTILE))
+    at = AppTest.from_file(str(APP), default_timeout=120)
+    at.session_state.run = ReplayRun(log)
+    at.session_state.mode_choice = "Replay"
+    at.run()
+    assert "No proposals so far" in _page(at)
+    at.button(key="to_end").click().run()
+    assert not at.exception
+    page = _page(at)
+    assert {"Technician and operator notes", "Model proposals"} <= {s.value for s in at.subheader}
+    assert "ACCEPTED" in page and "REJECTED" in page and source.md_escape(NOTHING_CHANGED) in page
+    assert HOSTILE not in page and "Ignore rules" not in page
+    assert HOSTILE in list(_table(at, "Text (quoted)")["Text (quoted)"])
+    checks = [t.value for t in at.dataframe if "Check" in t.value.columns]
+    assert {"pass", "FAIL"} <= {v for c in checks for v in c["Pass"]}
 
 
 def test_replay_rejects_other_files():
@@ -251,8 +351,9 @@ def test_every_page_renders_in_replay_and_live_mode():
     page = _page(at)
     assert source.FOOTER in page and "Mode: Replay" in page and "recorded with test model" in page
     assert [t.label for t in at.tabs] == ["Operations", "Agent", "Report", "Answer key", "Results"]
-    assert {"Plant map", "Alarm feed", "Recovery", "Agent timeline", "Approvals", "Actions and verifications",
-            "LLM calls and time", "Shift report", "Answer key", "Benchmark results"} <= {s.value for s in at.subheader}
+    assert {"Plant map", "Alarm feed", "Recovery", "Technician and operator notes", "Agent timeline", "Approvals",
+            "Model proposals", "Actions and verifications", "LLM calls and time", "Shift report", "Answer key",
+            "Benchmark results"} <= {s.value for s in at.subheader}
 
     at.radio(key="mode_choice").set_value(live.MODE_LABEL[Mode.RULES]).run()
     at.selectbox(key="scenario_id").set_value("scn_0002").run()

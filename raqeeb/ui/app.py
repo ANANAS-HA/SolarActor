@@ -25,6 +25,7 @@ from raqeeb.config import REPO_ROOT, load_plant
 from raqeeb.contracts import DISPLAY_TZ, ActionStatus, IncidentReport
 from raqeeb.ui import source
 from raqeeb.ui.live import LiveRun, ReplayRun, local_model_status
+from raqeeb.ui.proposals import effect
 from raqeeb.ui.runlog import MODE_LABEL, Mode
 from raqeeb.ui.source import local_hhmm, md_escape
 
@@ -264,14 +265,16 @@ def alarm_feed(data: dict[str, pd.DataFrame]) -> None:
     st.dataframe(table, hide_index=True, height=380, key="alarm_table")
 
 
-def technician_notes(data: dict[str, pd.DataFrame]) -> None:
-    notes = data["technician_notes"]
-    if notes.empty:
+def notes_panel(run: source.Run) -> None:
+    st.subheader("Technician and operator notes")
+    notes = run.log.notes_until(run.now)
+    st.caption("Quoted as written (synthetic, untrusted data). The agent's rules never read note text; "
+               "technician notes reach a model only as delimited data.")
+    if not notes:
+        st.info("No notes so far.")
         return
-    st.subheader("Technician notes")
-    st.caption("Quoted as written by site staff (synthetic, untrusted). Only passed to a model as data.")
-    st.dataframe(pd.DataFrame({"Time": notes["ts"].map(local_hhmm), "About": notes["area_or_device"],
-                               "Author": notes["author"], "Note (quoted)": notes["text"]}),
+    st.dataframe(pd.DataFrame([{"Time": local_hhmm(n.ts), "Source": n.source, "Author": n.author, "About": n.about,
+                                "Text (quoted)": n.text} for n in reversed(notes)]),
                  hide_index=True, key="notes_table")
 
 
@@ -376,6 +379,39 @@ def agent_timeline(run: source.Run) -> None:
                      hide_index=True, key="diagnosis_table")
 
 
+def proposals_panel(run: source.Run) -> None:
+    st.subheader("Model proposals")
+    proposals = run.log.proposals_until(run.now)
+    asked = [t for t in run.log.timeline_until(run.now) if t.node == "consult" and t.summary.startswith("asked the model")]
+    st.caption("A model may propose a cause when the rules leave symptoms unexplained. The agent tests every "
+               "proposal on tool data first: only an accepted one enters the diagnosis. A rejected proposal "
+               "changes nothing.")
+    if not proposals:
+        st.info(f"No proposals tested so far ({len(asked)} model questions)." if asked
+                else "No proposals so far: the model was not asked (or this run is rules only).")
+        return
+    counts = {d: sum(p.decision == d for p in proposals) for d in ("accepted", "rejected", "dropped")}
+    st.markdown(f"{len(asked)} model questions · {counts['accepted']} accepted · {counts['rejected']} rejected"
+                + (f" · {counts['dropped']} dropped later" if counts["dropped"] else ""))
+    actions, escalations = run.log.actions_until(run.now), run.log.escalations_until(run.now)
+    badge = {"accepted": ":green-background[ACCEPTED]", "rejected": ":red-background[REJECTED]",
+             "dropped": ":orange-background[DROPPED]"}
+    for i, p in enumerate(reversed(proposals)):
+        with st.container(border=True):
+            call = f"model call {p.llm_s:.2f} s ({md_escape(p.model)})" if p.model else "no model call this poll"
+            st.markdown(f"{badge[p.decision]} **{md_escape(p.fault_type)}** on **{md_escape(p.target)}** · "
+                        f"decided {local_hhmm(p.ts)} · {call}")
+            st.dataframe(pd.DataFrame([{"Check": c.check, "Result": c.result,
+                                        "Pass": {True: "pass", False: "FAIL", None: "context"}[c.passed]}
+                                       for c in p.checks]),
+                         hide_index=True, key=f"proposal_checks_{i}")
+            if p.model_evidence:
+                st.dataframe(pd.DataFrame({"Model's evidence (quoted)": p.model_evidence}), hide_index=True,
+                             key=f"proposal_evidence_{i}")
+            outcome = effect(p, actions, escalations)
+            (st.success if p.decision == "accepted" else st.warning)(md_escape(outcome))
+
+
 def actions_panel(run: source.Run) -> None:
     st.subheader("Actions and verifications")
     actions = run.log.actions_until(run.now)
@@ -387,7 +423,8 @@ def actions_panel(run: source.Run) -> None:
         for a in actions:
             check = verified.get(a.request.id)
             rows.append({"Time": local_hhmm(a.requested_at), "Action": a.request.action.value,
-                         "Target": a.request.target, "Approval": "needed" if a.gated else "auto",
+                         "Target": a.request.target, "For cause": a.cause,
+                         "Approval": "needed" if a.gated else "auto",
                          "Status": a.status.value if a.status else "waiting", "By": a.decided_by,
                          "Takes effect": local_hhmm(a.effective_at) if a.effective_at else "",
                          "Verified": ("" if check is None else
@@ -571,7 +608,7 @@ def main() -> None:
         with right:
             alarm_feed(data)
         recovery_chart(run, power)
-        technician_notes(data)
+        notes_panel(run)
     with agent:
         left, right = st.columns([3, 2])
         with left:
@@ -579,6 +616,7 @@ def main() -> None:
         with right:
             if not run.waiting:
                 approvals(run)
+        proposals_panel(run)
         actions_panel(run)
         llm_panel(run)
     with report:

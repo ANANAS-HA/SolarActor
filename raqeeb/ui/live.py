@@ -42,12 +42,14 @@ from raqeeb.contracts import (
 from raqeeb.faults.injector import FaultInjector
 from raqeeb.telemetry.store import TelemetryStore
 from raqeeb.twin.controls import apply_action
+from raqeeb.ui.proposals import proposals_from_poll
 from raqeeb.ui.runlog import (
     MODE_LABEL,
     RECORDED_LABEL,
     ActionEntry,
     AnswerKey,
     Mode,
+    NoteRecord,
     PollRecord,
     RunLog,
     TimelineItem,
@@ -126,6 +128,7 @@ class LiveRun:
                           poll_min=poll_min, incident=self.incident)
         self._outcomes: list[ActionOutcome] = []
         self._timeline_seen = 0
+        self._notes_seen = 0
         self._last_findings: list[dict] | None = None
         self.delays = {ActionType.CREATE_CLEANING_WORK_ORDER: self.plant.controls.cleaning_delay_min,
                        ActionType.RESET_COMMS_GATEWAY: self.plant.controls.comms_reset_delay_min,
@@ -186,6 +189,8 @@ class LiveRun:
                             llm_calls=turn.llm_calls, report=turn.report, agent_s=time.perf_counter() - started)
         record.timeline = self._take_timeline()
         record.findings = self._take_findings()
+        record.notes = self._take_notes()
+        record.proposals = self._take_proposals(record)
         self.log.polls.append(record)
         for v in turn.verifications:
             self._audit("verify", "agent", v.model_dump(mode="json"))
@@ -214,7 +219,9 @@ class LiveRun:
 
     def _gate(self, request: ActionRequest) -> None:
         spec = self.specs.get(request.action)
-        entry = ActionEntry(request=request, requested_at=self.now, gated=bool(spec and spec.needs_approval))
+        pending = getattr(getattr(self.agent, "memory", None), "pending", {}).get(request.id)
+        entry = ActionEntry(request=request, requested_at=self.now, gated=bool(spec and spec.needs_approval),
+                            cause=getattr(pending, "cause", ""))
         self.log.actions.append(entry)
         self._audit("request", "agent", request.model_dump(mode="json"))
         if any(a.request.id == request.id for a in self.log.actions[:-1]):
@@ -267,6 +274,22 @@ class LiveRun:
             return None
         self._last_findings = dumped
         return findings
+
+    def _take_notes(self) -> list[NoteRecord]:
+        """Technician notes the plant posted since the last poll (the environment's table, not the agent's view)."""
+        rows = self.store.read("technician_notes")
+        new = rows.iloc[self._notes_seen:]
+        self._notes_seen = len(rows)
+        return [NoteRecord(ts=ts.to_pydatetime(), source="technician", author=r.author, about=r.area_or_device,
+                           text=r.text) for ts, r in zip(new.index, new.itertuples())]
+
+    def _take_proposals(self, record: PollRecord):
+        memory = getattr(self.agent, "memory", None)
+        if memory is None:
+            return []
+        evidence = {label: list(c.hypothesis.evidence) for label, c in memory.causes.items()}
+        return proposals_from_poll(record.ts, record.timeline, record.llm_calls, memory.results.values(),
+                                   evidence, self.plant.layout)
 
     def _close(self) -> None:
         """End of run: the answer key goes into the log (shown only now) and the telemetry is attached."""

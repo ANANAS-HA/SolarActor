@@ -24,7 +24,7 @@ from pathlib import Path
 import pandas as pd
 
 from raqeeb.bench.score import addresses
-from raqeeb.config import BENCH_DIR, PRACTICE2_SCENARIO_DIR, SCENARIO_DIR, load_plant
+from raqeeb.config import BENCH_DIR, PRACTICE2_SCENARIO_DIR, PRACTICE_UNKNOWN_SCENARIO_DIR, SCENARIO_DIR, load_plant
 from raqeeb.contracts import (
     DECOY_FAULTS,
     DISPLAY_TZ,
@@ -64,7 +64,8 @@ NASA_CREDIT = ("Weather: NASA Langley Research Center (LaRC) POWER Project, fund
 
 
 def practice_scenarios() -> list[Scenario]:
-    return load_scenarios(SCENARIO_DIR, "scn") + load_scenarios(PRACTICE2_SCENARIO_DIR, "pr2")
+    return (load_scenarios(SCENARIO_DIR, "scn") + load_scenarios(PRACTICE2_SCENARIO_DIR, "pr2")
+            + load_scenarios(PRACTICE_UNKNOWN_SCENARIO_DIR, "pru"))
 
 
 def scenario_ids() -> list[str]:

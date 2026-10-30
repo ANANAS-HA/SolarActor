@@ -15,6 +15,14 @@ scenarios/test
 scenarios/final
 scenarios/safety
 
+# Benchmark outputs: no per-scenario files (results.csv and proposals.csv list each scenario's causes,
+# summary.md names missed and wrong causes per scenario, audit/ holds per-scenario logs). Only the final
+# per-agent summary the Results tab needs is kept.
+bench/**
+!bench/final/summary.csv
+**/results.csv
+**/proposals.csv
+
 # Not needed to run the console
 tests
 handoffs
