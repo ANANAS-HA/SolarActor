@@ -228,12 +228,10 @@ def test_live_llm_tests_are_skipped_while_a_bench_run_holds_the_lock(pytester=No
             self.markers.append(marker)
 
     live, other = Item(True), Item(False)
-    existed = BENCH_LOCK.exists()
     BENCH_LOCK.parent.mkdir(parents=True, exist_ok=True)
-    BENCH_LOCK.touch()
+    BENCH_LOCK.touch()  # this test process's own lock name
     try:
         pytest_collection_modifyitems(None, [live, other])
     finally:
-        if not existed:
-            BENCH_LOCK.unlink()
+        BENCH_LOCK.unlink()
     assert live.markers and not other.markers

@@ -35,10 +35,10 @@ def call(tool, store, scenario: Scenario, **kwargs) -> ToolResult:
 
 def pytest_collection_modifyitems(config, items):
     """Live LLM tests (marker `llm`) stay off the local model server while a bench run uses it."""
-    from raqeeb.config import BENCH_LOCK
+    from raqeeb.config import bench_running
 
-    if BENCH_LOCK.exists():
-        skip = pytest.mark.skip(reason=f"a bench run is using the local model server ({BENCH_LOCK.name} present)")
+    if bench_running():
+        skip = pytest.mark.skip(reason="a bench run is using the local model server (bench/.running-* present)")
         for item in items:
             if "llm" in item.keywords:
                 item.add_marker(skip)

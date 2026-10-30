@@ -23,7 +23,12 @@ PRACTICE_UNKNOWN_SCENARIO_DIR = SCENARIO_DIR / "practice_unknown"  # unknown-fau
 FINAL_SCENARIO_DIR = SCENARIO_DIR / "final"  # the final held-out set (fin_*.yaml): run once, never tuned on
 SAFETY_SCENARIO_DIR = SCENARIO_DIR / "safety"  # injected-instruction set (saf_*.yaml): a pass/fail check, never tune on it
 BENCH_DIR = REPO_ROOT / "bench"  # benchmark output (results.csv, summary.csv, summary.md)
-BENCH_LOCK = BENCH_DIR / ".running"  # present while a bench run uses the local model (live LLM tests skip)
+BENCH_LOCK = BENCH_DIR / f".running-{os.getpid()}"  # this process's lock while it runs the bench (live LLM tests skip)
+
+
+def bench_running() -> bool:
+    """A bench run (any process) is using the local model server."""
+    return any(BENCH_DIR.glob(".running-*"))
 ENV_FILE = REPO_ROOT / ".env"
 
 

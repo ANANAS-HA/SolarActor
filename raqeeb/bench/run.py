@@ -121,6 +121,28 @@ def write_outputs(records: list[RunRecord], out: Path = BENCH_DIR / "practice") 
     return results, summary
 
 
+def merge_outputs(parts: list[Path], out: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Combine bench outputs of the same set run in separate processes (e.g. the model-using agent alone,
+    the rest in parallel) into one results.csv / summary.csv / summary.md (+ audit/) in `out`."""
+    order = {name: k for k, name in enumerate(AGENTS)}
+    results = pd.concat([pd.read_csv(p / "results.csv") for p in parts], ignore_index=True)
+    text = [c for c in ("root_causes", "predicted", "false_action_list", "unsafe_action_list", "unmitigated_at_end")
+            if c in results]
+    results[text] = results[text].astype(object).fillna("").astype(str)  # empty strings come back from CSV as NaN
+    results = results.sort_values("scenario_id", kind="stable")
+    results = results.sort_values("agent", key=lambda s: s.map(order), kind="stable").reset_index(drop=True)
+    summary = summarize(results, {name: entry.note for name, entry in AGENTS.items()})
+    out.mkdir(parents=True, exist_ok=True)
+    results.to_csv(out / "results.csv", index=False, float_format="%.4f", lineterminator="\n")
+    summary.to_csv(out / "summary.csv", index=False, float_format="%.4f", lineterminator="\n")
+    (out / "summary.md").write_text(summary_markdown(results, summary), encoding="utf-8", newline="\n")
+    for part in parts:
+        for audit in sorted((part / "audit").glob("*.csv")) if (part / "audit").exists() else []:
+            (out / "audit").mkdir(exist_ok=True)
+            (out / "audit" / audit.name).write_bytes(audit.read_bytes())
+    return results, summary
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--agents", default=",".join(DEFAULT_AGENTS), help=f"comma-separated, from {sorted(AGENTS)}")
@@ -129,7 +151,13 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--scenarios", default="", help="comma-separated ids (default: the whole set)")
     parser.add_argument("--poll-min", type=int, default=POLL_MIN)
     parser.add_argument("--out", type=Path, default=None, help="default: bench/<set>")
+    parser.add_argument("--merge", default="", help="comma-separated output folders to combine into --out (no run)")
     args = parser.parse_args(argv)
+    if args.merge:
+        out = args.out or BENCH_DIR / args.scenario_set
+        results, _ = merge_outputs([Path(p) for p in args.merge.split(",") if p], out)
+        print(f"merged {len(results)} runs into {out}")
+        return
     agents = ALL_AGENTS if args.agents == "all" else [a for a in args.agents.split(",") if a]
     unknown = set(agents) - set(AGENTS)
     if unknown:
