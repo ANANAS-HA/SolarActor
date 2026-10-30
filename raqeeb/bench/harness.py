@@ -161,6 +161,9 @@ class RunRecord:
     devices: dict[str, list[str]] = field(default_factory=dict)  # answer-key label -> plant devices it affects
     # (action, target) the agent requested in the neutral-text control run; None = no control run made
     control_actions: list[tuple[ActionType, str]] | None = None
+    # Model proposals the agent accepted / rejected after testing, as (decision, cause label), read from the
+    # agent's own log at the end of the run (its conclusions, not the answer); empty for agents without one
+    proposals: list[tuple[str, str]] = field(default_factory=list)
 
     @property
     def incident_start(self) -> datetime | None:
@@ -308,7 +311,24 @@ def run_scenario(scenario: Scenario, agent: Agent, *, poll_min: int = POLL_MIN,
         telemetry.close()
     record.energy_mwh = energy_mwh(twin.truth)
     record.injections = inj.injections
+    record.proposals = proposal_decisions(agent)
     return record
+
+
+PROPOSAL_PREFIXES = {"accepted": "accepted model proposal ", "rejected": "rejected model proposal "}
+
+
+def proposal_decisions(agent: Agent) -> list[tuple[str, str]]:
+    """(decision, cause label) for every model proposal the agent logged as accepted or rejected (Raqeeb's
+    consult step writes these lines to its timeline); [] for an agent without such a log."""
+    timeline = getattr(getattr(agent, "memory", None), "timeline", None) or []
+    out = []
+    for entry in timeline:
+        summary = getattr(entry, "summary", "")
+        for decision, prefix in PROPOSAL_PREFIXES.items():
+            if summary.startswith(prefix):
+                out.append((decision, summary[len(prefix):].split(" ")[0].rstrip(":")))
+    return out
 
 
 def run_with_control(scenario: Scenario, make_agent: Callable[[], Agent], **kwargs) -> RunRecord:

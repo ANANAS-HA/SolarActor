@@ -105,7 +105,9 @@ def test_heldout_faults_have_no_rules_and_no_scenarios():
     assert not HELDOUT_FAULTS & set(LADDERS)
     for fault in HELDOUT_FAULTS:
         assert issubclass(CATALOGUE[fault], HeldoutFault) and fault in MITIGATED
-    committed = [Scenario.from_yaml(p) for p in sorted(SCENARIO_DIR.rglob("*.yaml")) if "final" not in p.parts]
+    # every committed scenario file (scenarios/ablation/ablation.yaml is the ablation map, not a scenario)
+    committed = [Scenario.from_yaml(p) for p in sorted(SCENARIO_DIR.rglob("*_[0-9][0-9][0-9][0-9].yaml"))
+                 if "final" not in p.parts]
     assert committed and not any(f.type in HELDOUT_FAULTS for s in committed for f in s.faults)
 
 
