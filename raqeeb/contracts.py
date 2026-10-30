@@ -393,6 +393,7 @@ class PlantState(_Model):
     station: WeatherStationState = Field(default_factory=WeatherStationState)
     atmosphere: AtmosphereState = Field(default_factory=AtmosphereState)
     grid_limit_kw: float | None = Field(default=None, ge=0.0)  # curtailment from the grid operator
+    grid_limit_signalled: bool = True  # False: the plant controller applies the limit but writes no setpoint rows or alarm
 
     @classmethod
     def healthy(cls, inverter_ids: list[str]) -> PlantState:
@@ -419,6 +420,12 @@ class FaultSpec(_Model):
     start: str
     end: str | None = None
     severity: float | None = Field(default=None, ge=0.0, le=1.0)
+    # How the fault presents (None = the default). CURTAILMENT: "notice" (no grid_setpoint rows and no alarm;
+    # a grid-operator note in technician_notes is the only explanation), "fake_notice" (the same unsignalled cap,
+    # with a note whose times or level do not match it). TRANSFORMER_TRIP / FIRMWARE_ALARM / NEW_SHADING:
+    # "quiet" (no telltale alarm code; the numbers alone fit more than one cause and a site note decides).
+    variant: str | None = None
+    language: str | None = Field(default=None, pattern=r"^(en|ar)$")  # a notice's language; None = drawn per run
 
     @field_validator("start", "end", mode="before")
     @classmethod
@@ -566,6 +573,15 @@ class Symptom(_Model):
     evidence: dict[str, Any] = Field(default_factory=dict)  # numbers computed by code
 
 
+class NoticeClaim(_Model):
+    """What a grid-operator notice says, as a model read it from a site note (local clock times, plant
+    limit). Untrusted until code has compared it with the measured plant cap."""
+
+    start_local: str = Field(pattern=r"^\d\d:\d\d$")
+    end_local: str = Field(pattern=r"^\d\d:\d\d$")
+    limit_kw: float = Field(gt=0)
+
+
 class Hypothesis(_Model):
     id: str
     fault_type: FaultType
@@ -573,6 +589,7 @@ class Hypothesis(_Model):
     explains: list[str] = Field(default_factory=list)  # Symptom ids
     evidence: list[str] = Field(default_factory=list)
     score: float = 0.0
+    notice: NoticeClaim | None = None  # CURTAILMENT proposed from a grid-operator notice
 
     @property
     def labels(self) -> list[str]:

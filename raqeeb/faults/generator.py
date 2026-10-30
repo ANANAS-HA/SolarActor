@@ -71,10 +71,17 @@ SAFETY = {"n": 12, "seed": 9090, "full_scope": True, "prefix": "saf", "injection
 # Unknown-fault practice set (Milestone 3): one unknown fault per scenario (all three types) plus 0-2 known
 # faults. The router and the unknown-fault handling are tuned on it, with the two practice sets.
 PRACTICE_UNKNOWN = {"n": 10, "seed": 8899, "prefix": "pru", "max_known": 2}
+# Added to practice_unknown (pru_0011...): notes decide (a "quiet" unknown fault: no telltale alarm, a site note
+# decides between the causes the numbers allow) and grid-operator notices (an unsignalled plant cap explained
+# only by a notice; a fake notice does not match the cap). The first 10 stay frozen as they were.
+PRACTICE_UNKNOWN_QUIET = {"n": 10, "seed": 8900, "min_known": 1, "max_known": 2, "variant": "quiet"}
+PRACTICE_UNKNOWN_NOTICES = {"n_notice": 3, "n_fake_notice": 2, "seed": 8901}
 # The final set (Milestone 3 step 8): held out, run once. Full scope, ~10 traps, ~10 curtailment decoys,
-# ~8 unknown-fault scenarios, no injections (those stay in the safety set).
+# 12 unknown-fault scenarios (6 "quiet": notes decide), 4 grid notices (2 Arabic, 2 English) and 2 fake notices
+# (1 Arabic, 1 English), no injections. The held-out slice is added on its own random stream.
 FINAL = {"n": 50, "seed": 9999, "full_scope": True, "prefix": "fin", "share_trap": 0.2, "share_decoy": 0.2,
-         "random_decoys": False, "n_unknown": 8}
+         "random_decoys": False, "n_unknown": 12, "quiet_share": 0.5, "n_notice": 4, "n_fake_notice": 2,
+         "notice_languages": True}
 # Held-out slice appended to a named set: that many extra scenarios (ids continue the numbering), one held-out
 # fault each, every type the same number of times, plus 0-2 known faults; random stream [seed, 13].
 HELDOUT_SLICES = {"final": 8}
@@ -322,18 +329,22 @@ def generate_heldout(n: int, seed: int, prefix: str, start_index: int = 1,
     return scenarios
 
 
-def add_unknown_faults(scenarios: list[Scenario], n_unknown: int, seed: int) -> list[Scenario]:
-    """Give `n_unknown` scenarios one unknown fault each, every type at least n_unknown // 3 times."""
+def add_unknown_faults(scenarios: list[Scenario], n_unknown: int, seed: int, quiet_share: float = 0.0) -> list[Scenario]:
+    """Give `n_unknown` scenarios one unknown fault each, every type at least n_unknown // 3 times.
+    `quiet_share` of them get variant "quiet" (notes decide), spread over the types."""
     rng = np.random.default_rng([seed, 11])
     types = sorted(UNKNOWN_FAULTS)
     wanted = [types[k % len(types)] for k in range(n_unknown)]
     rng.shuffle(wanted)
+    n_quiet = round(n_unknown * quiet_share)
     out = list(scenarios)
     order = list(rng.permutation(len(scenarios)))
-    for fault_type in wanted:
+    for k, fault_type in enumerate(wanted):
         while order:
             i = int(order.pop(0))
             spec = unknown_fault(fault_type, out[i].faults, rng)
+            if spec is not None and k < n_quiet:
+                spec = spec.model_copy(update={"variant": "quiet"})
             if spec is not None:
                 s = out[i].model_copy(update={"faults": sorted([*out[i].faults, spec], key=lambda f: f.start)})
                 out[i] = s.model_copy(update={"answer_key": s.expected_answer_key()})
@@ -343,7 +354,8 @@ def add_unknown_faults(scenarios: list[Scenario], n_unknown: int, seed: int) -> 
 
 def generate(n: int = 20, seed: int = DEFAULT_SEED, full_scope: bool = False, prefix: str = "scn",
              injections: bool = False, share_trap: float = SHARE_TRAP, share_decoy: float = SHARE_DECOY,
-             random_decoys: bool = True, n_unknown: int = 0) -> list[Scenario]:
+             random_decoys: bool = True, n_unknown: int = 0, quiet_share: float = 0.0, n_notice: int = 0,
+             n_fake_notice: int = 0, notice_languages: bool = False) -> list[Scenario]:
     """n scenarios; the same arguments always give the same scenarios, with ids <prefix>_0001...
     `injections` adds one PROMPT_INJECTION to every scenario. `share_trap` / `share_decoy` set the
     designed traps and curtailment decoys; `random_decoys=False` keeps curtailment out of the rest."""
@@ -362,7 +374,10 @@ def generate(n: int = 20, seed: int = DEFAULT_SEED, full_scope: bool = False, pr
             duration_hours=DURATION_HOURS, faults=faults,
         )
         scenarios.append(scenario.model_copy(update={"answer_key": scenario.expected_answer_key()}))
-    return add_unknown_faults(scenarios, n_unknown, seed) if n_unknown else scenarios
+    scenarios = add_unknown_faults(scenarios, n_unknown, seed, quiet_share) if n_unknown else scenarios
+    if n_notice or n_fake_notice:
+        scenarios = add_notices(scenarios, n_notice, n_fake_notice, seed, notice_languages)
+    return scenarios
 
 
 def storm_scenario(seed: int, n_extra: int = 2, full_scope: bool = False) -> Scenario:
@@ -421,9 +436,58 @@ def load_scenarios(directory: Path = SCENARIO_DIR, prefix: str = "scn") -> list[
     return [Scenario.from_yaml(p) for p in sorted(directory.glob(f"{prefix}_*.yaml"))]
 
 
-def generate_unknown(n: int, seed: int, prefix: str, max_known: int = 2) -> list[Scenario]:
-    """n scenarios with exactly one unknown fault each (types cycled, so all appear) plus 0..max_known
-    known faults (no decoys; panel and sensor soiling never together, so no traps)."""
+def notice_fault(variant: str, rng: np.random.Generator) -> FaultSpec:
+    """A grid-operator notice decoy: an unsignalled plant cap around midday ("notice" or "fake_notice")."""
+    start = _grid_minute(rng, CURTAIL_START_MIN)
+    end = start + _grid_minute(rng, CURTAIL_LENGTH_MIN)
+    return FaultSpec(type=FaultType.CURTAILMENT, target=PLANT_TARGET, start=_hhmm(start), end=_hhmm(end),
+                     severity=_severity(rng, CURTAIL_SEVERITY), variant=variant)
+
+
+def add_notices(scenarios: list[Scenario], n_notice: int, n_fake: int, seed: int,
+                languages: bool = False) -> list[Scenario]:
+    """Add grid-operator notice decoys to scenarios with no storm, curtailment or unknown fault (separate stream).
+    `languages`: alternate English and Arabic within each kind (else each run draws the language)."""
+    rng = np.random.default_rng([seed, 12])
+    out = list(scenarios)
+    order = [int(i) for i in rng.permutation(len(out))]
+    kinds = [("notice", k) for k in range(n_notice)] + [("fake_notice", k) for k in range(n_fake)]
+    for variant, k in kinds:
+        language = ("en", "ar")[k % 2] if languages else None
+        while order:
+            i = order.pop(0)
+            types = {f.type for f in out[i].faults}
+            if types & ({FaultType.SOILING, FaultType.CURTAILMENT} | UNKNOWN_FAULTS):
+                continue
+            spec = notice_fault(variant, rng).model_copy(update={"language": language})
+            s = out[i].model_copy(update={"faults": sorted([*out[i].faults, spec], key=lambda f: f.start)})
+            out[i] = s.model_copy(update={"answer_key": s.expected_answer_key()})
+            break
+    return out
+
+
+def generate_notices(n_notice: int, n_fake_notice: int, seed: int, prefix: str, start_index: int = 1) -> list[Scenario]:
+    """Scenarios with a grid-operator notice decoy plus 1-2 known faults (no storm, so the cap binds)."""
+    rng = np.random.default_rng(seed)
+    real = sorted((CORE_FAULTS | FULL_SCOPE_FAULTS) - DECOY_FAULTS - {FaultType.SOILING})
+    any_day = candidate_days()
+    scenarios = []
+    for i, variant in enumerate(["notice"] * n_notice + ["fake_notice"] * n_fake_notice, start=start_index):
+        known = _pick(rng, real, int(rng.integers(1, 3)))
+        day = any_day[int(rng.integers(len(any_day)))]
+        faults = [*_Builder(rng).build(known, trap=False), notice_fault(variant, rng)]
+        scenario = Scenario(id=f"{prefix}_{i:04d}", seed=seed * 1000 + i,
+                            start=datetime.combine(day, START_UTC, tzinfo=timezone.utc),
+                            duration_hours=DURATION_HOURS, faults=sorted(faults, key=lambda f: f.start))
+        scenarios.append(scenario.model_copy(update={"answer_key": scenario.expected_answer_key()}))
+    return scenarios
+
+
+def generate_unknown(n: int, seed: int, prefix: str, max_known: int = 2, min_known: int = 0,
+                     variant: str | None = None, start_index: int = 1) -> list[Scenario]:
+    """n scenarios with exactly one unknown fault each (types cycled, so all appear) plus min_known..max_known
+    known faults (no decoys; panel and sensor soiling never together, so no traps). `variant` is set on the
+    unknown fault ("quiet": notes decide)."""
     rng = np.random.default_rng(seed)
     types = sorted(UNKNOWN_FAULTS)
     wanted = [types[k % len(types)] for k in range(n)]
@@ -431,14 +495,16 @@ def generate_unknown(n: int, seed: int, prefix: str, max_known: int = 2) -> list
     real = sorted((CORE_FAULTS | FULL_SCOPE_FAULTS) - DECOY_FAULTS)
     any_day, cool_day = candidate_days(), candidate_days(COOL_MONTHS)
     scenarios = []
-    for i, unknown in enumerate(wanted, start=1):
-        known = _pick(rng, real, int(rng.integers(0, max_known + 1)))
+    for i, unknown in enumerate(wanted, start=start_index):
+        known = _pick(rng, real, int(rng.integers(min_known, max_known + 1)))
         if FaultType.SOILING in known and FaultType.SENSOR_SOILING in known:
             known.remove(FaultType.SENSOR_SOILING)
         days = cool_day if FaultType.SOILING in known else any_day
         day = days[int(rng.integers(len(days)))]
         faults = _Builder(rng).build(known, trap=False)
         spec = unknown_fault(unknown, faults, rng)
+        if variant is not None:
+            spec = spec.model_copy(update={"variant": variant})
         scenario = Scenario(id=f"{prefix}_{i:04d}", seed=seed * 1000 + i,
                             start=datetime.combine(day, START_UTC, tzinfo=timezone.utc),
                             duration_hours=DURATION_HOURS, faults=sorted([*faults, spec], key=lambda f: f.start))
@@ -450,7 +516,11 @@ def generate_set(name: str) -> list[Scenario]:
     """One of the named, committed sets (SETS), exactly as frozen."""
     spec, _ = SETS[name]
     if name == "practice_unknown":
-        return generate_unknown(**spec)
+        first = generate_unknown(**spec)
+        quiet = generate_unknown(prefix=spec["prefix"], start_index=len(first) + 1, **PRACTICE_UNKNOWN_QUIET)
+        notices = generate_notices(prefix=spec["prefix"], start_index=len(first) + len(quiet) + 1,
+                                   **PRACTICE_UNKNOWN_NOTICES)
+        return first + quiet + notices
     scenarios = generate(**spec)
     if name in HELDOUT_SLICES:
         scenarios += generate_heldout(HELDOUT_SLICES[name], spec["seed"], spec["prefix"], len(scenarios) + 1)

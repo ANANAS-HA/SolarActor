@@ -17,7 +17,15 @@ from typing import Any
 
 import pandas as pd
 
-from raqeeb.contracts import PLANT_TARGET, STEP_MINUTES, VERDICT_INCONCLUSIVE, VERDICT_OK, PlantConfig, ToolResult
+from raqeeb.contracts import (
+    PLANT_TARGET,
+    STEP_MINUTES,
+    VERDICT_INCONCLUSIVE,
+    VERDICT_OK,
+    InverterStatus,
+    PlantConfig,
+    ToolResult,
+)
 from raqeeb.telemetry.store import TelemetryStore
 from raqeeb.tools.common import STEP, get_plant, local_time, window
 from raqeeb.tools.physics import Basis, expected_inverter, expected_plant_ac
@@ -30,6 +38,7 @@ ONSET_MIN_STEPS = 6  # a loss must last 30 min of usable steps
 PRODUCING_FRACTION = 0.8  # meter residual >= this share of peer output: missing device still produces
 CURTAIL_AT_LIMIT_TOL = 0.02  # meter within 2% of (or under) the grid limit
 CURTAIL_AT_LIMIT_SHARE = 0.8  # share of binding steps the meter must sit at the limit
+CURTAILED_SHARE = 0.75  # this share of reporting inverters in CURTAILED status = a step under an export limit
 
 
 def energy_kwh(power_kw: pd.Series) -> float:
@@ -70,10 +79,14 @@ def loss_onset(ratio: pd.Series, threshold: float, min_steps: int = ONSET_MIN_ST
 
 
 def _curtailed(store: TelemetryStore, index: pd.DatetimeIndex) -> pd.Series:
+    """Steps under an export limit: a grid setpoint row, or most reporting inverters themselves in CURTAILED
+    status (a limit the plant controller applies without a setpoint row still shows in their status)."""
     if len(index) == 0:
         return pd.Series(False, index=index)
     limits = store.grid_setpoint(index[0], index[-1] + STEP)
-    return pd.Series(index.isin(limits.index), index=index)
+    status = store.inverter_wide("status", index[0], index[-1] + STEP).reindex(index)
+    held = (status == InverterStatus.CURTAILED.value).sum(axis=1) >= CURTAILED_SHARE * status.notna().sum(axis=1).clip(lower=1)
+    return pd.Series(index.isin(limits.index), index=index) | held.fillna(False)
 
 
 def performance_series(store: TelemetryStore, start: datetime | None = None, end: datetime | None = None,

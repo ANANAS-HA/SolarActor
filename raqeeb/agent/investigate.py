@@ -35,7 +35,8 @@ def mark_common_onset(memory: Memory, current: dict[str, Symptom], now: datetime
     units have in common), not separate single-device faults. A unit below its peers starts at the
     peer tool's onset; one only below the reference starts when first seen. Units with a confirmed
     cause of their own do not count. Two units weak together are held (no single-unit guess) for
-    ONSET_HOLD after the later of them was first seen, in case a third joins."""
+    ONSET_HOLD after the later of them was first seen, in case a third joins; a unit weak on its own
+    is held for the poll in which it is first seen, in case others follow."""
     explained = {t for c in memory.causes.values() if c.status not in PASSIVE for t in c.hypothesis.targets}
     lows = [memory.symptoms[sid] for sid, s in current.items() if s.kind == SymptomKind.DEVICE_UNDERPERFORMANCE
             and s.device_id not in explained]
@@ -49,6 +50,8 @@ def mark_common_onset(memory: Memory, current: dict[str, Symptom], now: datetime
             s.evidence["summary"] = f"{s.evidence.get('summary', s.id)}; started with {', '.join(together)}"
         elif len(together) > 1 and now - max(memory.seen_at.get(o.id, now) for o in near) < ONSET_HOLD:
             s.evidence["onset_hold"] = together  # might be the start of a shared loss: no single-unit guess yet
+        elif memory.seen_at.get(s.id, now) >= now:
+            s.evidence["onset_hold"] = [s.device_id]  # first seen this poll: wait one poll for others to show
 
 
 def known_losses(memory: Memory, now: datetime) -> list[str]:
@@ -153,7 +156,8 @@ def symptoms_from(results: dict[str, ToolResult], alarm_groups: list[dict], memo
         for p in r.values["periods"]:
             grid = r.verdict == "plant_flat_cap_grid_limit"
             out.append(_make(SymptomKind.FLAT_CAP_PLANT, PLANT_TARGET, p["start"], {
-                "tool": r.tool, "grid_limit": grid, "level_kw": p["level_kw"],
+                "tool": r.tool, "grid_limit": grid, "level_kw": p["level_kw"], "plant_kw": p.get("plant_kw"),
+                "end": p["end"], "ongoing": p["end"] >= now - timedelta(minutes=10),
                 "summary": f"all inverters flat at {p['level_kw']:.0f} kW" + (" under a grid limit" if grid else "")}))
             break  # one plant-wide cap symptom; its evidence is the first period
     if r := found("curtailment_periods"):

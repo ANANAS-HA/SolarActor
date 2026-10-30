@@ -202,8 +202,12 @@ def test_committed_practice_unknown_set_is_frozen():
     from raqeeb.contracts import UNKNOWN_FAULTS
     from raqeeb.faults.generator import PRACTICE_UNKNOWN
 
-    scenarios = load_scenarios(PRACTICE_UNKNOWN_SCENARIO_DIR, PRACTICE_UNKNOWN["prefix"])
-    assert scenarios == generate_set("practice_unknown")
+    from raqeeb.faults.generator import generate_unknown
+
+    everything = load_scenarios(PRACTICE_UNKNOWN_SCENARIO_DIR, PRACTICE_UNKNOWN["prefix"])
+    assert everything == generate_set("practice_unknown") and len(everything) == 25
+    scenarios = everything[:10]  # the original 10 (numbers decide); 11-25: notes decide and notices
+    assert scenarios == generate_unknown(**PRACTICE_UNKNOWN)
     assert len(scenarios) == 10 and all(s.id.startswith("pru_") for s in scenarios)
     others = load_scenarios(PRACTICE2_SCENARIO_DIR, "pr2") + load_scenarios(TEST_SCENARIO_DIR, TEST["prefix"])
     assert not {s.seed for s in scenarios} & {s.seed for s in others}

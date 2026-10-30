@@ -256,3 +256,46 @@ def test_a_unit_stopped_until_dusk_is_still_not_an_open_string():
     record = run_scenario(s, agent)
     assert "STRING_OPEN@INV-04" not in record.predicted and record.actions == []
     assert record.escalations
+
+
+# -- zero output: never left unreported -----------------------------------------------------------------
+
+
+@pytest.mark.parametrize("evidence", [{"ratio_to_peers": 0.0, "zero_output": True},  # peer tool: exactly zero
+                                      {"ratio_vs_reference": 0.4, "zero_output": True}])  # no peer ratio at all
+def test_soiling_never_explains_a_unit_at_zero_output(evidence):
+    """Soiling scales output; it never stops a unit. Units at zero while their peers produce stay unexplained
+    (and go to a human) unless a cause that can stop a unit covers them."""
+    units = ["INV-01", "INV-02", "INV-03", "INV-04"]
+    storm = [sym(SymptomKind.PLANT_UNDERPERFORMANCE, PLANT_TARGET, vs_reference=0.8),
+             sym(SymptomKind.HIGH_WIND, "WS-01", stow=True),
+             sym(SymptomKind.ALARM, PLANT_TARGET, code="LOW_PR")]
+    zero = [sym(SymptomKind.DEVICE_UNDERPERFORMANCE, u, common_onset=units, **evidence) for u in units]
+    hypotheses, unexplained, _, _ = rank_detail(storm + zero, load_plant())
+    assert "SOILING@ALL" in {h.labels[0] for h in hypotheses}
+    assert sorted(unexplained) == sorted(s.id for s in zero)
+    assert not any(s.id in h.explains for h in hypotheses for s in zero)
+
+
+def test_a_remote_stop_still_explains_its_unit_at_zero_output():
+    stopped = sym(SymptomKind.DEVICE_UNDERPERFORMANCE, "INV-05", ratio_to_peers=0.0, zero_output=True)
+    hypotheses, unexplained, _, _ = rank_detail([stopped, sym(SymptomKind.UNEXPECTED_COMMAND, "INV-05")], load_plant())
+    assert [h.labels[0] for h in hypotheses] == ["UNAUTHORIZED_CMD@INV-05"] and unexplained == []
+    assert stopped.id in hypotheses[0].explains
+
+
+def test_units_at_zero_during_a_dust_storm_are_escalated_not_put_down_to_soiling():
+    """End to end, hand-made: a dust storm, then a quiet trip of transformer T1 (no alarm of its own). Rules-only
+    Raqeeb must name the soiling and escalate the four units at zero, not let the soiling explain them."""
+    from raqeeb.bench.harness import run_scenario
+
+    s = scenario({"type": "SOILING", "target": "ALL", "start": "04:30", "end": "05:40", "severity": 0.2},
+                 {"type": "TRANSFORMER_TRIP", "target": "T1", "start": "06:30", "variant": "quiet"}, seed=7)
+    agent = RaqeebAgent(name="raqeeb_rules")
+    record = run_scenario(s, agent)
+    t1 = set(agent.memory.plant.layout.area_of("T1"))
+    assert record.predicted == ["SOILING@ALL"] and record.actions and all(
+        a.request.action == ActionType.CREATE_CLEANING_WORK_ORDER for a in record.actions)
+    assert any(e.subject == "unexplained" and t1 <= set(e.devices) for e in record.escalations)
+    soiling = agent.memory.causes["SOILING@ALL"].hypothesis
+    assert not any(agent.memory.symptoms[sid].device_id in t1 for sid in soiling.explains)

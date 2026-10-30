@@ -274,7 +274,7 @@ class Twin:
             alarms.add(("HIGH_WIND", plant.weather_station_id))
         if not state.station.comms_up:
             alarms.add(("COMM_LOSS", plant.weather_station_id))
-        if state.grid_limit_kw is not None:
+        if state.grid_limit_kw is not None and state.grid_limit_signalled:
             alarms.add(("GRID_LIMIT_ACTIVE", plant.plant_controller_id))
         self._raise_alarms(alarms, wind=wind, temp=dict(zip(ids, temp)), ac=dict(zip(ids, ac)))
 
@@ -312,7 +312,7 @@ class Twin:
         ))
         plant_ac = float(ac.sum())
         out.meter.append(MeterReading(ts=ts, plant_ac_kw=plant_ac))
-        if state.grid_limit_kw is not None:
+        if state.grid_limit_kw is not None and state.grid_limit_signalled:
             out.grid_setpoint.append(GridSetpoint(ts=ts, limit_kw=state.grid_limit_kw))
         self.truth.append(StepTruth(ts=ts, plant_ac_kw=plant_ac, inverter_ac_kw=dict(zip(ids, ac.tolist())),
                                     stowed=stowed, ghi_wm2=ghi))

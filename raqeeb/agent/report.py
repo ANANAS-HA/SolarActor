@@ -155,6 +155,11 @@ def escalate(memory: Memory, now) -> list[Escalation]:
             target = cause.hypothesis.targets[0]
             devices = memory.plant.layout.area_of(target) or [target]
             new.append(Escalation(ts=now, subject=cause.label, devices=devices, reason=cause.note or "no fix left"))
+        elif cause.status == CauseStatus.EXPECTED and cause.source == "llm" and cause.label not in memory.escalated:
+            memory.escalated.add(cause.label)  # expected from a grid-operator notice: no action, but a human confirms
+            new.append(Escalation(ts=now, subject=cause.label, devices=[memory.plant.plant_controller_id],
+                                  reason="plant cap marked expected from a grid-operator notice that matches it; "
+                                         "confirm with the grid operator"))
     unexplained = set(memory.diagnosis.unexplained) if memory.diagnosis else set()
     memory.unexplained_polls = {sid: memory.unexplained_polls.get(sid, 0) + 1 for sid in unexplained}
     due = sorted(sid for sid, polls in memory.unexplained_polls.items()
