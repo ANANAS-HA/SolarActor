@@ -17,6 +17,17 @@ inverters:
   layout_rows: 4         # console map: 4 x 4 grid
   layout_cols: 4
 
+layout:                  # synthetic: one transformer per row of the 4 x 4 map; site staff call the rows groups A-D
+  transformers:
+    T1: [INV-01, INV-02, INV-03, INV-04]
+    T2: [INV-05, INV-06, INV-07, INV-08]
+    T3: [INV-09, INV-10, INV-11, INV-12]
+    T4: [INV-13, INV-14, INV-15, INV-16]
+  groups: {T1: A, T2: B, T3: C, T4: D}
+  edges:                 # map columns along the fences
+    EDGE-W: [INV-01, INV-05, INV-09, INV-13]
+    EDGE-E: [INV-04, INV-08, INV-12, INV-16]
+
 weather_station_id: WS-01
 meter_id: METER-01
 plant_controller_id: PPC-01

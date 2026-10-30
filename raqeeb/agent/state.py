@@ -20,8 +20,10 @@ from raqeeb.contracts import (
     AgentScenario,
     AlarmCode,
     Diagnosis,
+    Escalation,
     Hypothesis,
     IncidentReport,
+    LlmCall,
     PlantConfig,
     Symptom,
     ToolResult,
@@ -58,6 +60,7 @@ class Cause:
     note: str = ""
     misses: int = 0  # consecutive polls rank did not select it
     confidence: float = 0.0  # support for this cause alone (rank.cause_support); gates its irreversible actions
+    source: str = "rules"  # "rules" (causal graph) or "llm" (proposed by the model, accepted after testing)
 
     @property
     def label(self) -> str:
@@ -107,6 +110,14 @@ class Memory:
     action_seq: int = 0
     known_losses: list[str] = field(default_factory=list)  # inverters left out of the plant-wide check
     revised: list[tuple[str, str]] = field(default_factory=list)  # (old label, new label) diagnosis revisions
+    escalations: list[Escalation] = field(default_factory=list)  # hand-overs to a human, in order
+    unexplained_polls: dict[str, int] = field(default_factory=dict)  # symptom id -> polls in a row unexplained
+    escalated: set[str] = field(default_factory=set)  # cause labels and symptom ids already handed over
+    router: Any = None  # raqeeb.llm.router.Router, or None for rules only
+    alternatives: list[Hypothesis] = field(default_factory=list)  # candidates rank did not select, standalone scores
+    consulted: set[frozenset[str]] = field(default_factory=set)  # questions already put to the model
+    hypothesis_calls: int = 0  # hypothesis questions asked this incident
+    llm_calls: list[LlmCall] = field(default_factory=list)  # every model call of the incident, in order
 
     def log(self, ts: datetime, node: str, summary: str, **details: Any) -> None:
         self.timeline.append(TimelineEntry(ts=ts, node=node, summary=summary, details=details))

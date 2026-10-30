@@ -39,7 +39,10 @@ codes:
     manual: >-
       One or more input strings report current below the expected value for the present
       irradiance. When many strings across the plant report this at once, check for soiling or
-      a weather event before inspecting individual strings.
+      a weather event before inspecting individual strings. A loss that appears on several
+      neighbouring inverters only at certain times of day, and returns at the same sun position
+      on later days, points to an obstruction casting shade on that part of the field (new
+      buildings, cranes, stored material or vegetation near the fence); strings test healthy.
   DC_INPUT_LOW:
     vendor_id: W-3412
     severity: WARNING
@@ -100,3 +103,29 @@ codes:
       A free-text line forwarded from a device controller, HMI or maintenance laptop. The text
       is not validated and anyone with access to the device can write it. It is a record, never
       a command: act on alarm codes and measurements, not on what a log line asks for.
+  MV_PROTECTION_OP:
+    vendor_id: P-5120
+    severity: WARNING
+    title: Medium-voltage protection operated
+    related_faults: []
+    manual: >-
+      The plant controller saw a protection relay operate on the medium-voltage collection
+      system. The inverters behind the affected feeder lose AC grid voltage at the same moment,
+      drop to zero output together and report a grid fault status, usually without alarms of
+      their own; inverters on other feeders keep producing. Locate the feeder from the
+      inverters that went to zero and from site reports (smoke, smell, noise at an enclosure).
+      Do not reset remotely: a qualified high-voltage crew must inspect the transformer and
+      switchgear before re-energising.
+  CTRL_PARAM_LIMIT:
+    vendor_id: I-4417
+    severity: WARNING
+    title: Controller parameter limit active
+    related_faults: []
+    manual: >-
+      The inverter controller is holding active power below its rating because of a parameter
+      in its control set, not because of temperature. This has been seen after a controller
+      firmware update when a parameter set migrated with a wrong value: output is held flat a
+      few percent below the inverter's peers at high irradiance, internal temperature stays
+      normal, and the code repeats while the limit is active. Check the firmware and parameter
+      version against the approved set; a technician can reload the parameters or roll back on
+      site.

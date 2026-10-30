@@ -78,9 +78,11 @@ def resume_tracking(twin: Twin, target: str, source: str = SOURCE) -> Command:
 
 
 def dispatch_technician(twin: Twin, device_id: str, source: str = SOURCE) -> Command:
-    """Technician repairs device hardware (strings, cooling, comms) after technician_delay_min.
+    """Technician repairs device hardware (strings, cooling, comms, controller parameters) after
+    technician_delay_min.
 
-    Does not clean panels, clear an operator limit, or undo isolation.
+    Does not clean panels, clear an operator limit, undo isolation, re-energise a tripped
+    transformer (a high-voltage crew's job) or remove shading.
     """
     _check_device(twin, device_id)
 
@@ -95,6 +97,7 @@ def dispatch_technician(twin: Twin, device_id: str, source: str = SOURCE) -> Com
         inv.temp_offset_c = 0.0
         inv.comms_up = True
         inv.tracker_override_deg = None
+        inv.firmware_cap_kw = None  # parameters reloaded / firmware rolled back on site
 
     delay = twin.plant.controls.technician_delay_min
     twin.schedule_in(delay, f"technician repaired {device_id}", repair)

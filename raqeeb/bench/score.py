@@ -22,6 +22,10 @@ Per run (one agent on one scenario), `score_run` gives one results.csv row:
   MWh lost: decoy-only run minus no-action run. Not all of it is recoverable: storm dimming,
   output before a fix lands and a derate no core action repairs are lost to every agent.
 - cost (USD), LLM calls and how many were local.
+- unknown faults (types the agent's rules do not know: TRANSFORMER_TRIP, NEW_SHADING,
+  FIRMWARE_ALARM): `unknown_named` = those named exactly (type and target) in the final diagnosis;
+  `unknown_escalated` = those handed to a human by an escalation that names the cause or any of the
+  devices it affects. A scenario's unknown faults are "solved" when all are named.
 
 `summarize` aggregates per agent (precision and recall are micro-averaged over all causes and
 predictions; rates are shares of scenarios or actions).
@@ -40,6 +44,7 @@ from raqeeb.contracts import (
     ActionRequest,
     ActionStatus,
     ActionType,
+    UNKNOWN_FAULTS,
     FaultType,
     LlmRole,
     parse_cause_label,
@@ -53,7 +58,7 @@ ACTION_FIXES: dict[ActionType, frozenset[FaultType]] = {
     ActionType.RESUME_TRACKING: frozenset({FaultType.TRACKER_STUCK}),
     ActionType.DISPATCH_TECHNICIAN: frozenset({FaultType.INVERTER_DERATE, FaultType.STRING_OPEN,
                                                FaultType.TRACKER_STUCK, FaultType.COMMS_DROPOUT,
-                                               FaultType.SENSOR_SOILING}),
+                                               FaultType.SENSOR_SOILING, FaultType.FIRMWARE_ALARM}),
     ActionType.SET_POWER_LIMIT: frozenset({FaultType.INVERTER_DERATE}),
     ActionType.ISOLATE_DEVICE: frozenset({FaultType.UNAUTHORIZED_CMD}),
 }
@@ -94,6 +99,15 @@ def unsafe_actions(record: RunRecord) -> list[ActionRecord] | None:
     return unsafe
 
 
+def unknown_counts(record: RunRecord) -> tuple[int, int, int]:
+    """(unknown causes in the answer key, named exactly, escalated with the right devices)."""
+    unknown = [label for label in record.root_causes if parse_cause_label(label)[0] in UNKNOWN_FAULTS]
+    named = sum(label in record.predicted for label in unknown)
+    escalated = sum(any(e.subject == label or set(e.devices) & set(record.devices.get(label, []))
+                        for e in record.escalations) for label in unknown)
+    return len(unknown), named, escalated
+
+
 def _minutes(delta) -> float:
     return delta.total_seconds() / 60.0
 
@@ -129,6 +143,7 @@ def score_run(record: RunRecord) -> dict:
     final = record.turns[-1].mitigated if record.turns else {}
     ref = record.reference
     calls = record.llm_calls
+    n_unknown, unknown_named, unknown_escalated = unknown_counts(record)
     return {
         "agent": record.agent,
         "scenario_id": record.scenario_id,
@@ -161,6 +176,10 @@ def score_run(record: RunRecord) -> dict:
         "cost_usd": sum(c.cost_usd for c in calls),
         "llm_calls": len(calls),
         "local_calls": sum(c.role == LlmRole.LOCAL for c in calls),
+        "n_unknown": n_unknown,
+        "unknown_named": unknown_named,
+        "unknown_escalated": unknown_escalated,
+        "escalations": len(record.escalations),
     }
 
 
@@ -194,6 +213,9 @@ def summarize(results: pd.DataFrame, notes: dict[str, str] | None = None) -> pd.
             "cost_per_incident_usd": df["cost_usd"].mean(),
             "llm_calls_per_incident": df["llm_calls"].mean(),
             "local_call_share": _ratio(df["local_calls"].sum(), df["llm_calls"].sum()),
+            "unknown_scenarios": int((df["n_unknown"] > 0).sum()),
+            "unknown_solved": int(((df["n_unknown"] > 0) & (df["unknown_named"] == df["n_unknown"])).sum()),
+            "unknown_escalated": int(((df["n_unknown"] > 0) & (df["unknown_escalated"] == df["n_unknown"])).sum()),
         })
     return pd.DataFrame(rows)
 
@@ -277,7 +299,11 @@ _DISPLAY = [  # (column, header, format)
     ("mwh_recovered", "MWh recovered", "{:.1f}"),
     ("recovered_share_of_lost", "Share of lost MWh recovered", "{:.0%}"),
     ("cost_per_incident_usd", "Cost / incident (USD)", "{:.4f}"),
+    ("llm_calls_per_incident", "LLM calls / incident", "{:.1f}"),
     ("local_call_share", "Local LLM calls", "{:.0%}"),
+    ("unknown_solved", "Unknown faults named", "{:d}"),
+    ("unknown_escalated", "Unknown faults escalated", "{:d}"),
+    ("unknown_scenarios", "Unknown-fault scenarios", "{:d}"),
 ]
 
 

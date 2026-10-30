@@ -107,6 +107,8 @@ def fixes_for(memory: Memory, cause: Cause, now: datetime) -> tuple[list[ActionR
     """Requests for this cause now, or ([], reason it waits)."""
     fault, target = cause.hypothesis.fault_type, cause.hypothesis.targets[0]
     ladder = LADDERS.get(fault, [])
+    if not ladder and cause.source == "llm" and target in memory.plant.inverters.ids:
+        ladder = [[A.DISPATCH_TECHNICIAN]]  # a fault the planner does not know: a ticket is the only safe action
     if cause.attempts >= MAX_FAILED_FIXES:
         return [], f"escalated: {cause.attempts} fixes failed verification (last: {cause.note or 'no detail'})"
     if cause.attempts >= len(ladder):

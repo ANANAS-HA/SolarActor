@@ -53,10 +53,14 @@ Code computes every number; the LLM proposes and prunes hypotheses, orders plans
   symptom alarms on 43/52 healthy days).
 
 ## Agent (Phase 2)
-- `raqeeb.agent.RaqeebAgent` (contracts.Agent): one LangGraph pass per poll, triage -> investigate -> rank -> plan ->
-  safety -> execute -> verify -> report; verify loops back to plan once if it reopens a cause. State in `agent/state.py`.
+- `raqeeb.agent.RaqeebAgent(router=None|Router(api=...))` (contracts.Agent): one LangGraph pass per poll, triage ->
+  investigate -> rank -> consult -> plan -> safety -> execute -> verify -> report; verify loops back to plan once if
+  it reopens a cause. State in `agent/state.py`. Bench variants: raqeeb_rules, raqeeb_local, raqeeb_full.
 - Causes come from the causal graph in `agent/rank.py` (`LINKS`); fix ladders and timing in `agent/plan.py`.
-- Alarm `message` text is never read: only code, device and time, checked against the configs.
+- Alarm `message` text and technician note text are never read by rules: only code, device and time. Only
+  `agent/consult.py` reads `technician_notes`, to pass them to the router as delimited data.
+- `UNKNOWN_FAULTS` (TRANSFORMER_TRIP, NEW_SHADING, FIRMWARE_ALARM) stay out of the causal graph and planner; a model
+  proposal is accepted only after `consult.test_hypothesis`, and gets a ticket or an escalation, never a new action.
 
 ## Rules
 - Practice sets = `scenarios/scn_*.yaml` and `scenarios/practice2/pr2_*.yaml` (tune thresholds and timings only on

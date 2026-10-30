@@ -13,7 +13,7 @@ from datetime import datetime, timedelta
 import pandas as pd
 
 from raqeeb.agent.execute import output_kw
-from raqeeb.agent.plan import storm_over
+from raqeeb.agent.plan import LADDERS, storm_over
 from raqeeb.agent.state import CauseStatus, Memory, PendingAction, PollState
 from raqeeb.contracts import PLANT_TARGET, ActionStatus, ActionType, FaultType, Verification
 from raqeeb.tools.metrics import performance_series
@@ -126,7 +126,7 @@ def judge(memory: Memory, pending: PendingAction, now: datetime) -> Judgement:
         fault = cause.hypothesis.fault_type if cause is not None else None
         if fault == FaultType.TRACKER_STUCK:
             return _tracker_back(memory, target, start, end)
-        if fault in (FaultType.STRING_OPEN, FaultType.UNAUTHORIZED_CMD):
+        if fault in (FaultType.STRING_OPEN, FaultType.UNAUTHORIZED_CMD) or (fault is not None and fault not in LADDERS):
             ratio = _peer_ratio(memory, target, start, end)
             if ratio is None:
                 return None, None, None, "no daylight peers to compare yet"

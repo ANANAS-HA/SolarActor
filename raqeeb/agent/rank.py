@@ -18,6 +18,12 @@ device log line (known only by its code and device; the text is never read) and 
 flagged for security review: never a root cause, never an action. Log lines count neither for
 nor against the confidence, so no log line can push an irreversible action over its threshold.
 
+Guards keep the rules from forcing a known cause onto symptoms it does not fit (they stay
+unexplained and are escalated instead): a `required` link must be present (soiling within one
+shift comes from a dust storm); a contradicting symptom on the target rules a cause out (a unit
+held at a flat cap is a controller limit, not lost strings); a single-device cause cannot take a
+loss that started on several units at the same moment (common onset: something they share).
+
 Each selected cause also gets its own support (cause_support): the weight it explains over that
 weight plus its predicted-but-absent links. The safety gate uses it for irreversible actions.
 A diagnosis can be revised: a cause that was acted on but is no longer selected, while a newly
@@ -55,6 +61,7 @@ PERFORMANCE_CODES = frozenset({"LOW_PR", "LOW_STRING_CURRENT", "DC_INPUT_LOW"})
 # Soiling explains a weak inverter only if it is about level with its peers (uneven dust is +/-10% of the
 # soiling, a few percent of output); a unit clearly below its peers has a fault of its own (an open string)
 SOILING_PEER_RATIO = 0.90
+STRING_MIN_PEER_RATIO = 0.30  # an open string leaves the other strings producing: a unit near zero is something else
 
 F, K = FaultType, SymptomKind
 
@@ -68,6 +75,7 @@ class Link:
     predicted: bool = False
     codes: frozenset[str] = frozenset()  # for ALARM symptoms: the codes this link covers
     when: Callable[[Symptom], bool] | None = None
+    required: bool = False  # absent: the cause is ruled out (not just penalised)
 
 
 def _alarm(fault: FaultType, codes: set[str], scope: str, **kw) -> Link:
@@ -77,7 +85,7 @@ def _alarm(fault: FaultType, codes: set[str], scope: str, **kw) -> Link:
 LINKS: list[Link] = [
     # Dust storm soiling: the plant loses output against the trusted reference; storm wind before it
     Link(F.SOILING, K.PLANT_UNDERPERFORMANCE, "plant", key=True, predicted=True),
-    Link(F.SOILING, K.HIGH_WIND, "weather", predicted=True),
+    Link(F.SOILING, K.HIGH_WIND, "weather", predicted=True, required=True),  # dust comes with the storm
     Link(F.SOILING, K.DEVICE_UNDERPERFORMANCE, "any_inverter",  # uneven dust
          when=lambda s: (s.evidence.get("ratio_to_peers") or 1.0) >= SOILING_PEER_RATIO),
     _alarm(F.SOILING, PERFORMANCE_CODES, "plant", key=True),  # the whole fleet below its sensor-based expected
@@ -85,7 +93,7 @@ LINKS: list[Link] = [
     # Dusty irradiance sensor
     Link(F.SENSOR_SOILING, K.SENSOR_DEVIATION, "station", key=True, predicted=True),
     # Thermal derate: flat cap below peers, hot, its own alarm, and the LOW_PR family on that unit
-    Link(F.INVERTER_DERATE, K.FLAT_CAP_DEVICE, "device", key=True, predicted=True),
+    Link(F.INVERTER_DERATE, K.FLAT_CAP_DEVICE, "device", predicted=True),  # a cap alone is not heat: not key
     Link(F.INVERTER_DERATE, K.HIGH_TEMPERATURE, "device", key=True, predicted=True),
     Link(F.INVERTER_DERATE, K.DEVICE_UNDERPERFORMANCE, "device"),
     _alarm(F.INVERTER_DERATE, {"DERATE_TEMP"}, "device", key=True, predicted=True),
@@ -103,7 +111,9 @@ LINKS: list[Link] = [
     Link(F.TRACKER_STUCK, K.DEVICE_UNDERPERFORMANCE, "device"),
     _alarm(F.TRACKER_STUCK, {"TRACKER_FAULT"}, "device", key=True),
     _alarm(F.TRACKER_STUCK, PERFORMANCE_CODES, "device"),  # off-angle panels collect less: the LOW_PR family
-    Link(F.STRING_OPEN, K.DEVICE_UNDERPERFORMANCE, "device", key=True, predicted=True),
+    Link(F.STRING_OPEN, K.DEVICE_UNDERPERFORMANCE, "device", key=True, predicted=True,
+         when=lambda s: not s.evidence.get("common_onset")
+         and (s.evidence.get("ratio_to_peers") or 1.0) >= STRING_MIN_PEER_RATIO),
     _alarm(F.STRING_OPEN, PERFORMANCE_CODES, "device"),
     Link(F.UNAUTHORIZED_CMD, K.UNEXPECTED_COMMAND, "device", key=True, predicted=True),
     _alarm(F.UNAUTHORIZED_CMD, {"REMOTE_STOP"}, "device", key=True),
@@ -112,6 +122,12 @@ LINKS: list[Link] = [
     # Injected instruction (decoy): a free-text log line from a device. Flagged, never acted on
     Link(F.PROMPT_INJECTION, K.DEVICE_LOG, "device", key=True, predicted=True),
 ]
+
+
+# A symptom of one of these kinds on the target rules the cause out
+CONTRADICTS: dict[FaultType, frozenset[SymptomKind]] = {
+    F.STRING_OPEN: frozenset({K.FLAT_CAP_DEVICE}),  # a flat cap is a controller limit, not lost strings
+}
 
 
 def build_graph(links: list[Link] = LINKS) -> nx.MultiDiGraph:
@@ -203,6 +219,10 @@ def candidates(symptoms: list[Symptom], plant: PlantConfig) -> list[Candidate]:
         explains = [s for s in symptoms if any(matches(link, s, target, plant) for link in links)]
         absent = [link for link in links if link.predicted
                   and not any(matches(link, s, target, plant) for s in symptoms)]
+        if any(link.required for link in absent):
+            continue
+        if any(s.kind in CONTRADICTS.get(fault, ()) and s.device_id == target for s in symptoms):
+            continue
         out.append(Candidate(fault, target, explains, absent))
     return out
 
@@ -231,6 +251,26 @@ def rank_causes(symptoms: list[Symptom], plant: PlantConfig) -> tuple[list[Hypot
     """Selected hypotheses (best first), unexplained symptom ids and a confidence in [0, 1]."""
     hypotheses, unexplained, confidence, _ = rank_detail(symptoms, plant)
     return hypotheses, unexplained, confidence
+
+
+def _standalone(c: Candidate) -> float:
+    return sum(weight(s) for s in c.explains) - ABSENT_PENALTY * len(c.absent) - CAUSE_PENALTY
+
+
+def alternatives(symptoms: list[Symptom], plant: PlantConfig, chosen: set[str]) -> list[Hypothesis]:
+    """Candidates rank did not select, with their standalone scores (for near-tie checks)."""
+    return [Hypothesis(id=f"A-{c.label}", fault_type=c.fault, targets=[c.target],
+                       explains=sorted(s.id for s in c.explains), score=round(_standalone(c), 3))
+            for c in candidates(symptoms, plant) if c.label not in chosen]
+
+
+def near_tie_candidates(memory: Memory, margin: float) -> list[Hypothesis]:
+    """The top two candidates (selected or not) when they compete for the same symptoms within `margin`."""
+    ranked = sorted([*memory.hypotheses, *memory.alternatives], key=lambda h: h.score, reverse=True)
+    if len(ranked) < 2:
+        return []
+    a, b = ranked[:2]
+    return [a, b] if set(a.explains) & set(b.explains) and a.score - b.score <= margin else []
 
 
 def rank_detail(symptoms: list[Symptom], plant: PlantConfig
@@ -291,6 +331,7 @@ def rank(state: PollState) -> PollState:
     symptoms = [memory.symptoms[sid] for sid in sorted(memory.active)]
     hypotheses, unexplained, confidence, supports = rank_detail(symptoms, memory.plant)
     memory.hypotheses = hypotheses
+    memory.alternatives = alternatives(symptoms, memory.plant, {h.labels[0] for h in hypotheses})
     selected = {h.labels[0]: h for h in hypotheses}
 
     for label, h in selected.items():
@@ -306,7 +347,7 @@ def rank(state: PollState) -> PollState:
         memory.causes[label].confidence = supports.get(label, 0.0)
     revise(memory, now, selected)
     for label, cause in list(memory.causes.items()):
-        if label in selected:
+        if label in selected or cause.source == "llm":  # model-proposed causes are re-tested in consult
             continue
         cause.misses += 1
         if cause.misses >= DROP_AFTER_MISSES and cause.status in (CauseStatus.OPEN, CauseStatus.WAITING) \

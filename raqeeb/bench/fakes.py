@@ -22,6 +22,7 @@ from raqeeb.contracts import (
     AgentScenario,
     AgentTurn,
     Diagnosis,
+    Escalation,
     FaultSpec,
     FaultType,
     Hypothesis,
@@ -42,6 +43,7 @@ FIX: dict[FaultType, ActionType] = {
     FaultType.TRACKER_STUCK: ActionType.RESUME_TRACKING,
     FaultType.STRING_OPEN: ActionType.DISPATCH_TECHNICIAN,
     FaultType.UNAUTHORIZED_CMD: ActionType.ISOLATE_DEVICE,
+    FaultType.FIRMWARE_ALARM: ActionType.DISPATCH_TECHNICIAN,  # TRANSFORMER_TRIP, NEW_SHADING: escalate only
 }
 
 
@@ -66,11 +68,13 @@ class OracleAgent:
         self.llm_calls = list(llm_calls or [])
         key = scenario.answer_key or scenario.expected_answer_key()
         self.causes: list[FaultSpec] = [f for f in scenario.faults if f.label in key.root_causes]
+        self.fixable = [f for f in self.causes if f.type in FIX]
 
     def start(self, view: AgentScenario, telemetry: TelemetryReader) -> None:
         self.requested: dict[str, FaultSpec] = {}  # action id -> cause
         self.applied: dict[str, datetime] = {}  # action id -> when it was applied
         self.verified: set[str] = set()
+        self.escalated: set[str] = set()
         self.first = True
 
     def _ready(self, fault: FaultSpec, now: datetime) -> bool:
@@ -110,10 +114,15 @@ class OracleAgent:
                 self.verified.add(action_id)
                 verifications.append(Verification(action_id=action_id, recovered=True, before_kw=0.0,
                                                   after_kw=0.0, expected_kw=0.0, note="oracle"))
-        actions = []
+        actions, escalations = [], []
+        for fault in self.causes:
+            if fault.type not in FIX and fault.label not in self.escalated and self._ready(fault, now):
+                self.escalated.add(fault.label)
+                escalations.append(Escalation(ts=now, subject=fault.label, reason="answer key: no allowed fix",
+                                              devices=self.plant.layout.area_of(fault.target) or [fault.target]))
         if not final:
             acted = {f.label for f in self.requested.values()}
-            for fault in self.causes:
+            for fault in self.fixable:
                 if fault.label not in acted and self._ready(fault, now):
                     request = self._request(fault)
                     self.requested[request.id] = fault
@@ -123,5 +132,5 @@ class OracleAgent:
         calls, self.llm_calls = (self.llm_calls, []) if self.first else ([], self.llm_calls)
         self.first = False
         return AgentTurn(diagnosis=Diagnosis(root_causes=hypotheses, confidence=1.0), actions=actions,
-                         verifications=verifications, llm_calls=calls,
-                         done=len(self.verified) == len(self.causes))
+                         verifications=verifications, llm_calls=calls, escalations=escalations,
+                         done=len(self.verified) == len(self.fixable))

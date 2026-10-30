@@ -17,7 +17,7 @@ from typing import ClassVar
 import numpy as np
 import pandas as pd
 
-from raqeeb.contracts import FaultSpec, FaultType, PlantConfig, PlantState, Scenario
+from raqeeb.contracts import FaultSpec, FaultType, PlantConfig, PlantState, Scenario, TechnicianNote
 from raqeeb.twin.simulator import STEP, Twin
 
 
@@ -47,6 +47,7 @@ class Fault(ABC):
         self.spec = spec
         self.start = scenario.resolve_time(spec.start)
         self.end = scenario.resolve_time(spec.end) if spec.end is not None else None
+        self.notes: list[TechnicianNote] = []  # technician notes this fault posts (filled by arm)
 
     @property
     def label(self) -> str:

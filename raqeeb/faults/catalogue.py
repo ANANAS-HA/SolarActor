@@ -7,6 +7,7 @@ the soiling it leaves persists after the storm until panels are cleaned.
 
 Core: SOILING, SENSOR_SOILING, INVERTER_DERATE, COMMS_DROPOUT, CURTAILMENT (decoy).
 Full scope: TRACKER_STUCK, STRING_OPEN, UNAUTHORIZED_CMD, PROMPT_INJECTION (decoy).
+Unknown (not in the agent's causal graph or planner): raqeeb.faults.unknown.
 """
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ import numpy as np
 
 from raqeeb.contracts import PLANT_TARGET, ActionType, FaultType, PlantConfig, PlantState
 from raqeeb.faults.base import Fault, InjectionContext, step_times
+from raqeeb.faults.unknown import UNKNOWN_CATALOGUE
 
 # Dust storm
 STORM_DEFAULT_MIN = 60  # storm length when the spec has no end
@@ -329,4 +331,4 @@ CATALOGUE: dict[FaultType, type[Fault]] = {
     cls.fault_type: cls
     for cls in (DustStormSoiling, SensorSoiling, InverterDerate, CommsDropout, Curtailment,
                 TrackerStuck, StringOpen, UnauthorizedCommand, PromptInjection)
-}
+} | UNKNOWN_CATALOGUE

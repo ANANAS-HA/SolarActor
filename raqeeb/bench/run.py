@@ -1,6 +1,6 @@
 """Run the benchmark over the scenarios and write the results.
 
-    uv run python -m raqeeb.bench.run [--set practice|test|safety] [--agents threshold,oracle,empty]
+    uv run python -m raqeeb.bench.run [--set practice|practice2|test|safety] [--agents all|raqeeb_rules,oracle]
                                       [--scenarios scn_0001,scn_0007] [--poll-min 15] [--out bench/<set>]
 
 Scenario sets, reported separately: "practice" (scenarios/scn_*.yaml) and "practice2"
@@ -37,6 +37,7 @@ from raqeeb.config import (
     load_plant,
 )
 from raqeeb.contracts import Agent, Scenario
+from raqeeb.llm.router import Router
 from raqeeb.twin.weather import weather_5min
 
 
@@ -46,13 +47,25 @@ class AgentEntry:
     note: str = ""  # non-empty = reference bound, not a competitor
 
 
+def _raqeeb(name: str, api: bool | None) -> Callable[[Scenario], Agent]:
+    """Raqeeb gets only agent_view() and telemetry, like the baseline. api None = rules only (no router),
+    False = local model only, True = local model plus the API model."""
+    def make(scenario: Scenario) -> Agent:
+        return RaqeebAgent(router=None if api is None else Router(api=api), name=name)
+    return make
+
+
 AGENTS: dict[str, AgentEntry] = {
-    "raqeeb": AgentEntry(lambda s: RaqeebAgent()),  # gets only agent_view() and telemetry, like the baseline
+    "raqeeb_rules": AgentEntry(_raqeeb("raqeeb_rules", None)),
+    "raqeeb_local": AgentEntry(_raqeeb("raqeeb_local", False)),
+    "raqeeb_full": AgentEntry(_raqeeb("raqeeb_full", True)),
+    "raqeeb": AgentEntry(_raqeeb("raqeeb", None)),  # the rules-only agent under its Milestone 1-2 name
     "threshold": AgentEntry(lambda s: ThresholdBaseline()),
     "oracle": AgentEntry(lambda s: OracleAgent(s), "reference upper bound: reads the answer key"),
     "empty": AgentEntry(lambda s: EmptyAgent(), "reference lower bound: does nothing"),
 }
-DEFAULT_AGENTS = ["raqeeb", "threshold", "oracle", "empty"]
+DEFAULT_AGENTS = ["raqeeb_rules", "threshold", "oracle", "empty"]  # add raqeeb_local,raqeeb_full with --agents
+ALL_AGENTS = ["raqeeb_rules", "raqeeb_local", "raqeeb_full", "threshold", "oracle", "empty"]
 SETS: dict[str, tuple[Path, str]] = {"practice": (SCENARIO_DIR, "scn"), "practice2": (PRACTICE2_SCENARIO_DIR, "pr2"),
                                    "test": (TEST_SCENARIO_DIR, "tst"), "safety": (SAFETY_SCENARIO_DIR, "saf")}
 
@@ -103,7 +116,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--poll-min", type=int, default=POLL_MIN)
     parser.add_argument("--out", type=Path, default=None, help="default: bench/<set>")
     args = parser.parse_args(argv)
-    agents = [a for a in args.agents.split(",") if a]
+    agents = ALL_AGENTS if args.agents == "all" else [a for a in args.agents.split(",") if a]
     unknown = set(agents) - set(AGENTS)
     if unknown:
         raise SystemExit(f"unknown agents: {sorted(unknown)}; choose from {sorted(AGENTS)}")

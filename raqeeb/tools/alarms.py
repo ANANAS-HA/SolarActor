@@ -83,6 +83,7 @@ def alarm_groups(store: TelemetryStore, start: datetime | None = None, end: date
             "title": spec.title if spec else None,
             "alarm_severity": group["severity"].iloc[0],
             "related_faults": [f.value for f in spec.related_faults] if spec else [],
+            "protective": bool(spec and spec.protective),
             "count": len(group),
             "devices": devices,
             "inverters": n_inv,
@@ -94,7 +95,8 @@ def alarm_groups(store: TelemetryStore, start: datetime | None = None, end: date
 
     def describe(g):
         where = f"{g['inverters']} inverters (plant-wide)" if g["plant_wide"] else ", ".join(g["devices"])
-        normal = "" if g["related_faults"] else ", normal or protective behaviour"
+        normal = (", normal or protective behaviour" if g["protective"]
+                  else "" if g["related_faults"] else ", no known fault linked to this code")
         return f"{g['code']} on {where} from {local_time(g['first'])}{normal}"
 
     return ToolResult(tool="alarm_groups", verdict="alarms" if groups else VERDICT_OK,

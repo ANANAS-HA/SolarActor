@@ -106,7 +106,8 @@ def test_prompt_files_hold_no_numbers():
 
 def test_every_prompt_renders_with_the_untrusted_data_rule():
     values = {"fault_types": "SOILING", "targets": "ALL", "max_hypotheses": "6", "tool_results": "", "symptoms": "",
-              "ranked": "", "unexplained": "", "diagnosis": "", "records": "", "notes": "", "max_words": "200"}
+              "ranked": "", "unexplained": "", "diagnosis": "", "records": "", "notes": "", "max_words": "200",
+              "technician_notes": "", "alarm_manuals": "", "site_layout": ""}
     for name in ("hypotheses", "explain", "report"):
         system, user = render(name, **values)
         assert system["role"] == "system" and user["role"] == "user"

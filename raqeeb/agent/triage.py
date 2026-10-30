@@ -56,7 +56,7 @@ def group_alarms(events: pd.DataFrame, memory: Memory) -> list[dict]:
         g["inverters"] = n_inv
         g["plant_wide"] = n_inv >= PLANT_WIDE_SHARE * len(inverters)
         g["related_faults"] = [f.value for f in spec.related_faults] if spec else []
-        g["protective"] = spec is not None and not spec.related_faults
+        g["protective"] = spec is not None and spec.protective
     return groups
 
 

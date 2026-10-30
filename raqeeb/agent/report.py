@@ -10,9 +10,10 @@ from __future__ import annotations
 from zoneinfo import ZoneInfo
 
 from raqeeb.agent.state import PASSIVE, CauseStatus, Memory, PollState
-from raqeeb.contracts import DISPLAY_TZ, ActionStatus, FaultType, IncidentReport
+from raqeeb.contracts import DISPLAY_TZ, PLANT_TARGET, ActionStatus, Escalation, FaultType, IncidentReport
 
 _TZ = ZoneInfo(DISPLAY_TZ)
+ESCALATE_UNEXPLAINED_AFTER = 2  # polls in a row a symptom stays unexplained before a human gets it
 
 FAULT_EN = {
     FaultType.SOILING: "panel soiling after a dust storm",
@@ -63,6 +64,14 @@ def _local(ts) -> str:
     return f"{ts.astimezone(_TZ):%H:%M}"
 
 
+def _name_en(fault: FaultType) -> str:
+    return FAULT_EN.get(fault, fault.value.replace("_", " ").lower())
+
+
+def _name_ar(fault: FaultType) -> str:
+    return FAULT_AR.get(fault, fault.value)
+
+
 def build_report(memory: Memory, now) -> IncidentReport:
     causes = [c for c in memory.causes.values() if c.status not in PASSIVE]
     expected = [c for c in memory.causes.values() if c.status == CauseStatus.EXPECTED]
@@ -76,9 +85,11 @@ def build_report(memory: Memory, now) -> IncidentReport:
     ar = [f"الحادثة {memory.view.id}، من {_local(memory.view.start)} إلى {_local(now)} بتوقيت الرياض."]
     if causes:
         en.append("Root causes: " + "; ".join(
-            f"{FAULT_EN[c.hypothesis.fault_type]} on {c.hypothesis.targets[0]} ({STATUS_EN[c.status]})" for c in causes) + ".")
+            f"{_name_en(c.hypothesis.fault_type)} on {c.hypothesis.targets[0]} ({STATUS_EN[c.status]})"
+            + (", proposed by a language model and tested on tool data" if c.source == "llm" else "")
+            for c in causes) + ".")
         ar.append("الأسباب الجذرية: " + "؛ ".join(
-            f"{FAULT_AR[c.hypothesis.fault_type]} في {c.hypothesis.targets[0]} ({STATUS_AR[c.status]})" for c in causes) + ".")
+            f"{_name_ar(c.hypothesis.fault_type)} في {c.hypothesis.targets[0]} ({STATUS_AR[c.status]})" for c in causes) + ".")
     else:
         en.append("No root cause found.")
         ar.append("لم يتم العثور على سبب جذري.")
@@ -92,6 +103,12 @@ def build_report(memory: Memory, now) -> IncidentReport:
         if c.status == CauseStatus.ESCALATED:
             en.append(f"Escalated to a human: {c.label}, {c.note}.")
             ar.append(f"مُصعّد إلى مختص: {c.label}.")
+    for e in memory.escalations:
+        if e.subject == "unexplained":
+            en.append(f"Escalated to a human: symptoms no known cause explains on {', '.join(e.devices)} "
+                      f"({e.reason}). Not guessed, no action taken.")
+            ar.append(f"مُصعّد إلى مختص: أعراض لا يفسرها أي سبب معروف في {', '.join(e.devices)}. "
+                      "لم يُتخذ أي إجراء.")
     for device in flagged:
         en.append(f"Unrecognized log entry from {device}, not acted on, flagged for security review.")
         ar.append(f"سطر سجل غير معروف من {device}، لم يُتخذ بشأنه أي إجراء، وأُحيل للمراجعة الأمنية.")
@@ -115,7 +132,7 @@ def build_report(memory: Memory, now) -> IncidentReport:
         causes=[c.hypothesis for c in causes],
         actions=[p.request for p in pendings],
         verifications=[p.verification for p in pendings if p.verification is not None],
-        cost_usd=0.0, llm_calls=0,
+        cost_usd=sum(c.cost_usd for c in memory.llm_calls), llm_calls=len(memory.llm_calls),
     )
 
 
@@ -128,9 +145,39 @@ def is_done(memory: Memory) -> bool:
     return bool(memory.causes) and settled and not in_flight
 
 
+def escalate(memory: Memory, now) -> list[Escalation]:
+    """Hand to a human what the rules cannot fix: causes whose fixes are used up, and symptoms that no
+    known cause explains for ESCALATE_UNEXPLAINED_AFTER polls (never guessed, never acted on)."""
+    new: list[Escalation] = []
+    for cause in memory.causes.values():
+        if cause.status == CauseStatus.ESCALATED and cause.label not in memory.escalated:
+            memory.escalated.add(cause.label)
+            target = cause.hypothesis.targets[0]
+            devices = memory.plant.layout.area_of(target) or [target]
+            new.append(Escalation(ts=now, subject=cause.label, devices=devices, reason=cause.note or "no fix left"))
+    unexplained = set(memory.diagnosis.unexplained) if memory.diagnosis else set()
+    memory.unexplained_polls = {sid: memory.unexplained_polls.get(sid, 0) + 1 for sid in unexplained}
+    due = sorted(sid for sid, polls in memory.unexplained_polls.items()
+                 if polls >= ESCALATE_UNEXPLAINED_AFTER and sid not in memory.escalated)
+    if due:
+        memory.escalated |= set(due)
+        symptoms = [memory.symptoms[sid] for sid in due if sid in memory.symptoms]
+        devices = sorted({s.device_id for s in symptoms if s.device_id != PLANT_TARGET}) or [PLANT_TARGET]
+        reason = "; ".join(s.evidence.get("summary", s.id) for s in symptoms)
+        new.append(Escalation(ts=now, subject="unexplained", devices=devices, reason=reason[:500]))
+    for e in new:
+        memory.escalations.append(e)
+        memory.log(now, "report", f"escalated to a human: {e.subject} on {', '.join(e.devices)}", reason=e.reason)
+    return new
+
+
 def report(state: PollState) -> PollState:
     memory, now = state["memory"], state["now"]
+    escalate(memory, now)
     if state.get("final") or (is_done(memory) and memory.report is None):
         memory.report = build_report(memory, now)
+        if state.get("final"):  # end of the incident: the model writes the explanation and the report
+            from raqeeb.agent.consult import write_up
+            memory.report = write_up(memory, memory.report)
         memory.log(now, "report", "shift report written")
     return {}

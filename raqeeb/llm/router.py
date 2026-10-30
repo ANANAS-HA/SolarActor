@@ -1,7 +1,9 @@
 """Router: rules first, the local model next, the API model only when needed (HANDOFF section 10).
 
     router = Router()                                       # Gateway() from .env, load_plant()
-    hypotheses, calls = router.propose_hypotheses(results, symptoms, ranked, unexplained)
+    router = Router(api=False)                              # local model only (no API escalation)
+    hypotheses, calls = router.propose_hypotheses(results, symptoms, ranked, unexplained,
+                                                  notes=notes, manuals=manuals, layout=layout)
     text, calls = router.explain_diagnosis(diagnosis, symptoms, results)
     report, calls = router.write_shift_report(draft_report, notes)
 
@@ -16,6 +18,11 @@
 5. If the local server is down, the call goes to the API model (escalation "local_down") and the
    local model is skipped for LOCAL_RETRY_AFTER_S. If no model gives a valid reply, the methods
    return an empty / None result and the agent keeps its rule-based output.
+6. With api=False the API model is never called: the hard cases go to the local model too, and a
+   local failure ends with the rule-based result.
+
+Technician notes, alarm manual text and the site layout reach the model only inside untrusted-data
+blocks, like every other piece of plant data.
 
 Every method returns the LlmCalls it made (also kept in `router.gateway.calls`), for AgentTurn.llm_calls.
 The model never computes numbers: hypotheses come back with score 0 for the agent's ranker to score.
@@ -44,6 +51,7 @@ from raqeeb.contracts import (
     LlmRole,
     PlantConfig,
     Symptom,
+    TechnicianNote,
     ToolResult,
 )
 from raqeeb.llm.gateway import Gateway, LlmError, LlmUnavailable
@@ -154,11 +162,12 @@ def _compact(results: Sequence[ToolResult]) -> list[dict]:
 
 class Router:
     def __init__(self, gateway: Gateway | None = None, plant: PlantConfig | None = None, *,
-                 margin: float = TOP2_MARGIN, unexplained_max: int = UNEXPLAINED_MAX):
+                 margin: float = TOP2_MARGIN, unexplained_max: int = UNEXPLAINED_MAX, api: bool = True):
         self.gateway = gateway or Gateway()
         self.plant = plant or load_plant()
         self.margin = margin
         self.unexplained_max = unexplained_max
+        self.api = api
         self._local_down_until = 0.0
 
     @property
@@ -169,19 +178,26 @@ class Router:
 
     def propose_hypotheses(self, results: Sequence[ToolResult], symptoms: Sequence[Symptom] = (),
                            ranked: Sequence[Hypothesis] = (), unexplained: Sequence[str] = (), *,
-                           force: bool = False) -> tuple[list[Hypothesis], list[LlmCall]]:
+                           notes: Sequence[TechnicianNote] = (), manuals: dict[str, str] | None = None,
+                           layout: dict | None = None, force: bool = False) -> tuple[list[Hypothesis], list[LlmCall]]:
         """Root-cause hypotheses proposed by a model from the tool results (ids "llm-1", ..., score 0,
         most likely first). `ranked` = the rules' candidates with rank.py scores, `unexplained` = the
-        symptom ids they leave unexplained. Returns ([], []) without a call when the rules suffice
-        (unless `force`), and ([], calls) when no model gave a valid reply."""
+        symptom ids they leave unexplained. `notes` (technician notes), `manuals` (alarm code -> manual
+        text) and `layout` (site areas; default: the plant's) go in as untrusted data. Returns ([], [])
+        without a call when the rules suffice (unless `force`), and ([], calls) when no model gave a
+        valid reply."""
         role, reason = route_hypotheses(results, ranked, unexplained, margin=self.margin,
                                         unexplained_max=self.unexplained_max)
         if role is None and not force:
             log.debug("hypotheses: no LLM (%s)", reason)
             return [], []
         role = role or LlmRole.LOCAL
+        if role == LlmRole.API and not self.api:
+            role, reason = LlmRole.LOCAL, ""  # local only: the hard cases stay on the local model
         payload = {"tool_results": _compact(results), "symptoms": [s.model_dump(mode="json") for s in symptoms],
-                   "ranked": [h.model_dump(mode="json") for h in ranked], "unexplained": list(unexplained)}
+                   "ranked": [h.model_dump(mode="json") for h in ranked], "unexplained": list(unexplained),
+                   "technician_notes": [n.model_dump(mode="json") for n in notes],
+                   "alarm_manuals": dict(manuals or {}), "site_layout": dict(layout or self._layout())}
         messages = render(
             Purpose.HYPOTHESES, fault_types=", ".join(PROPOSABLE), targets=", ".join(self._targets()),
             max_hypotheses=str(MAX_HYPOTHESES),
@@ -195,8 +211,16 @@ class Router:
         value, calls = self._run(Purpose.HYPOTHESES, messages, parse, role, reason)
         return value or [], calls
 
+    def _layout(self) -> dict:
+        layout = self.plant.layout
+        return {"transformers": {t: {"site_group": layout.groups.get(t), "inverters": invs}
+                                 for t, invs in layout.transformers.items()},
+                "field_edges": layout.edges}
+
     def _targets(self) -> list[str]:
-        return [PLANT_TARGET, self.plant.weather_station_id, *self.plant.inverters.ids]
+        layout = self.plant.layout
+        return [PLANT_TARGET, self.plant.weather_station_id, *self.plant.inverters.ids,
+                *layout.transformers, *layout.edges]
 
     def _valid_target(self, fault: FaultType, target: str) -> bool:
         inverters, station = set(self.plant.inverters.ids), self.plant.weather_station_id
@@ -206,7 +230,9 @@ class Router:
             return target == station
         if fault in _INVERTER:
             return target in inverters
-        return target in inverters or target == station  # comms dropout: any device that reports
+        if fault == FaultType.COMMS_DROPOUT:
+            return target in inverters or target == station  # any device that reports
+        return target in set(self._targets()) - {PLANT_TARGET}  # other types: a device or a site area
 
     def _hypotheses(self, proposals: _Proposals, symptom_ids: set[str], sources: str) -> list[Hypothesis]:
         out: list[Hypothesis] = []
@@ -298,6 +324,8 @@ class Router:
                 else:
                     if value is None:
                         role, escalation = LlmRole.API, "invalid_output"
+        if role == LlmRole.API and not self.api:
+            return value, self.gateway.calls[first:]
         if role == LlmRole.API and value is None:
             try:
                 value = self._attempts(LlmRole.API, purpose, messages, parse, escalation)

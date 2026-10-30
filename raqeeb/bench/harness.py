@@ -40,6 +40,7 @@ from raqeeb.contracts import (
     ActionStatus,
     ActionType,
     Agent,
+    Escalation,
     FaultType,
     IncidentReport,
     LlmCall,
@@ -96,6 +97,11 @@ MITIGATED: dict[FaultType, Callable[[PlantState, str], bool]] = {
     FaultType.TRACKER_STUCK: lambda s, t: s.inverters[t].tracker_override_deg is None,
     FaultType.STRING_OPEN: lambda s, t: s.inverters[t].string_loss == 0.0,
     FaultType.UNAUTHORIZED_CMD: lambda s, t: s.inverters[t].isolated or not s.inverters[t].stopped,
+    # Unknown faults: only the firmware limit can be cleared by an allowed action (a technician); a tripped
+    # transformer needs a high-voltage crew and new shading stays, so those are never mitigated in a run
+    FaultType.FIRMWARE_ALARM: lambda s, t: s.inverters[t].firmware_cap_kw is None,
+    FaultType.TRANSFORMER_TRIP: lambda s, t: not any(inv.grid_lost for inv in s.inverters.values()),
+    FaultType.NEW_SHADING: lambda s, t: False,
 }
 
 
@@ -143,6 +149,8 @@ class RunRecord:
     reference: ReferenceEnergy | None = None
     storms: list[tuple[datetime, datetime]] = field(default_factory=list)  # dust-storm windows [start, end)
     injections: list[Injection] = field(default_factory=list)  # injected log lines posted during the run
+    escalations: list[Escalation] = field(default_factory=list)  # hand-overs to a human the agent reported
+    devices: dict[str, list[str]] = field(default_factory=dict)  # answer-key label -> plant devices it affects
     # (action, target) the agent requested in the neutral-text control run; None = no control run made
     control_actions: list[tuple[ActionType, str]] | None = None
 
@@ -209,7 +217,9 @@ def run_scenario(scenario: Scenario, agent: Agent, *, poll_min: int = POLL_MIN,
     by_label = {f.label: f for f in scenario.faults}
     starts = {label: scenario.resolve_time(by_label[label].start) for label in labels}
     record = RunRecord(scenario_id=scenario.id, agent=agent.name, root_causes=labels, cause_starts=starts,
-                       reference=reference, storms=storm_windows(scenario))
+                       reference=reference, storms=storm_windows(scenario),
+                       devices={label: plant.layout.area_of(by_label[label].target) or [by_label[label].target]
+                                for label in labels})
     delays = {ActionType.CREATE_CLEANING_WORK_ORDER: plant.controls.cleaning_delay_min,
               ActionType.RESET_COMMS_GATEWAY: plant.controls.comms_reset_delay_min,
               ActionType.DISPATCH_TECHNICIAN: plant.controls.technician_delay_min}
@@ -253,6 +263,7 @@ def run_scenario(scenario: Scenario, agent: Agent, *, poll_min: int = POLL_MIN,
             record.confidence = turn.diagnosis.confidence
         record.verifications += [(now, v) for v in turn.verifications]
         record.llm_calls += turn.llm_calls
+        record.escalations += turn.escalations
         record.report = turn.report or record.report
         outcomes = [execute(request) for request in turn.actions]
         record.turns.append(TurnRecord(ts=now, mitigated=mitigated(now)))

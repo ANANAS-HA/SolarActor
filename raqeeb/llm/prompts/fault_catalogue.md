@@ -7,3 +7,4 @@ Fault types (use these exact names; you may propose only: $fault_types):
 - TRACKER_STUCK: one tracker block stays at a flat angle after the wind has dropped, losing output mostly in the morning and evening. Stowing during high wind is normal. Target: that inverter.
 - STRING_OPEN: one inverter's DC input drops by a fixed fraction with no link to the weather. Target: that inverter.
 - UNAUTHORIZED_CMD: an inverter drops to zero right after a control command from an unexpected source or time, with no electrical alarm before it. Target: that inverter.
+Other fault types in the allowed list are not described here. Propose one only when the alarm manual text, the site notes and the measured symptoms together point to it.

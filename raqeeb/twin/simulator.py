@@ -209,19 +209,21 @@ class Twin:
         poa *= factor
 
         soiling = np.array([inv.soiling_loss for inv in invs])
-        effective = poa * (1.0 - soiling)
+        shading = np.array([inv.shading_loss for inv in invs])
+        effective = poa * (1.0 - soiling) * (1.0 - shading)
         tcell = physics.cell_temperature(effective, ambient, wind, plant)
         string_loss = np.array([inv.string_loss for inv in invs])
         dc_avail = physics.dc_power_kw(effective, tcell, self._dc_rated, plant) * (1.0 - string_loss)
         ac_potential = physics.ac_power_kw(dc_avail, plant)
 
-        running = np.array([not (inv.stopped or inv.isolated) for inv in invs])
+        running = np.array([not (inv.stopped or inv.isolated or inv.grid_lost) for inv in invs])
         grid_share = (
             state.grid_limit_kw / max(int(running.sum()), 1) if state.grid_limit_kw is not None else np.inf
         )
         derate_cap = np.array([inv.derate_cap_kw if inv.derate_cap_kw is not None else np.inf for inv in invs])
         power_limit = np.array([inv.power_limit_kw if inv.power_limit_kw is not None else np.inf for inv in invs])
-        ac = np.minimum.reduce([ac_potential, derate_cap, power_limit, np.full(len(ids), grid_share)])
+        firmware_cap = np.array([inv.firmware_cap_kw if inv.firmware_cap_kw is not None else np.inf for inv in invs])
+        ac = np.minimum.reduce([ac_potential, derate_cap, power_limit, firmware_cap, np.full(len(ids), grid_share)])
         ac = np.where(running, ac, 0.0)
 
         # When output is held below what the panels could give, the inverter leaves MPP
@@ -237,7 +239,9 @@ class Twin:
         statuses = []
         for k, (inv_id, inv) in enumerate(zip(ids, invs)):
             derating = inv.derate_cap_kw is not None and ac_potential[k] > inv.derate_cap_kw and running[k]
-            if not running[k]:
+            if inv.grid_lost and not (inv.stopped or inv.isolated):
+                status = InverterStatus.FAULT  # no AC grid behind its transformer
+            elif not running[k]:
                 status = InverterStatus.STOPPED
             elif poa[k] < physics.STANDBY_POA_WM2:
                 status = InverterStatus.STANDBY

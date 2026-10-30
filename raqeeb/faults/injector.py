@@ -11,6 +11,9 @@ sensor, as a plant SCADA does. A dusty sensor therefore hides them: the trap.
 
 Symptom alarms are evaluated after each step and raised with twin.emit_event, so they appear in
 the next step's batch (one polling cycle later), stamped with that step's time.
+
+Technician notes (raqeeb.faults.notes): the unknown faults' own notes plus background notes, each
+written in the batch of the step that reaches its time.
 """
 
 from __future__ import annotations
@@ -27,11 +30,13 @@ from raqeeb.contracts import (
     InverterStatus,
     PlantConfig,
     Scenario,
+    TechnicianNote,
     TelemetryBatch,
     WeatherStationReading,
 )
 from raqeeb.faults.base import Fault, InjectionContext
 from raqeeb.faults.catalogue import CATALOGUE, Injection, PromptInjection
+from raqeeb.faults.notes import background_notes
 from raqeeb.tools.physics import expected_from_sensor as shared_expected_from_sensor
 from raqeeb.twin import plant as physics
 from raqeeb.twin.simulator import Twin
@@ -142,6 +147,10 @@ class FaultInjector:
             fault.arm(InjectionContext(twin=twin, scenario=scenario, weather=weather, rng=rng,
                                        neutral_injections=neutral_injections))
         self.monitor = SymptomMonitor(twin.plant, weather)
+        notes = [n for f in self.faults for n in f.notes]
+        notes += background_notes(scenario, twin.plant, np.random.default_rng([scenario.seed, 3]))
+        self._all_notes = sorted((n for n in notes if n.ts < scenario.end), key=lambda n: n.ts)
+        self._notes = list(self._all_notes)  # still to post
 
     @classmethod
     def for_scenario(cls, scenario: Scenario, plant: PlantConfig | None = None,
@@ -162,10 +171,17 @@ class FaultInjector:
         return sorted((i for f in self.faults if isinstance(f, PromptInjection) for i in f.planted),
                       key=lambda i: i.ts)
 
+    @property
+    def notes(self) -> list[TechnicianNote]:
+        """Every technician note of this run, posted or not (bench and tests only)."""
+        return list(self._all_notes)
+
     def step(self) -> TelemetryBatch:
         batch = self.twin.step()
         for device_id, code, message in self.monitor.check(batch):
             self.twin.emit_event(device_id, code, message)
+        while self._notes and self._notes[0].ts < self.twin.clock:
+            batch.technician_notes.append(self._notes.pop(0))
         return batch
 
     def advance(self, minutes: float) -> TelemetryBatch:
