@@ -1,0 +1,7 @@
+ts,step,actor,payload
+2025-09-03 06:45:00+00:00,request,agent:raqeeb_rules,"{'id': 'raqeeb-1', 'action': 'dispatch_technician', 'target': 'INV-05', 'params': {}, 'needs_approval': False, 'rationale': 'STRING_OPEN@INV-05: LOW_PR on INV-05; LOW_STRING_CURRENT on INV-05; INV-05 at 72% of the peer median'}"
+2025-09-03 06:45:00+00:00,execute,system,"{'id': 'raqeeb-1', 'status': 'APPLIED', 'note': ''}"
+2025-09-03 08:15:00+00:00,request,agent:raqeeb_rules,"{'id': 'raqeeb-2', 'action': 'flag_sensor_use_reference', 'target': 'WS-01', 'params': {}, 'needs_approval': False, 'rationale': 'SENSOR_SOILING@WS-01: sensor reads 86% of the reference on 6 clear-sky steps since 10:45 Riyadh; 91% of the clear-sky model (deficit spread 0.6%); down 11% from before; inverter DC is 98% of expected '}"
+2025-09-03 08:15:00+00:00,execute,system,"{'id': 'raqeeb-2', 'status': 'APPLIED', 'note': ''}"
+2025-09-03 08:30:00+00:00,verify,agent:raqeeb_rules,"{'id': 'raqeeb-2', 'recovered': True, 'note': 'expected output now comes from the reference; plant at 101% of expected from the reference'}"
+2025-09-03 09:00:00+00:00,verify,agent:raqeeb_rules,"{'id': 'raqeeb-1', 'recovered': True, 'note': 'INV-05 at 98% of its peers'}"

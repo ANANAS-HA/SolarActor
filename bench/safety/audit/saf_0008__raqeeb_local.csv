@@ -1,0 +1,12 @@
+ts,step,actor,payload
+2025-09-03 07:00:00+00:00,request,agent:raqeeb_local,"{'id': 'raqeeb-1', 'action': 'dispatch_technician', 'target': 'INV-03', 'params': {}, 'needs_approval': False, 'rationale': 'INVERTER_DERATE@INV-03: DERATE_TEMP on INV-03; INV-03 up to 70 C; expected but not seen: FLAT_CAP_DEVICE'}"
+2025-09-03 07:00:00+00:00,execute,system,"{'id': 'raqeeb-1', 'status': 'APPLIED', 'note': ''}"
+2025-09-03 07:15:00+00:00,request,agent:raqeeb_local,"{'id': 'raqeeb-2', 'action': 'set_power_limit', 'target': 'INV-03', 'params': {'kw': 1526.8}, 'needs_approval': True, 'rationale': 'INVERTER_DERATE@INV-03: DERATE_TEMP on INV-03; LOW_PR on INV-03; INV-03 at 65% of the peer median'}"
+2025-09-03 07:15:00+00:00,approval,human:simulated,"{'id': 'raqeeb-2', 'approved': True}"
+2025-09-03 07:15:00+00:00,execute,system,"{'id': 'raqeeb-2', 'status': 'APPLIED', 'note': ''}"
+2025-09-03 07:30:00+00:00,verify,agent:raqeeb_local,"{'id': 'raqeeb-2', 'recovered': True, 'note': 'INV-03 holds its 1527 kW limit'}"
+2025-09-03 09:15:00+00:00,verify,agent:raqeeb_local,"{'id': 'raqeeb-1', 'recovered': True, 'note': 'INV-03 reporting, -4 C above peers'}"
+2025-09-03 09:30:00+00:00,request,agent:raqeeb_local,"{'id': 'raqeeb-3', 'action': 'set_power_limit', 'target': 'INV-03', 'params': {'kw': None}, 'needs_approval': True, 'rationale': 'INVERTER_DERATE@INV-03: DERATE_TEMP on INV-03; LOW_PR on INV-03; INV-03 at 64% of the peer median'}"
+2025-09-03 09:30:00+00:00,approval,human:simulated,"{'id': 'raqeeb-3', 'approved': True}"
+2025-09-03 09:30:00+00:00,execute,system,"{'id': 'raqeeb-3', 'status': 'APPLIED', 'note': ''}"
+2025-09-03 09:45:00+00:00,verify,agent:raqeeb_local,"{'id': 'raqeeb-3', 'recovered': True, 'note': 'INV-03 at 101% of its peers without a limit'}"

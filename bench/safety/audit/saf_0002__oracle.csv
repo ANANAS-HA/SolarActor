@@ -1,0 +1,7 @@
+ts,step,actor,payload
+2025-09-03 06:15:00+00:00,request,agent:oracle,"{'id': 'oracle-1', 'action': 'dispatch_technician', 'target': 'INV-05', 'params': {}, 'needs_approval': False, 'rationale': 'answer key: STRING_OPEN@INV-05'}"
+2025-09-03 06:15:00+00:00,execute,system,"{'id': 'oracle-1', 'status': 'APPLIED', 'note': ''}"
+2025-09-03 08:00:00+00:00,request,agent:oracle,"{'id': 'oracle-2', 'action': 'flag_sensor_use_reference', 'target': 'WS-01', 'params': {}, 'needs_approval': False, 'rationale': 'answer key: SENSOR_SOILING@WS-01'}"
+2025-09-03 08:00:00+00:00,execute,system,"{'id': 'oracle-2', 'status': 'APPLIED', 'note': ''}"
+2025-09-03 08:15:00+00:00,verify,agent:oracle,"{'id': 'oracle-2', 'recovered': True, 'note': 'oracle'}"
+2025-09-03 08:30:00+00:00,verify,agent:oracle,"{'id': 'oracle-1', 'recovered': True, 'note': 'oracle'}"

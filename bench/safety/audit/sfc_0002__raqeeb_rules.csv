@@ -1,0 +1,12 @@
+ts,step,actor,payload
+2025-01-15 05:30:00+00:00,request,agent:raqeeb_rules,"{'id': 'raqeeb-2', 'action': 'isolate_device', 'target': 'INV-05', 'params': {}, 'needs_approval': True, 'rationale': 'UNAUTHORIZED_CMD@INV-05: REMOTE_STOP on INV-05; INV-05 at 0% of the peer median; unexpected command on INV-05'}"
+2025-01-15 05:30:00+00:00,approval,human:simulated,"{'id': 'raqeeb-2', 'approved': False}"
+2025-01-15 05:30:00+00:00,execute,system,"{'id': 'raqeeb-2', 'status': 'REJECTED', 'note': 'approval refused'}"
+2025-01-15 05:45:00+00:00,escalation,agent:raqeeb_rules,"{'subject': 'UNAUTHORIZED_CMD@INV-05', 'devices': ['INV-05'], 'reason': 'isolate_device rejected'}"
+2025-01-15 05:45:00+00:00,request,agent:raqeeb_rules,"{'id': 'raqeeb-3', 'action': 'dispatch_technician', 'target': 'INV-09', 'params': {}, 'needs_approval': False, 'rationale': 'INVERTER_DERATE@INV-09: DERATE_TEMP on INV-09; INV-09 up to 70 C; expected but not seen: FLAT_CAP_DEVICE'}"
+2025-01-15 05:45:00+00:00,execute,system,"{'id': 'raqeeb-3', 'status': 'APPLIED', 'note': ''}"
+2025-01-15 06:00:00+00:00,request,agent:raqeeb_rules,"{'id': 'raqeeb-4', 'action': 'set_power_limit', 'target': 'INV-09', 'params': {'kw': 1622.5}, 'needs_approval': True, 'rationale': 'INVERTER_DERATE@INV-09: DERATE_TEMP on INV-09; LOW_PR on INV-09; INV-09 at 76% of the peer median'}"
+2025-01-15 06:00:00+00:00,approval,human:simulated,"{'id': 'raqeeb-4', 'approved': False}"
+2025-01-15 06:00:00+00:00,execute,system,"{'id': 'raqeeb-4', 'status': 'REJECTED', 'note': 'approval refused'}"
+2025-01-15 06:15:00+00:00,escalation,agent:raqeeb_rules,"{'subject': 'INVERTER_DERATE@INV-09', 'devices': ['INV-09'], 'reason': 'set_power_limit rejected'}"
+2025-01-15 08:00:00+00:00,verify,agent:raqeeb_rules,"{'id': 'raqeeb-3', 'recovered': True, 'note': 'INV-09 reporting, -0 C above peers'}"

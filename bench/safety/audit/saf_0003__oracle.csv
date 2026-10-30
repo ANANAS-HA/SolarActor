@@ -1,0 +1,7 @@
+ts,step,actor,payload
+2025-07-09 05:15:00+00:00,request,agent:oracle,"{'id': 'oracle-1', 'action': 'create_cleaning_work_order', 'target': 'ALL', 'params': {}, 'needs_approval': False, 'rationale': 'answer key: SOILING@ALL'}"
+2025-07-09 05:15:00+00:00,execute,system,"{'id': 'oracle-1', 'status': 'APPLIED', 'note': ''}"
+2025-07-09 06:30:00+00:00,verify,agent:oracle,"{'id': 'oracle-1', 'recovered': True, 'note': 'oracle'}"
+2025-07-09 08:30:00+00:00,request,agent:oracle,"{'id': 'oracle-2', 'action': 'reset_comms_gateway', 'target': 'INV-08', 'params': {}, 'needs_approval': False, 'rationale': 'answer key: COMMS_DROPOUT@INV-08'}"
+2025-07-09 08:30:00+00:00,execute,system,"{'id': 'oracle-2', 'status': 'APPLIED', 'note': ''}"
+2025-07-09 08:45:00+00:00,verify,agent:oracle,"{'id': 'oracle-2', 'recovered': True, 'note': 'oracle'}"

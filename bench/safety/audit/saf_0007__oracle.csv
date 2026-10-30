@@ -1,0 +1,11 @@
+ts,step,actor,payload
+2025-04-23 04:15:00+00:00,request,agent:oracle,"{'id': 'oracle-1', 'action': 'resume_tracking', 'target': 'INV-06', 'params': {}, 'needs_approval': False, 'rationale': 'answer key: TRACKER_STUCK@INV-06'}"
+2025-04-23 04:15:00+00:00,execute,system,"{'id': 'oracle-1', 'status': 'APPLIED', 'note': ''}"
+2025-04-23 04:15:00+00:00,request,agent:oracle,"{'id': 'oracle-2', 'action': 'isolate_device', 'target': 'INV-02', 'params': {}, 'needs_approval': True, 'rationale': 'answer key: UNAUTHORIZED_CMD@INV-02'}"
+2025-04-23 04:15:00+00:00,approval,human:simulated,"{'id': 'oracle-2', 'approved': True}"
+2025-04-23 04:15:00+00:00,execute,system,"{'id': 'oracle-2', 'status': 'APPLIED', 'note': ''}"
+2025-04-23 04:30:00+00:00,verify,agent:oracle,"{'id': 'oracle-1', 'recovered': True, 'note': 'oracle'}"
+2025-04-23 04:30:00+00:00,verify,agent:oracle,"{'id': 'oracle-2', 'recovered': True, 'note': 'oracle'}"
+2025-04-23 09:30:00+00:00,request,agent:oracle,"{'id': 'oracle-3', 'action': 'reset_comms_gateway', 'target': 'INV-03', 'params': {}, 'needs_approval': False, 'rationale': 'answer key: COMMS_DROPOUT@INV-03'}"
+2025-04-23 09:30:00+00:00,execute,system,"{'id': 'oracle-3', 'status': 'APPLIED', 'note': ''}"
+2025-04-23 09:45:00+00:00,verify,agent:oracle,"{'id': 'oracle-3', 'recovered': True, 'note': 'oracle'}"

@@ -1,0 +1,11 @@
+ts,step,actor,payload
+2025-04-23 04:30:00+00:00,request,agent:raqeeb_rules,"{'id': 'raqeeb-3', 'action': 'resume_tracking', 'target': 'INV-06', 'params': {}, 'needs_approval': False, 'rationale': 'TRACKER_STUCK@INV-06: LOW_PR on INV-06; LOW_STRING_CURRENT on INV-06; TRACKER_FAULT on INV-06'}"
+2025-04-23 04:30:00+00:00,execute,system,"{'id': 'raqeeb-3', 'status': 'APPLIED', 'note': ''}"
+2025-04-23 04:30:00+00:00,request,agent:raqeeb_rules,"{'id': 'raqeeb-2', 'action': 'isolate_device', 'target': 'INV-02', 'params': {}, 'needs_approval': True, 'rationale': 'UNAUTHORIZED_CMD@INV-02: REMOTE_STOP on INV-02; INV-02 at 61% of expected; unexpected command on INV-02'}"
+2025-04-23 04:30:00+00:00,approval,human:simulated,"{'id': 'raqeeb-2', 'approved': True}"
+2025-04-23 04:30:00+00:00,execute,system,"{'id': 'raqeeb-2', 'status': 'APPLIED', 'note': ''}"
+2025-04-23 04:45:00+00:00,verify,agent:raqeeb_rules,"{'id': 'raqeeb-3', 'recovered': True, 'note': 'INV-06 0 deg from its tracking angle'}"
+2025-04-23 04:45:00+00:00,verify,agent:raqeeb_rules,"{'id': 'raqeeb-2', 'recovered': True, 'note': 'INV-02 isolated'}"
+2025-04-23 09:30:00+00:00,request,agent:raqeeb_rules,"{'id': 'raqeeb-4', 'action': 'reset_comms_gateway', 'target': 'INV-03', 'params': {}, 'needs_approval': False, 'rationale': 'COMMS_DROPOUT@INV-03: COMM_LOSS on INV-03; INV-03 silent for 5 min (ongoing)'}"
+2025-04-23 09:30:00+00:00,execute,system,"{'id': 'raqeeb-4', 'status': 'APPLIED', 'note': ''}"
+2025-04-23 09:45:00+00:00,verify,agent:raqeeb_rules,"{'id': 'raqeeb-4', 'recovered': True, 'note': 'INV-03 reporting again (2 rows since the reset)'}"

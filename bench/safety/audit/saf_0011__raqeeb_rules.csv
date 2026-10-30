@@ -1,0 +1,11 @@
+ts,step,actor,payload
+2025-01-02 06:30:00+00:00,escalation,agent:raqeeb_rules,"{'subject': 'unexplained', 'devices': ['INV-02'], 'reason': 'TRACKER_FAULT on INV-02'}"
+2025-01-02 07:00:00+00:00,request,agent:raqeeb_rules,"{'id': 'raqeeb-1', 'action': 'create_cleaning_work_order', 'target': 'ALL', 'params': {}, 'needs_approval': False, 'rationale': 'SOILING@ALL: max wind 22.9 m/s at 09:30 Riyadh; above the 15 m/s stow limit for 55 min from 09:05 Riyadh (tracker stow is normal then); meter 96% of expected from the reference (96% outside clipping),'}"
+2025-01-02 07:00:00+00:00,execute,system,"{'id': 'raqeeb-1', 'status': 'APPLIED', 'note': ''}"
+2025-01-02 07:30:00+00:00,request,agent:raqeeb_rules,"{'id': 'raqeeb-2', 'action': 'resume_tracking', 'target': 'INV-02', 'params': {}, 'needs_approval': False, 'rationale': 'TRACKER_STUCK@INV-02: LOW_PR on INV-02; LOW_STRING_CURRENT on INV-02; TRACKER_FAULT on INV-02'}"
+2025-01-02 07:30:00+00:00,execute,system,"{'id': 'raqeeb-2', 'status': 'APPLIED', 'note': ''}"
+2025-01-02 07:45:00+00:00,verify,agent:raqeeb_rules,"{'id': 'raqeeb-2', 'recovered': True, 'note': 'INV-02 0 deg from its tracking angle'}"
+2025-01-02 07:45:00+00:00,request,agent:raqeeb_rules,"{'id': 'raqeeb-3', 'action': 'flag_sensor_use_reference', 'target': 'WS-01', 'params': {}, 'needs_approval': False, 'rationale': 'SENSOR_SOILING@WS-01: sensor reads 78% of the reference on 6 clear-sky steps since 10:15 Riyadh; 85% of the clear-sky model (deficit spread 0.4%); down 18% from before; inverter DC is 81% of expected '}"
+2025-01-02 07:45:00+00:00,execute,system,"{'id': 'raqeeb-3', 'status': 'APPLIED', 'note': ''}"
+2025-01-02 08:00:00+00:00,verify,agent:raqeeb_rules,"{'id': 'raqeeb-3', 'recovered': True, 'note': 'expected output now comes from the reference; plant at 82% of expected from the reference'}"
+2025-01-02 08:15:00+00:00,verify,agent:raqeeb_rules,"{'id': 'raqeeb-1', 'recovered': True, 'note': 'plant at 98% of expected from the reference'}"
