@@ -122,15 +122,6 @@ def test_trap_hides_the_loss_from_the_sensor_line(finished):
     assert abs((window["actual_kw"] / window["expected_sensor_kw"]).mean() - 1) < 0.06
 
 
-def test_map_shows_a_silent_inverter_as_no_data():
-    run = source.start_live("scn_0018", Mode.RULES)  # comms dropout on INV-12 from 07:00
-    run.advance(4 * 60 + 15)  # 03:00 -> 07:15 UTC
-    states = source.inverter_status(run).set_index("inverter_id")["state"]
-    assert states["INV-12"] == source.NO_DATA
-    assert (states == source.HEALTHY).sum() == len(states) - 1
-    run.close()
-
-
 # -- replay ----------------------------------------------------------------------------------
 
 
@@ -350,6 +341,7 @@ def test_every_page_renders_in_replay_and_live_mode():
     assert not at.exception
     page = _page(at)
     assert source.FOOTER in page and "Mode: Replay" in page and "recorded with test model" in page
+    assert at.subheader[0].value == "Plant map"  # the map comes first, above the charts and tabs
     assert [t.label for t in at.tabs] == ["Operations", "Agent", "Report", "Answer key", "Results"]
     assert {"Plant map", "Alarm feed", "Recovery", "Technician and operator notes", "Agent timeline", "Approvals",
             "Model proposals", "Actions and verifications", "LLM calls and time", "Shift report", "Answer key",

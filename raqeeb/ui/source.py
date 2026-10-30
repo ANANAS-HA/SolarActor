@@ -4,12 +4,11 @@
     run = start_replay(path)                     # ui/live.py ReplayRun: a recorded run
     tables(run)                                  # telemetry up to run.now, one DataFrame per table
     power_lines(run)                             # actual vs expected (reference) vs expected (sensor)
-    inverter_status(run)                         # plant map
     reveal(run)                                  # answer key vs the agent: None until the run has finished
     load_results(path)                           # benchmark output (bench/<set>/summary.csv, results.csv)
 
-Scenarios offered for live runs are the practice sets (scenarios/scn_*, scenarios/practice2/pr2_*)
-and generated dust storms; the held-out sets are never listed or read here.
+Scenarios offered for live runs are the practice sets (scenarios/scn_*, scenarios/practice2/pr2_*,
+scenarios/practice_unknown/pru_*) and generated dust storms; the held-out sets are never listed or read here.
 """
 
 from __future__ import annotations
@@ -31,7 +30,6 @@ from raqeeb.contracts import (
     STEP_MINUTES,
     TABLE_MODELS,
     FaultType,
-    InverterStatus,
     PlantConfig,
     Scenario,
 )
@@ -42,11 +40,6 @@ from raqeeb.ui.runlog import Mode, RunLog
 
 Run = LiveRun | ReplayRun
 
-# Plant map: an inverter is "degraded" when its status says so, or it is this far below its peers
-DEGRADED_STATUSES = frozenset({InverterStatus.DERATED, InverterStatus.FAULT, InverterStatus.STOPPED})
-PEER_SHORTFALL = 0.10
-MIN_PEER_FRACTION = 0.05  # of the rating; below this (dawn, dusk) peers are not compared
-HEALTHY, DEGRADED, NO_DATA = "healthy", "degraded", "no data"
 
 REPLAY_DIR_ENV = "RAQEEB_REPLAY_DIR"
 RESULTS_ENV = "RAQEEB_RESULTS"
@@ -149,27 +142,6 @@ def power_lines(run: Run, plant: PlantConfig | None = None) -> pd.DataFrame:
         "clearsky_ghi_wm2": ref["clearsky_ghi_wm2"],
     }, index=grid)
     return frame[columns]
-
-
-def inverter_status(run: Run, plant: PlantConfig | None = None) -> pd.DataFrame:
-    """One row per inverter at the latest step up to `run.now`: status, ac_kw, temp_c, map state."""
-    plant = plant or load_plant()
-    readings = run.store.read("inverter_readings", end=run.now + STEP).reset_index()
-    at = readings["ts"].max() if len(readings) else None
-    now = readings[readings["ts"] == at].set_index("inverter_id") if at is not None else readings
-    rows = []
-    peer_median = float(now["ac_kw"].median()) if len(now) else 0.0
-    compare = peer_median > MIN_PEER_FRACTION * plant.inverters.ac_kw
-    for inv_id in plant.inverters.ids:
-        if inv_id not in now.index:
-            rows.append({"inverter_id": inv_id, "state": NO_DATA, "status": None, "ac_kw": None, "temp_c": None})
-            continue
-        r = now.loc[inv_id]
-        low = compare and r["ac_kw"] < (1 - PEER_SHORTFALL) * peer_median
-        state = DEGRADED if r["status"] in DEGRADED_STATUSES or low else HEALTHY
-        rows.append({"inverter_id": inv_id, "state": state, "status": str(r["status"]),
-                     "ac_kw": float(r["ac_kw"]), "temp_c": float(r["temp_c"])})
-    return pd.DataFrame(rows)
 
 
 # -- answer key (only after the run) -----------------------------------------------------

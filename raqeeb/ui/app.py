@@ -23,7 +23,7 @@ import streamlit as st
 
 from raqeeb.config import REPO_ROOT, load_plant
 from raqeeb.contracts import DISPLAY_TZ, ActionStatus, IncidentReport
-from raqeeb.ui import source
+from raqeeb.ui import plantmap, source
 from raqeeb.ui.live import LiveRun, ReplayRun, local_model_status
 from raqeeb.ui.proposals import effect
 from raqeeb.ui.runlog import MODE_LABEL, Mode
@@ -34,12 +34,7 @@ MODES = [LIVE_RULES, LIVE_LOCAL, REPLAY]
 SPEEDS = [15, 30, 60, 120, 240]  # sim minutes per tick
 TICK_S = 0.4  # wall-clock pause between ticks while playing
 
-# Reference data-viz palette: status colors carry a text label too; series slots in fixed order
-STATE_STYLE = {  # map state -> (fill, label ink, cell label)
-    source.HEALTHY: ("#0ca30c", "#ffffff", "OK"),
-    source.DEGRADED: ("#fab219", "#0b0b0b", "DEGRADED"),
-    source.NO_DATA: ("#898781", "#ffffff", "NO DATA"),
-}
+# Reference data-viz palette: status colors carry a text label and an icon too; series slots in fixed order
 SERIES = {"actual": "#2a78d6", "reference": "#eb6834", "sensor": "#1baf7a"}
 MUTED = "#898781"
 RECENT_ALARM_MIN = 30
@@ -224,31 +219,86 @@ def headline(run: source.Run, power: pd.DataFrame, data: dict[str, pd.DataFrame]
 
 
 def plant_map(run: source.Run) -> None:
-    st.subheader("Plant map")
+    """Sky strip, the top-down map (blocks T1-T4, weather station, substation meter, grid point) and, for the
+    clicked tile, that inverter against its peers. Telemetry and the agent's record only (ui/plantmap.py)."""
     plant = load_plant()
-    status = source.inverter_status(run, plant)
-    rows, cols = plant.inverters.layout_rows, plant.inverters.layout_cols
+    st.subheader("Plant map")
+    sky_chart(run, plant)
+    view = plantmap.map_view(run, plant)
+    st.plotly_chart(plantmap.map_figure(view, plant), key="plant_map", on_select=_map_clicked, selection_mode="points",
+                    config={"displayModeBar": False})
+    counts = pd.Series([tile.state for tile in view.inverters]).value_counts()
+    shown = f"telemetry at {local_hhmm(view.at)}" if view.at is not None else "no telemetry yet"
+    st.caption(f"{shown} · " + " · ".join(f"{plantmap.ICON[s]} {s}: {counts[s]}" for s in plantmap.STATES
+                                           if counts.get(s, 0))
+               + f". Low output = stopped or ≥{plantmap.PEER_SHORTFALL:.0%} below the peer median; capped = the "
+               "inverter reports a derate or power limit; ∅ no data = no reading arrived (hatched, never zero). "
+               "Badges come from the agent's actions, escalations and accepted model proposals. Synthetic plant.")
+    inverter_detail(run, plant)
+
+
+def _map_clicked() -> None:
+    event = st.session_state.get("plant_map")
+    points = (event or {}).get("selection", {}).get("points", []) if isinstance(event, dict) else \
+        getattr(getattr(event, "selection", None), "points", [])
+    ids = load_plant().inverters.ids
+    for point in points:
+        index = point.get("point_index", point.get("point_number"))
+        if index is not None and 0 <= int(index) < len(ids):
+            st.session_state.map_inverter = ids[int(index)]
+
+
+def sky_chart(run: source.Run, plant) -> None:
+    sky = plantmap.sky_strip(run, plant)
+    x = sky.index.tz_convert(DISPLAY_TZ)
     fig = go.Figure()
-    for k, r in status.iterrows():
-        row, col = divmod(k, cols)
-        fill, ink, label = STATE_STYLE[r["state"]]
-        reporting = r["state"] != source.NO_DATA
-        detail = f"{r['ac_kw'] / 1000:.2f} MW" if reporting else "—"
-        fig.add_shape(type="rect", x0=col + 0.04, x1=col + 0.96, y0=-row - 0.04, y1=-row - 0.96,
-                      fillcolor=fill, line={"width": 0}, layer="below")
-        fig.add_annotation(x=col + 0.5, y=-row - 0.5, showarrow=False, font={"color": ink, "size": 13},
-                           text=f"<b>{r['inverter_id']}</b><br>{detail}<br>{label}")
-        hover = (f"{r['inverter_id']}: {r['state']}<br>status {r['status']}<br>AC {detail}<br>"
-                 f"internal temp {r['temp_c']:.0f} °C" if reporting else f"{r['inverter_id']}: no data received")
-        fig.add_trace(go.Scatter(x=[col + 0.5], y=[-row - 0.5], mode="markers", hoverinfo="text", hovertext=hover,
-                                 marker={"size": 60, "opacity": 0, "symbol": "square"}, showlegend=False))
-    fig.update_xaxes(visible=False, range=[0, cols], fixedrange=True)
-    fig.update_yaxes(visible=False, range=[-rows, 0], fixedrange=True, scaleanchor="x")
-    fig.update_layout(height=420, margin={"l": 0, "r": 0, "t": 0, "b": 0})
-    st.plotly_chart(fig, key="plant_map")
-    counts = status["state"].value_counts()
-    st.caption(" · ".join(f"{STATE_STYLE[s][2]}: {counts.get(s, 0)}" for s in STATE_STYLE)
-               + f". Degraded = derated, stopped or ≥{source.PEER_SHORTFALL:.0%} below peers. Synthetic plant.")
+    fig.add_trace(go.Scatter(x=x, y=sky["sun_elevation_deg"].clip(lower=0), name="Sun elevation (°)", mode="lines",
+                             fill="tozeroy", line={"color": "#d9a400", "width": 1}, fillcolor="rgba(240,190,40,0.25)",
+                             hovertemplate="sun %{y:.0f}°"))
+    fig.add_trace(go.Scatter(x=x, y=sky["wind_ms"], name="Wind, on-site (m/s)", mode="lines", yaxis="y2",
+                             line={"color": "#2a78d6", "width": 2}, hovertemplate="wind %{y:.1f} m/s"))
+    stow = plant.tracker.stow_wind_ms
+    fig.add_hline(y=stow, yref="y2", line={"color": "#2a78d6", "width": 1, "dash": "dot"},
+                  annotation_text=f"stow limit {stow:g} m/s", annotation_font_size=10)
+    for a, b in plantmap.storm_bands(sky):
+        fig.add_vrect(x0=local(a), x1=local(b), fillcolor="rgba(150,110,60,0.25)", line_width=0,
+                      annotation_text="storm: trackers stow", annotation_position="top left",
+                      annotation_font_size=10)
+    fig.add_vline(x=local(run.now), line={"color": "#3d3a35", "width": 1})
+    fig.update_layout(height=150, margin={"l": 0, "r": 0, "t": 18, "b": 0}, hovermode="x unified",
+                      legend={"orientation": "h", "y": 1.35, "x": 0, "font": {"size": 11}},
+                      yaxis={"title": "sun (°)", "range": [0, 90], "fixedrange": True},
+                      yaxis2={"title": "wind (m/s)", "overlaying": "y", "side": "right", "fixedrange": True,
+                              "range": [0, max(25.0, float(sky["wind_ms"].max() or 0) * 1.1)]},
+                      xaxis={"range": [local(run.incident.start), local(run.incident.end)], "fixedrange": True})
+    st.plotly_chart(fig, key="sky_strip", config={"displayModeBar": False})
+
+
+def inverter_detail(run: source.Run, plant) -> None:
+    ids = plant.inverters.ids
+    choice = st.selectbox("Inverter output vs its peers (click a tile, or pick one)", ids, index=None,
+                          key="map_inverter", placeholder="Click a tile on the map")
+    if choice is None:
+        return
+    hist = plantmap.inverter_history(run, choice, plant)
+    x = hist.index.tz_convert(DISPLAY_TZ)
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=x, y=hist["peer_max_kw"] / 1000, mode="lines", line={"width": 0}, showlegend=False,
+                             hoverinfo="skip"))
+    fig.add_trace(go.Scatter(x=x, y=hist["peer_min_kw"] / 1000, mode="lines", line={"width": 0}, fill="tonexty",
+                             fillcolor="rgba(137,135,129,0.2)", name="Peers, min to max", hoverinfo="skip"))
+    fig.add_trace(go.Scatter(x=x, y=hist["peer_median_kw"] / 1000, mode="lines", name="Peer median",
+                             line={"color": MUTED, "width": 1.5, "dash": "dash"}, hovertemplate="%{y:.2f} MW"))
+    fig.add_trace(go.Scatter(x=x, y=hist["inverter_kw"] / 1000, mode="lines", name=choice, connectgaps=False,
+                             line={"color": SERIES["actual"], "width": 2.5}, hovertemplate="%{y:.2f} MW"))
+    fig.add_vline(x=local(run.now), line={"color": "#3d3a35", "width": 1})
+    fig.update_layout(height=260, margin={"l": 0, "r": 0, "t": 10, "b": 0}, hovermode="x unified",
+                      legend={"orientation": "h", "y": 1.15, "x": 0}, yaxis_title="AC (MW)",
+                      xaxis_range=[local(run.incident.start), local(run.incident.end)])
+    st.plotly_chart(fig, key="inverter_detail")
+    gaps = int(hist["inverter_kw"].isna().sum() - hist["peer_median_kw"].isna().sum())
+    st.caption(f"{choice} against the other {len(ids) - 1} inverters, from telemetry up to the sim clock."
+               + (f" Gaps in the line are steps with no reading ({gaps} so far), not zero output." if gaps > 0 else ""))
 
 
 def alarm_feed(data: dict[str, pd.DataFrame]) -> None:
@@ -596,17 +646,16 @@ def main() -> None:
     data = source.tables(run)
     power = lines(run)
     if run.waiting:
-        st.warning("The agent requested an action that needs human approval. The run is paused until you decide.")
+        st.warning("The agent requested an action that needs human approval. The run is paused until you decide "
+                   "(Approvals, below the map).")
+    plant_map(run)
+    if run.waiting:
         approvals(run)
     headline(run, power, data)
 
     ops, agent, report, key, results = st.tabs(["Operations", "Agent", "Report", "Answer key", "Results"])
     with ops:
-        left, right = st.columns([5, 6])
-        with left:
-            plant_map(run)
-        with right:
-            alarm_feed(data)
+        alarm_feed(data)
         recovery_chart(run, power)
         notes_panel(run)
     with agent:
