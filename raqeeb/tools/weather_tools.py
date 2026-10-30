@@ -212,6 +212,8 @@ def sensor_check(store: TelemetryStore, start: datetime | None = None, end: date
         first = len(low) - int(np.argmin(low[::-1])) if not low.all() else 0
         if len(low) - first >= MIN_CLEAR_STEPS:
             onset = steps[first]
+    if onset is None:  # not below the reference's error band: look for a sustained step drop instead
+        onset = _drop_onset(ratio_all, smooth, steps)
     period = steps[steps >= onset] if onset is not None else steps
     before = steps[steps < onset] if onset is not None else steps[:0]
 
@@ -235,7 +237,9 @@ def sensor_check(store: TelemetryStore, start: datetime | None = None, end: date
     }
     shape_ok = shape_cv <= SENSOR_SHAPE_CV_MAX
     support = votes["below_clear_sky"] or votes["step_drop"] or votes["peers_disagree"]
-    suspect = votes["below_reference"] and shape_ok and support
+    # A steady step drop vs the clear steps before it is enough on its own: the reference's slow bias
+    # cancels in it, so a lightly dusted sensor is caught even when the reference itself reads low
+    suspect = shape_ok and ((votes["below_reference"] and support) or votes["step_drop"])
     panels_share = gap is not None and abs(gap) < PEERS_AGREE_TOL
 
     since = f" since {local_time(onset)}" if onset is not None else ""
@@ -270,6 +274,17 @@ def sensor_check(store: TelemetryStore, start: datetime | None = None, end: date
     }
     return ToolResult(**base, verdict=verdict, devices=[station] if suspect else [], values=values,
                       evidence="; ".join(parts))
+
+
+def _drop_onset(ratio: pd.Series, smooth: pd.Series, steps: pd.DatetimeIndex) -> pd.Timestamp | None:
+    """First clear step from which the smoothed sensor/reference ratio stays SENSOR_STEP_DROP or more
+    below the median of the clear steps before it, to the end of the window (MIN_CLEAR_STEPS each side)."""
+    values = smooth.to_numpy()
+    for k in range(MIN_CLEAR_STEPS, len(values) - MIN_CLEAR_STEPS + 1):
+        before = float(ratio.iloc[:k].median())
+        if (values[k:] <= before - SENSOR_STEP_DROP).all():
+            return steps[k]
+    return None
 
 
 def irradiance_ratios(store: TelemetryStore, start: datetime | None = None, end: datetime | None = None,

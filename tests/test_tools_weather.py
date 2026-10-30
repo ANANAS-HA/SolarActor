@@ -133,3 +133,22 @@ def test_irradiance_ratios_frame(run):
     late = df.loc[df.index >= df.index[0] + timedelta(hours=4)]
     assert late["sensor_vs_reference"].median() == pytest.approx(0.80, abs=0.04)
     assert df["clear"].sum() > 50
+
+
+def test_lightly_dusted_sensor_is_caught_by_a_step_drop_when_the_reference_reads_low():
+    """pr2_0016: the reference reads ~3.5% low that day, so an 11% dusty sensor sits at 0.93 of it,
+    above the 0.90 band. The steady step drop from ~1.06 to ~0.93 still flags it (the bias cancels)."""
+    from raqeeb.config import PRACTICE2_SCENARIO_DIR
+    from raqeeb.contracts import Scenario
+    from raqeeb.faults.injector import FaultInjector
+    from raqeeb.telemetry.store import TelemetryStore
+    from raqeeb.tools.weather_tools import sensor_check
+    from tests.leakcheck import assert_no_answer_leak
+
+    scenario = Scenario.from_yaml(PRACTICE2_SCENARIO_DIR / "pr2_0016.yaml")
+    store = TelemetryStore()
+    store.write_batch(FaultInjector.for_scenario(scenario).run_to_end())
+    result = sensor_check(store)
+    assert result.verdict.startswith("sensor_low") and result.values["sensor_vs_reference"] > 0.90
+    assert result.values["votes"]["step_drop"] and not result.values["votes"]["below_reference"]
+    assert_no_answer_leak(result, scenario)
