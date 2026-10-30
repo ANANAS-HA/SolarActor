@@ -1,0 +1,5 @@
+agent,note,scenarios,precision,recall,all_causes_found_rate,false_action_rate,actions_per_incident,approvals_per_incident,wasted_washes,verified_recovery_rate,ttvr_median_min,mwh_recovered,mwh_lost,recovered_share_of_lost,cost_per_incident_usd,llm_calls_per_incident,local_call_share
+raqeeb,,50,0.9274,0.9829,0.9600,0.0380,3.1600,0.9600,1,0.9200,190.0000,747.8857,1673.5697,0.4469,0.0000,0.0000,
+threshold,,50,0.3147,0.5299,0.2400,0.1117,3.9400,0.6400,2,0.0000,,259.4166,1673.5697,0.1550,0.0000,0.0000,
+oracle,reference upper bound: reads the answer key,50,1.0000,1.0000,1.0000,0.0000,2.3400,0.6600,0,1.0000,132.5000,806.6261,1673.5697,0.4820,0.0000,0.0000,
+empty,reference lower bound: does nothing,50,,0.0000,0.0000,,0.0000,0.0000,0,0.0000,,0.0000,1673.5697,0.0000,0.0000,0.0000,
