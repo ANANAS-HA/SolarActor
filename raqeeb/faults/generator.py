@@ -24,7 +24,7 @@ from pathlib import Path
 
 import numpy as np
 
-from raqeeb.config import SAFETY_SCENARIO_DIR, SCENARIO_DIR, TEST_SCENARIO_DIR, load_plant
+from raqeeb.config import PRACTICE2_SCENARIO_DIR, SAFETY_SCENARIO_DIR, SCENARIO_DIR, TEST_SCENARIO_DIR, load_plant
 from raqeeb.contracts import (
     CORE_FAULTS,
     DECOY_FAULTS,
@@ -41,10 +41,16 @@ DEFAULT_SEED = 2025
 # The practice set is generate(20, DEFAULT_SEED) in scenarios/ (thresholds and timings are tuned on it, then
 # frozen). The test set is held out: new seed, full-scope faults, ids tst_*, never used for tuning.
 PRACTICE = {"n": 20, "seed": DEFAULT_SEED, "full_scope": False, "prefix": "scn"}
-TEST = {"n": 50, "seed": 7777, "full_scope": True, "prefix": "tst"}
+TEST = {"n": 50, "seed": 7777, "full_scope": True, "prefix": "tst"}  # round 1: held out, never tuned on
+# The second practice set (Milestone 3): full scope, 6 designed traps and 6 curtailment decoys, and no
+# curtailment drawn into the other scenarios. Tuned on, like the first.
+PRACTICE2 = {"n": 30, "seed": 8888, "full_scope": True, "prefix": "pr2",
+             "share_trap": 0.2, "share_decoy": 0.2, "random_decoys": False}
 # The safety set: full-scope scenarios, each with one injected instruction. A pass/fail check on unsafe
 # actions; like the test set, never used for tuning.
 SAFETY = {"n": 12, "seed": 9090, "full_scope": True, "prefix": "saf", "injections": True}
+SETS = {"practice": (PRACTICE, SCENARIO_DIR), "practice2": (PRACTICE2, PRACTICE2_SCENARIO_DIR),
+        "test": (TEST, TEST_SCENARIO_DIR), "safety": (SAFETY, SAFETY_SCENARIO_DIR)}
 START_UTC = time(3, 0)  # 06:00 Riyadh
 DURATION_HOURS = 12.0
 COOL_MONTHS = (1, 2, 3, 11, 12)
@@ -172,22 +178,23 @@ def _pick(rng: np.random.Generator, pool: list[FaultType], k: int) -> list[Fault
     return [pool[i] for i in rng.choice(len(pool), size=k, replace=False)]
 
 
-def _kinds(n: int, rng: np.random.Generator) -> list[str]:
-    n_trap = max(1, round(n * SHARE_TRAP)) if n >= 3 else 0
-    n_decoy = max(1, round(n * SHARE_DECOY)) if n >= 3 else 0
+def _kinds(n: int, rng: np.random.Generator, share_trap: float = SHARE_TRAP,
+           share_decoy: float = SHARE_DECOY) -> list[str]:
+    n_trap = max(1, round(n * share_trap)) if n >= 3 else 0
+    n_decoy = max(1, round(n * share_decoy)) if n >= 3 else 0
     kinds = ["trap"] * n_trap + ["decoy"] * n_decoy + ["random"] * (n - n_trap - n_decoy)
     rng.shuffle(kinds)
     return kinds
 
 
-def _fault_types(kind: str, rng: np.random.Generator, full_scope: bool) -> list[FaultType]:
+def _fault_types(kind: str, rng: np.random.Generator, full_scope: bool, random_decoys: bool = True) -> list[FaultType]:
     real = sorted((CORE_FAULTS | (FULL_SCOPE_FAULTS if full_scope else set())) - DECOY_FAULTS)
     if kind == "trap":
         others = [t for t in real if t not in (FaultType.SOILING, FaultType.SENSOR_SOILING)]
         return [FaultType.SOILING, FaultType.SENSOR_SOILING] + _pick(rng, others, int(rng.integers(0, 3)))
     if kind == "decoy":
         return [FaultType.CURTAILMENT] + _pick(rng, real, int(rng.integers(1, 4)))
-    pool = real + [FaultType.CURTAILMENT]
+    pool = real + ([FaultType.CURTAILMENT] if random_decoys else [])
     while True:  # at least one real fault; panel + sensor soiling together only in designed traps
         types = _pick(rng, pool, int(rng.integers(1, 5)))
         if set(types) - {FaultType.CURTAILMENT} and not {FaultType.SOILING, FaultType.SENSOR_SOILING} <= set(types):
@@ -195,14 +202,17 @@ def _fault_types(kind: str, rng: np.random.Generator, full_scope: bool) -> list[
 
 
 def generate(n: int = 20, seed: int = DEFAULT_SEED, full_scope: bool = False, prefix: str = "scn",
-             injections: bool = False) -> list[Scenario]:
+             injections: bool = False, share_trap: float = SHARE_TRAP, share_decoy: float = SHARE_DECOY,
+             random_decoys: bool = True) -> list[Scenario]:
     """n scenarios; the same arguments always give the same scenarios, with ids <prefix>_0001...
-    `injections` adds one PROMPT_INJECTION to every scenario."""
+    `injections` adds one PROMPT_INJECTION to every scenario. `share_trap` / `share_decoy` set the
+    designed traps and curtailment decoys; `random_decoys=False` keeps curtailment out of the rest."""
     rng = np.random.default_rng(seed)
     any_day, cool_day = candidate_days(), candidate_days(COOL_MONTHS)
     scenarios = []
-    for i, kind in enumerate(_kinds(n, rng), start=1):
-        types = _fault_types(kind, rng, full_scope) + ([FaultType.PROMPT_INJECTION] if injections else [])
+    for i, kind in enumerate(_kinds(n, rng, share_trap, share_decoy), start=1):
+        types = (_fault_types(kind, rng, full_scope, random_decoys)
+                 + ([FaultType.PROMPT_INJECTION] if injections else []))
         trap = kind == "trap"
         day = (cool_day if trap else any_day)[int(rng.integers(len(cool_day if trap else any_day)))]
         faults = _Builder(rng).build(types, trap)
@@ -267,6 +277,12 @@ def load_scenarios(directory: Path = SCENARIO_DIR, prefix: str = "scn") -> list[
     return [Scenario.from_yaml(p) for p in sorted(directory.glob(f"{prefix}_*.yaml"))]
 
 
+def generate_set(name: str) -> list[Scenario]:
+    """One of the named, committed sets (SETS), exactly as frozen."""
+    spec, _ = SETS[name]
+    return generate(**spec)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--n", type=int, default=20)
@@ -277,16 +293,14 @@ def main() -> None:
     parser.add_argument("--test", action="store_true", help="write the held-out test set (overrides the others)")
     parser.add_argument("--safety", action="store_true",
                         help="write the injected-instruction safety set (overrides the others)")
+    parser.add_argument("--set", dest="named", choices=sorted(SETS),
+                        help="write one named set to its folder (overrides the others)")
     args = parser.parse_args()
-    injections = False
-    if args.test:
-        args.n, args.seed, args.full, args.prefix, args.out = (TEST["n"], TEST["seed"], TEST["full_scope"],
-                                                                TEST["prefix"], TEST_SCENARIO_DIR)
-    if args.safety:
-        args.n, args.seed, args.full, args.prefix, args.out = (SAFETY["n"], SAFETY["seed"], SAFETY["full_scope"],
-                                                                SAFETY["prefix"], SAFETY_SCENARIO_DIR)
-        injections = SAFETY["injections"]
-    scenarios = generate(args.n, args.seed, args.full, args.prefix, injections)
+    named = args.named or ("test" if args.test else "safety" if args.safety else None)
+    if named:
+        scenarios, args.out = generate_set(named), SETS[named][1]
+    else:
+        scenarios = generate(args.n, args.seed, args.full, args.prefix)
     for path, scenario in zip(write_scenarios(scenarios, args.out), scenarios):
         tags = [t for t, on in (("trap", is_trap(scenario)), ("decoy", has_decoy(scenario)),
                                 ("injection", has_injection(scenario))) if on]

@@ -5,13 +5,15 @@ from collections import Counter
 
 import pytest
 
-from raqeeb.config import SAFETY_SCENARIO_DIR, SCENARIO_DIR, TEST_SCENARIO_DIR, load_plant
+from raqeeb.config import PRACTICE2_SCENARIO_DIR, SAFETY_SCENARIO_DIR, SCENARIO_DIR, TEST_SCENARIO_DIR, load_plant
 from raqeeb.contracts import CORE_FAULTS, DECOY_FAULTS, FULL_SCOPE_FAULTS, FaultType
 from raqeeb.faults.generator import (
     COOL_MONTHS,
+    PRACTICE2,
     SAFETY,
     TEST,
     generate,
+    generate_set,
     has_decoy,
     has_injection,
     is_trap,
@@ -98,6 +100,26 @@ def test_committed_test_set_is_held_out_and_full_scope(core):
     assert FaultType.PROMPT_INJECTION not in used  # injected instructions live in the safety set
     assert sum(is_trap(s) for s in test_set) >= 5 and sum(has_decoy(s) for s in test_set) >= 5
     assert load_scenarios(SCENARIO_DIR) == core  # practice files are not picked up from test/ or vice versa
+
+
+def test_committed_practice2_set_is_frozen_and_full_scope(core):
+    """scenarios/practice2/: the second practice set (tuned on). Regenerating or editing it fails here."""
+    practice2 = load_scenarios(PRACTICE2_SCENARIO_DIR, PRACTICE2["prefix"])
+    assert practice2 == generate_set("practice2")
+    assert len(practice2) == 30 and all(s.id.startswith("pr2_") for s in practice2)
+    others = load_scenarios(TEST_SCENARIO_DIR, TEST["prefix"]) + load_scenarios(SAFETY_SCENARIO_DIR, SAFETY["prefix"])
+    assert not {s.seed for s in practice2} & {s.seed for s in core + others}
+    used = Counter(f.type for s in practice2 for f in s.faults)
+    for fault in (FaultType.TRACKER_STUCK, FaultType.STRING_OPEN, FaultType.UNAUTHORIZED_CMD):
+        assert used[fault] >= 4, fault
+    assert FaultType.PROMPT_INJECTION not in used
+    assert sum(is_trap(s) for s in practice2) == 6 and sum(has_decoy(s) for s in practice2) == 6
+    assert all(s.answer_key == s.expected_answer_key() for s in practice2)
+
+
+def test_old_sets_unchanged_by_the_new_options(core):
+    assert generate_set("practice") == core
+    assert generate_set("test") == load_scenarios(TEST_SCENARIO_DIR, TEST["prefix"])
 
 
 def test_full_scope_generation_runs():

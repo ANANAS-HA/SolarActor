@@ -3,8 +3,9 @@
     uv run python -m raqeeb.bench.run [--set practice|test|safety] [--agents threshold,oracle,empty]
                                       [--scenarios scn_0001,scn_0007] [--poll-min 15] [--out bench/<set>]
 
-Scenario sets, reported separately: "practice" (scenarios/scn_*.yaml; thresholds and timings
-are tuned on it, then frozen), "test" (scenarios/test/tst_*.yaml; held out, never tuned on) and
+Scenario sets, reported separately: "practice" (scenarios/scn_*.yaml) and "practice2"
+(scenarios/practice2/pr2_*.yaml, full scope): thresholds and timings are tuned on these only;
+"test" (scenarios/test/tst_*.yaml; round 1, held out, never tuned on) and
 "safety" (scenarios/safety/saf_*.yaml; each has an injected instruction in a log line, and each
 agent also runs a neutral-text control so unsafe actions can be counted; never tuned on).
 Writes <out>/results.csv (one row per agent x scenario), <out>/summary.csv (one row per agent,
@@ -27,7 +28,14 @@ from raqeeb.baseline.threshold import ThresholdBaseline
 from raqeeb.bench.fakes import EmptyAgent, OracleAgent
 from raqeeb.bench.harness import POLL_MIN, RunRecord, reference_energy, run_with_control
 from raqeeb.bench.score import results_frame, summarize, summary_markdown
-from raqeeb.config import BENCH_DIR, SAFETY_SCENARIO_DIR, SCENARIO_DIR, TEST_SCENARIO_DIR, load_plant
+from raqeeb.config import (
+    BENCH_DIR,
+    PRACTICE2_SCENARIO_DIR,
+    SAFETY_SCENARIO_DIR,
+    SCENARIO_DIR,
+    TEST_SCENARIO_DIR,
+    load_plant,
+)
 from raqeeb.contracts import Agent, Scenario
 from raqeeb.twin.weather import weather_5min
 
@@ -45,8 +53,8 @@ AGENTS: dict[str, AgentEntry] = {
     "empty": AgentEntry(lambda s: EmptyAgent(), "reference lower bound: does nothing"),
 }
 DEFAULT_AGENTS = ["raqeeb", "threshold", "oracle", "empty"]
-SETS: dict[str, tuple[Path, str]] = {"practice": (SCENARIO_DIR, "scn"), "test": (TEST_SCENARIO_DIR, "tst"),
-                                   "safety": (SAFETY_SCENARIO_DIR, "saf")}
+SETS: dict[str, tuple[Path, str]] = {"practice": (SCENARIO_DIR, "scn"), "practice2": (PRACTICE2_SCENARIO_DIR, "pr2"),
+                                   "test": (TEST_SCENARIO_DIR, "tst"), "safety": (SAFETY_SCENARIO_DIR, "saf")}
 
 
 def load_scenarios(ids: list[str] | None = None, scenario_set: str = "practice") -> list[Scenario]:
@@ -90,7 +98,7 @@ def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--agents", default=",".join(DEFAULT_AGENTS), help=f"comma-separated, from {sorted(AGENTS)}")
     parser.add_argument("--set", dest="scenario_set", choices=sorted(SETS), default="practice",
-                        help="practice (tune on it), test (held out) or safety (injected instructions)")
+                        help="practice, practice2 (tune on them), test (round 1, held out) or safety")
     parser.add_argument("--scenarios", default="", help="comma-separated ids (default: the whole set)")
     parser.add_argument("--poll-min", type=int, default=POLL_MIN)
     parser.add_argument("--out", type=Path, default=None, help="default: bench/<set>")
