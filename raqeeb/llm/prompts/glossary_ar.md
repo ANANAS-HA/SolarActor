@@ -1,0 +1,14 @@
+Use these Arabic terms:
+- panel soiling after a dust storm: اتساخ الألواح بالغبار بعد عاصفة رملية
+- dusty irradiance sensor: اتساخ حساس الإشعاع الشمسي
+- inverter thermal derating: خفض قدرة العاكس بسبب ارتفاع الحرارة
+- communications loss: انقطاع الاتصال
+- grid curtailment (expected behaviour): تقييد الإنتاج من مشغل الشبكة (سلوك متوقع)
+- stuck tracker: توقف نظام التتبع
+- open string: انقطاع سلسلة ألواح
+- unauthorised control command: أمر تحكم غير مصرح به
+- cleaning work order: أمر عمل لتنظيف الألواح
+- weather station: محطة الطقس
+- inverter: العاكس
+- shift handover: تسليم الوردية
+- verified recovery: تم التحقق من التعافي
