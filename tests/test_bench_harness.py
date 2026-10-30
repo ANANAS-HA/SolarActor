@@ -13,6 +13,7 @@ from raqeeb.bench import run as bench_run
 from raqeeb.bench.fakes import EmptyAgent, OracleAgent
 from raqeeb.bench.harness import ReferenceEnergy, reference_energy, run_scenario
 from raqeeb.bench.memory import MemoryTelemetry
+from raqeeb.telemetry.store import TelemetryStore
 from raqeeb.bench.score import score_run
 from raqeeb.config import load_plant
 from raqeeb.contracts import (
@@ -98,7 +99,7 @@ def test_threshold_baseline_limit_waits_for_derated_readings():
         return InverterReading(ts=t0 + timedelta(minutes=minute), inverter_id="INV-07", ac_kw=ac_kw, dc_kw=ac_kw,
                                temp_c=70, status=status)
 
-    telemetry = MemoryTelemetry()
+    telemetry = TelemetryStore()
     agent = ThresholdBaseline()
     agent.start(scenario().agent_view(), telemetry)
     telemetry.write_batch(TelemetryBatch(events=[_event(0, "INV-07", "DERATE_TEMP")]))
@@ -119,7 +120,7 @@ def _event(minute: int, device: str, code: str) -> Event:
 
 
 def test_threshold_baseline_one_ticket_per_alarm():
-    telemetry = MemoryTelemetry()
+    telemetry = TelemetryStore()
     view = scenario().agent_view()
     agent = ThresholdBaseline()
     agent.start(view, telemetry)

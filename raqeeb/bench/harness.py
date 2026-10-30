@@ -4,7 +4,8 @@
     row = score_run(record)                         # bench/score.py
 
 The harness is the agent's environment. It drives the plant through the FaultInjector, writes
-each new batch to the telemetry the agent reads, and polls the agent every `poll_min` sim
+each new batch to the telemetry the agent reads (default: a fresh in-memory TelemetryStore
+per run), and polls the agent every `poll_min` sim
 minutes with only scenario.agent_view(). Returned ActionRequests are gated with
 configs/actions.yaml (not the agent's own needs_approval flag), approved by `approve` (bench
 default: a simulated operator approves everything; the count is reported) and run with
@@ -40,8 +41,8 @@ from raqeeb.contracts import (
     Scenario,
     Verification,
 )
-from raqeeb.bench.memory import MemoryTelemetry
 from raqeeb.faults.injector import FaultInjector
+from raqeeb.telemetry.store import TelemetryStore
 from raqeeb.twin.controls import apply_action
 from raqeeb.twin.simulator import StepTruth
 from raqeeb.twin.weather import weather_5min
@@ -165,7 +166,8 @@ def _answer_key(scenario: Scenario) -> list[str]:
 def run_scenario(scenario: Scenario, agent: Agent, *, poll_min: int = POLL_MIN,
                  approve: Callable[[ActionRequest], bool] = approve_all, telemetry=None,
                  reference: ReferenceEnergy | None = None, plant: PlantConfig | None = None) -> RunRecord:
-    """Run `agent` on `scenario` to the end of its window. `telemetry` needs write_batch and read."""
+    """Run `agent` on `scenario` to the end of its window. `telemetry` needs write_batch and read;
+    by default each run gets its own in-memory TelemetryStore, closed when the run ends."""
     if poll_min < STEP_MINUTES or poll_min % STEP_MINUTES:
         raise ValueError(f"poll_min must be a multiple of {STEP_MINUTES}")
     plant = plant or load_plant()
@@ -174,7 +176,8 @@ def run_scenario(scenario: Scenario, agent: Agent, *, poll_min: int = POLL_MIN,
     specs = load_actions()
     inj = FaultInjector.for_scenario(scenario, plant, weather)
     twin = inj.twin
-    telemetry = telemetry if telemetry is not None else MemoryTelemetry()
+    owns_telemetry = telemetry is None
+    telemetry = TelemetryStore() if owns_telemetry else telemetry
 
     labels = _answer_key(scenario)
     by_label = {f.label: f for f in scenario.faults}
@@ -223,5 +226,7 @@ def run_scenario(scenario: Scenario, agent: Agent, *, poll_min: int = POLL_MIN,
         record.turns.append(TurnRecord(ts=now, mitigated=mitigated(now)))
         if final:
             break
+    if owns_telemetry:
+        telemetry.close()
     record.energy_mwh = energy_mwh(twin.truth)
     return record
