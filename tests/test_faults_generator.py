@@ -5,10 +5,11 @@ from collections import Counter
 
 import pytest
 
-from raqeeb.config import SCENARIO_DIR, load_plant
+from raqeeb.config import SCENARIO_DIR, TEST_SCENARIO_DIR, load_plant
 from raqeeb.contracts import CORE_FAULTS, DECOY_FAULTS, FULL_SCOPE_FAULTS, FaultType
 from raqeeb.faults.generator import (
     COOL_MONTHS,
+    TEST,
     generate,
     has_decoy,
     is_trap,
@@ -80,6 +81,19 @@ def test_yaml_round_trip(core, tmp_path):
 
 def test_committed_scenarios_match_generator(core):
     assert load_scenarios(SCENARIO_DIR) == core
+
+
+def test_committed_test_set_is_held_out_and_full_scope(core):
+    """The test set is frozen in scenarios/test/: regenerating or editing it fails here."""
+    test_set = load_scenarios(TEST_SCENARIO_DIR, TEST["prefix"])
+    assert test_set == generate(TEST["n"], TEST["seed"], TEST["full_scope"], TEST["prefix"])
+    assert len(test_set) == 50 and all(s.id.startswith("tst_") for s in test_set)
+    assert not {s.seed for s in test_set} & {s.seed for s in core}  # new seeds
+    assert not {s.id for s in test_set} & {s.id for s in core}
+    used = {f.type for s in test_set for f in s.faults}
+    assert FULL_SCOPE_FAULTS <= used and CORE_FAULTS <= used
+    assert sum(is_trap(s) for s in test_set) >= 5 and sum(has_decoy(s) for s in test_set) >= 5
+    assert load_scenarios(SCENARIO_DIR) == core  # practice files are not picked up from test/ or vice versa
 
 
 def test_full_scope_generation_runs():

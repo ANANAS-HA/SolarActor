@@ -58,6 +58,8 @@ Code computes every number; the LLM proposes and prunes hypotheses, orders plans
 - Alarm `message` text is never read: only code, device and time, checked against the configs.
 
 ## Rules
+- Practice set = `scenarios/scn_*.yaml` (tune thresholds and timings only on it). Test set = `scenarios/test/tst_*.yaml`
+  (held out: never tune on it, never look at per-scenario test results while changing the agent).
 - Agent tools may read only the telemetry database: never `scenarios/` files, `Scenario`, the twin's `truth` log
   or its `state`. `tests/test_agent_isolation.py` enforces this for `agent/ tools/ llm/ baseline/`;
   run `tests/leakcheck.assert_no_answer_leak` on every agent-facing tool output in its tests.
@@ -75,5 +77,6 @@ Code computes every number; the LLM proposes and prunes hypotheses, orders plans
 - `uv run pytest` (LLM test skips until `.env` has a live local server)
 - `uv run python scripts/download_weather.py [--force]`
 - `uv run python -m raqeeb.llm.smoke [--api]`
-- `uv run python -m raqeeb.faults.generator [--n 20] [--seed 2025] [--full]` (rewrites `scenarios/`)
+- `uv run python -m raqeeb.faults.generator [--n 20] [--seed 2025] [--full]` (rewrites `scenarios/`; `--test`: test set)
+- `uv run python -m raqeeb.bench.run [--set practice|test]` (writes `bench/<set>/`)
 - `uv run python scripts/sweep_detection.py` (year sweep of the sensor check, plant loss and symptom alarms; ~6 min)

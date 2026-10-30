@@ -13,11 +13,16 @@ Built for the Misk x HUMAIN "Future AI Builders" hackathon, Challenge 1: *Agenti
 ## Benchmark
 
 ```powershell
-uv run python -m raqeeb.bench.run            # all scenarios; --agents threshold,oracle,empty --scenarios scn_0001
+uv run python -m raqeeb.bench.run              # practice set -> bench/practice/
+uv run python -m raqeeb.bench.run --set test   # held-out test set -> bench/test/
+# options: --agents raqeeb,threshold,oracle,empty --scenarios scn_0001
 ```
 
-Each synthetic scenario runs through the twin and fault injector. The agent sees only the incident window and the telemetry written so far. The harness gates, approves (a simulated operator approves every gated action and the count is reported) and executes the agent's actions on the twin, then scores the result against the hidden answer key. Output: `bench/results.csv` (one row per agent and scenario), `bench/summary.csv` and `bench/summary.md` (the table, every wrong or missed cause, and where each agent loses head-to-head).
+Two scenario sets are reported separately. The **practice set** (`scenarios/scn_*.yaml`, 20 core-fault scenarios) is the one thresholds and timings were tuned on; they are now frozen. The **test set** (`scenarios/test/tst_*.yaml`, 50 scenarios from a new seed, including the full-scope faults: stuck tracker, open string, unauthorised command) is held out and never used for tuning.
 
+Each synthetic scenario runs through the twin and fault injector. The agent sees only the incident window and the telemetry written so far. The harness gates, approves (a simulated operator approves every gated action and the count is reported) and executes the agent's actions on the twin, then scores the result against the hidden answer key. Output per set: `bench/<set>/results.csv` (one row per agent and scenario), `bench/<set>/summary.csv` and `bench/<set>/summary.md` (the table, every wrong or missed cause, and where each agent loses head-to-head).
+
+- **raqeeb**: the agent (`raqeeb/agent/`).
 - **threshold**: the baseline. It opens one ticket per alarm, maps the alarm code to its primary fault type, acts on the alarm's device and does no correlation.
 - **oracle** and **empty**: reference bounds, not competitors. The oracle reads the answer key; the empty agent does nothing.
 

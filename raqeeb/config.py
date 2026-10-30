@@ -16,7 +16,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 CONFIG_DIR = REPO_ROOT / "configs"
 DATA_DIR = REPO_ROOT / "data"
 WEATHER_DIR = DATA_DIR / "weather"
-SCENARIO_DIR = REPO_ROOT / "scenarios"
+SCENARIO_DIR = REPO_ROOT / "scenarios"  # the practice set (scn_*.yaml): tune only on this
+TEST_SCENARIO_DIR = SCENARIO_DIR / "test"  # the held-out test set (tst_*.yaml): never tune on it
 BENCH_DIR = REPO_ROOT / "bench"  # benchmark output (results.csv, summary.csv, summary.md)
 ENV_FILE = REPO_ROOT / ".env"
 

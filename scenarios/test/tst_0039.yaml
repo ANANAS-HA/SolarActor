@@ -1,0 +1,27 @@
+# SYNTHETIC scenario from raqeeb.faults.generator. Fault times are UTC on the start date.
+# Faults and answer_key are for the injector and bench only; the agent gets Scenario.agent_view().
+id: tst_0039
+seed: 7777039
+start: '2025-02-21T03:00:00Z'
+duration_hours: 12.0
+faults:
+- type: UNAUTHORIZED_CMD
+  target: INV-13
+  start: '04:55'
+- type: INVERTER_DERATE
+  target: INV-06
+  start: '07:20'
+  severity: 0.3
+- type: SENSOR_SOILING
+  target: WS-01
+  start: '07:25'
+  severity: 0.18
+- type: TRACKER_STUCK
+  target: INV-14
+  start: '08:45'
+answer_key:
+  root_causes:
+  - UNAUTHORIZED_CMD@INV-13
+  - INVERTER_DERATE@INV-06
+  - SENSOR_SOILING@WS-01
+  - TRACKER_STUCK@INV-14

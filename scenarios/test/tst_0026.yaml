@@ -1,0 +1,28 @@
+# SYNTHETIC scenario from raqeeb.faults.generator. Fault times are UTC on the start date.
+# Faults and answer_key are for the injector and bench only; the agent gets Scenario.agent_view().
+id: tst_0026
+seed: 7777026
+start: '2025-07-25T03:00:00Z'
+duration_hours: 12.0
+faults:
+- type: UNAUTHORIZED_CMD
+  target: INV-11
+  start: '05:05'
+- type: INVERTER_DERATE
+  target: INV-06
+  start: '06:20'
+  severity: 0.33
+- type: COMMS_DROPOUT
+  target: INV-03
+  start: '07:05'
+  end: '09:30'
+- type: STRING_OPEN
+  target: INV-13
+  start: '07:15'
+  severity: 0.15
+answer_key:
+  root_causes:
+  - UNAUTHORIZED_CMD@INV-11
+  - INVERTER_DERATE@INV-06
+  - COMMS_DROPOUT@INV-03
+  - STRING_OPEN@INV-13

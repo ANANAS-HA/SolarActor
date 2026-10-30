@@ -247,7 +247,7 @@ def test_memory_telemetry_reads_like_the_store():
 
 
 def test_bench_run_writes_results(tmp_path, monkeypatch, capsys):
-    monkeypatch.setattr(bench_run, "load_scenarios", lambda ids: [scenario()])
+    monkeypatch.setattr(bench_run, "load_scenarios", lambda ids, scenario_set: [scenario()])
     bench_run.main(["--agents", "threshold,oracle,empty", "--out", str(tmp_path)])
     results = pd.read_csv(tmp_path / "results.csv")
     summary = pd.read_csv(tmp_path / "summary.csv")

@@ -1,8 +1,10 @@
 """Run the benchmark over the scenarios and write the results.
 
-    uv run python -m raqeeb.bench.run [--agents threshold,oracle,empty] [--scenarios scn_0001,scn_0007]
-                                      [--poll-min 15] [--out bench]
+    uv run python -m raqeeb.bench.run [--set practice|test] [--agents threshold,oracle,empty]
+                                      [--scenarios scn_0001,scn_0007] [--poll-min 15] [--out bench/<set>]
 
+Two scenario sets, reported separately: "practice" (scenarios/scn_*.yaml; thresholds and timings
+are tuned on it, then frozen) and "test" (scenarios/test/tst_*.yaml; held out, never tuned on).
 Writes <out>/results.csv (one row per agent x scenario), <out>/summary.csv (one row per agent,
 what the console shows) and <out>/summary.md (the same table plus where each agent is wrong
 and where it loses head-to-head). Agents with a note in AGENTS are reference bounds, not
@@ -23,7 +25,7 @@ from raqeeb.baseline.threshold import ThresholdBaseline
 from raqeeb.bench.fakes import EmptyAgent, OracleAgent
 from raqeeb.bench.harness import POLL_MIN, RunRecord, reference_energy, run_scenario
 from raqeeb.bench.score import results_frame, summarize, summary_markdown
-from raqeeb.config import BENCH_DIR, SCENARIO_DIR, load_plant
+from raqeeb.config import BENCH_DIR, SCENARIO_DIR, TEST_SCENARIO_DIR, load_plant
 from raqeeb.contracts import Agent, Scenario
 from raqeeb.twin.weather import weather_5min
 
@@ -41,10 +43,12 @@ AGENTS: dict[str, AgentEntry] = {
     "empty": AgentEntry(lambda s: EmptyAgent(), "reference lower bound: does nothing"),
 }
 DEFAULT_AGENTS = ["raqeeb", "threshold", "oracle", "empty"]
+SETS: dict[str, tuple[Path, str]] = {"practice": (SCENARIO_DIR, "scn"), "test": (TEST_SCENARIO_DIR, "tst")}
 
 
-def load_scenarios(ids: list[str] | None = None, folder: Path = SCENARIO_DIR) -> list[Scenario]:
-    paths = sorted(folder.glob("scn_*.yaml"))
+def load_scenarios(ids: list[str] | None = None, scenario_set: str = "practice") -> list[Scenario]:
+    folder, prefix = SETS[scenario_set]
+    paths = sorted(folder.glob(f"{prefix}_*.yaml"))
     if ids:
         wanted = set(ids)
         paths = [p for p in paths if p.stem in wanted]
@@ -66,7 +70,7 @@ def run_bench(scenarios: list[Scenario], agents: list[str], poll_min: int = POLL
     return records
 
 
-def write_outputs(records: list[RunRecord], out: Path = BENCH_DIR) -> tuple[pd.DataFrame, pd.DataFrame]:
+def write_outputs(records: list[RunRecord], out: Path = BENCH_DIR / "practice") -> tuple[pd.DataFrame, pd.DataFrame]:
     results = results_frame(records)
     notes = {name: entry.note for name, entry in AGENTS.items()}
     summary = summarize(results, notes)
@@ -81,15 +85,18 @@ def write_outputs(records: list[RunRecord], out: Path = BENCH_DIR) -> tuple[pd.D
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--agents", default=",".join(DEFAULT_AGENTS), help=f"comma-separated, from {sorted(AGENTS)}")
-    parser.add_argument("--scenarios", default="", help="comma-separated ids (default: all in scenarios/)")
+    parser.add_argument("--set", dest="scenario_set", choices=sorted(SETS), default="practice",
+                        help="practice (tune on it) or test (held out, never tune on it)")
+    parser.add_argument("--scenarios", default="", help="comma-separated ids (default: the whole set)")
     parser.add_argument("--poll-min", type=int, default=POLL_MIN)
-    parser.add_argument("--out", type=Path, default=BENCH_DIR)
+    parser.add_argument("--out", type=Path, default=None, help="default: bench/<set>")
     args = parser.parse_args(argv)
     agents = [a for a in args.agents.split(",") if a]
     unknown = set(agents) - set(AGENTS)
     if unknown:
         raise SystemExit(f"unknown agents: {sorted(unknown)}; choose from {sorted(AGENTS)}")
-    scenarios = load_scenarios([s for s in args.scenarios.split(",") if s] or None)
+    args.out = args.out or BENCH_DIR / args.scenario_set
+    scenarios = load_scenarios([s for s in args.scenarios.split(",") if s] or None, args.scenario_set)
     records = run_bench(scenarios, agents, args.poll_min)
     results, summary = write_outputs(records, args.out)
     with pd.option_context("display.width", 200, "display.max_columns", 30, "display.float_format", "{:.2f}".format):

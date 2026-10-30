@@ -1,6 +1,7 @@
 """Seeded random scenarios (HANDOFF section 11).
 
-    uv run python -m raqeeb.faults.generator [--n 20] [--seed 2025] [--full] [--out scenarios]
+    uv run python -m raqeeb.faults.generator [--n 20] [--seed 2025] [--full] [--out scenarios] [--prefix scn]
+    uv run python -m raqeeb.faults.generator --test     # the held-out test set (scenarios/test/tst_*.yaml)
 
 Each scenario has 1-4 faults on a fairly clear day of the weather year, 06:00-18:00 Riyadh.
 The mix always includes "trap" scenarios (dust storm that soils panels AND the sensor by about
@@ -17,7 +18,7 @@ from pathlib import Path
 
 import numpy as np
 
-from raqeeb.config import SCENARIO_DIR, load_plant
+from raqeeb.config import SCENARIO_DIR, TEST_SCENARIO_DIR, load_plant
 from raqeeb.contracts import (
     CORE_FAULTS,
     FULL_SCOPE_FAULTS,
@@ -30,6 +31,10 @@ from raqeeb.contracts import (
 from raqeeb.twin.weather import clear_days
 
 DEFAULT_SEED = 2025
+# The practice set is generate(20, DEFAULT_SEED) in scenarios/ (thresholds and timings are tuned on it, then
+# frozen). The test set is held out: new seed, full-scope faults, ids tst_*, never used for tuning.
+PRACTICE = {"n": 20, "seed": DEFAULT_SEED, "full_scope": False, "prefix": "scn"}
+TEST = {"n": 50, "seed": 7777, "full_scope": True, "prefix": "tst"}
 START_UTC = time(3, 0)  # 06:00 Riyadh
 DURATION_HOURS = 12.0
 COOL_MONTHS = (1, 2, 3, 11, 12)
@@ -172,8 +177,8 @@ def _fault_types(kind: str, rng: np.random.Generator, full_scope: bool) -> list[
             return types
 
 
-def generate(n: int = 20, seed: int = DEFAULT_SEED, full_scope: bool = False) -> list[Scenario]:
-    """n scenarios; the same (n, seed, full_scope) always gives the same scenarios."""
+def generate(n: int = 20, seed: int = DEFAULT_SEED, full_scope: bool = False, prefix: str = "scn") -> list[Scenario]:
+    """n scenarios; the same (n, seed, full_scope) always gives the same scenarios, with ids <prefix>_0001..."""
     rng = np.random.default_rng(seed)
     any_day, cool_day = candidate_days(), candidate_days(COOL_MONTHS)
     scenarios = []
@@ -183,7 +188,7 @@ def generate(n: int = 20, seed: int = DEFAULT_SEED, full_scope: bool = False) ->
         day = (cool_day if trap else any_day)[int(rng.integers(len(cool_day if trap else any_day)))]
         faults = _Builder(rng).build(types, trap)
         scenario = Scenario(
-            id=f"scn_{i:04d}", seed=seed * 1000 + i,
+            id=f"{prefix}_{i:04d}", seed=seed * 1000 + i,
             start=datetime.combine(day, START_UTC, tzinfo=timezone.utc),
             duration_hours=DURATION_HOURS, faults=faults,
         )
@@ -232,8 +237,8 @@ def write_scenarios(scenarios: list[Scenario], out_dir: Path = SCENARIO_DIR) -> 
     return paths
 
 
-def load_scenarios(directory: Path = SCENARIO_DIR) -> list[Scenario]:
-    return [Scenario.from_yaml(p) for p in sorted(directory.glob("scn_*.yaml"))]
+def load_scenarios(directory: Path = SCENARIO_DIR, prefix: str = "scn") -> list[Scenario]:
+    return [Scenario.from_yaml(p) for p in sorted(directory.glob(f"{prefix}_*.yaml"))]
 
 
 def main() -> None:
@@ -242,8 +247,13 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
     parser.add_argument("--full", action="store_true", help="include full-scope faults")
     parser.add_argument("--out", type=Path, default=SCENARIO_DIR)
+    parser.add_argument("--prefix", default="scn", help="scenario id prefix")
+    parser.add_argument("--test", action="store_true", help="write the held-out test set (overrides the others)")
     args = parser.parse_args()
-    scenarios = generate(args.n, args.seed, args.full)
+    if args.test:
+        args.n, args.seed, args.full, args.prefix, args.out = (TEST["n"], TEST["seed"], TEST["full_scope"],
+                                                                TEST["prefix"], TEST_SCENARIO_DIR)
+    scenarios = generate(args.n, args.seed, args.full, args.prefix)
     for path, scenario in zip(write_scenarios(scenarios, args.out), scenarios):
         tags = [t for t, on in (("trap", is_trap(scenario)), ("decoy", has_decoy(scenario))) if on]
         print(f"{path.name}: {scenario.start.date()} {', '.join(f.label for f in scenario.faults)}"

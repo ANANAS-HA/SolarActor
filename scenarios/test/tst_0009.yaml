@@ -1,0 +1,19 @@
+# SYNTHETIC scenario from raqeeb.faults.generator. Fault times are UTC on the start date.
+# Faults and answer_key are for the injector and bench only; the agent gets Scenario.agent_view().
+id: tst_0009
+seed: 7777009
+start: '2025-03-25T03:00:00Z'
+duration_hours: 12.0
+faults:
+- type: SOILING
+  target: ALL
+  start: '05:50'
+  end: '07:15'
+  severity: 0.14
+- type: TRACKER_STUCK
+  target: INV-16
+  start: '07:15'
+answer_key:
+  root_causes:
+  - SOILING@ALL
+  - TRACKER_STUCK@INV-16

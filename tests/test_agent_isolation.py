@@ -10,13 +10,13 @@ from pathlib import Path
 
 import pytest
 
-from raqeeb.config import REPO_ROOT, SCENARIO_DIR
+from raqeeb.config import REPO_ROOT, SCENARIO_DIR, TEST_SCENARIO_DIR
 from raqeeb.contracts import Scenario
 from raqeeb.twin.simulator import Twin
 from tests.leakcheck import AnswerLeak, assert_no_answer_leak
 
 FIXTURE = Path(__file__).parent / "fixtures" / "scn_example.yaml"
-SCENARIOS = [FIXTURE, *sorted(SCENARIO_DIR.glob("scn_*.yaml"))]
+SCENARIOS = [FIXTURE, *sorted(SCENARIO_DIR.glob("scn_*.yaml")), *sorted(TEST_SCENARIO_DIR.glob("tst_*.yaml"))]
 
 # Packages whose code runs on the agent's side of the line (Raqeeb and the baseline it is compared with)
 AGENT_SIDE = ["agent", "tools", "llm", "baseline"]
