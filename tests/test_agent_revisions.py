@@ -220,3 +220,39 @@ def test_two_units_weak_together_are_held_until_a_third_joins_or_the_hold_ends(m
     mark_common_onset(memory, two, later)
     assert not any(memory.symptoms[sid].evidence.get("onset_hold") for sid in two)
     assert len(rank_causes([memory.symptoms[sid] for sid in two], load_plant())[0]) == 2
+
+
+def test_an_open_string_never_explains_a_unit_at_zero_output():
+    """Physics: an open string leaves the other strings producing. A unit flagged only by the reference-ratio
+    tool (whole-window ratio still well above zero) but at zero output now must not get an open-string guess."""
+    plant = load_plant()
+    weak = sym(SymptomKind.DEVICE_UNDERPERFORMANCE, "INV-04", ratio_vs_reference=0.6)
+    assert [h.labels[0] for h in rank_causes([weak], plant)[0]] == ["STRING_OPEN@INV-04"]
+    stopped = sym(SymptomKind.DEVICE_UNDERPERFORMANCE, "INV-04", ratio_vs_reference=0.6, zero_output=True)
+    assert rank_causes([stopped], plant)[0] == []
+
+    # End to end: a stopped unit with the unauthorized-command rules switched off is left unexplained
+    from raqeeb.agent import RaqeebAgent
+    from raqeeb.bench.harness import run_scenario
+    from raqeeb.contracts import FaultType
+
+    s = scenario({"type": "UNAUTHORIZED_CMD", "target": "INV-04", "start": "05:00"})
+    agent = RaqeebAgent(name="raqeeb_rules", disabled=frozenset({FaultType.UNAUTHORIZED_CMD}))
+    record = run_scenario(s, agent)
+    assert "STRING_OPEN@INV-04" not in record.predicted and record.actions == []
+    assert record.escalations
+
+
+def test_a_unit_stopped_until_dusk_is_still_not_an_open_string():
+    """Zero output is judged at the latest step where peers produce: at dusk (peers below the daylight floor)
+    the earlier verdict stands, so the stopped unit never gets an open-string guess or a ticket. (Hand-made,
+    like ablation abl_0011's fault, which is not used here: the ablation set is never tuned on.)"""
+    from raqeeb.agent import RaqeebAgent
+    from raqeeb.bench.harness import run_scenario
+    from raqeeb.contracts import FaultType
+
+    s = scenario({"type": "UNAUTHORIZED_CMD", "target": "INV-04", "start": "06:35"}, hours=12, seed=11)
+    agent = RaqeebAgent(name="raqeeb_rules", disabled=frozenset({FaultType.UNAUTHORIZED_CMD}))
+    record = run_scenario(s, agent)
+    assert "STRING_OPEN@INV-04" not in record.predicted and record.actions == []
+    assert record.escalations

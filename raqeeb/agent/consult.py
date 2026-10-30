@@ -17,7 +17,9 @@ No proposal is acted on untested. A proposal is accepted only if:
   group or field edge from the plant layout) and cover at least AREA_MIN_SHARE of that area, and
   no unexplained weak unit lies outside it.
 Accepted causes from the model are re-tested every poll and dropped when the test fails (unless
-something was already done about them). A cause the planner has no ladder for gets only safe
+something was already done about them). After an acceptance the deterministic ranker runs again with
+the accepted causes pinned (their symptoms count as explained), so simplest-explanation scoring drops
+rule guesses they make redundant; the model itself never removes anything. A cause the planner has no ladder for gets only safe
 actions: a technician ticket for a single inverter, otherwise escalation to a human.
 
 At the end of the incident the router writes the plain-language explanation and the English and
@@ -29,7 +31,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from raqeeb.agent.rank import CAUSAL_GRAPH, candidates, near_tie_candidates
+from raqeeb.agent.rank import CAUSAL_GRAPH, candidates, near_tie_candidates, rank
 from raqeeb.agent.state import PASSIVE, Cause, CauseStatus, Memory, PollState
 from raqeeb.contracts import (
     DECOY_FAULTS,
@@ -102,17 +104,29 @@ def test_hypothesis(memory: Memory, h: Hypothesis, unexplained: set[str]) -> tup
         return explains, ""
     if not devices <= {*plant.inverters.ids, plant.weather_station_id}:
         return [], f"{target} is not a device or a site area"
-    weak = {memory.symptoms[sid].device_id: sid for sid in unexplained
+    # One unit, one cause: on a unit a rule cause already explains, a cause outside the rules is accepted only
+    # if it claims every symptom of that rule cause (then the re-rank drops the rule cause as redundant)
+    for c in memory.causes.values():
+        theirs = set(c.hypothesis.explains) & memory.active
+        if c.source != SOURCE_LLM and c.status not in PASSIVE and c.hypothesis.targets[0] in devices \
+                and not theirs <= cited:
+            return [], f"{c.label} already explains {c.hypothesis.targets[0]} and the proposal does not cover it"
+    claimed = (unexplained | cited) & set(memory.active)
+    weak = {memory.symptoms[sid].device_id for sid in unexplained
             if memory.symptoms[sid].kind in WEAK_KINDS and memory.symptoms[sid].device_id in plant.inverters.ids}
+    weak |= {memory.symptoms[sid].device_id for sid in cited & set(memory.active)
+             if memory.symptoms[sid].kind in WEAK_KINDS and memory.symptoms[sid].device_id in devices}
     inside = {d for d in weak if d in devices}
-    outside = set(weak) - devices
+    outside = weak - devices
     inverters = devices & set(plant.inverters.ids)
     if not inverters or len(inside) < AREA_MIN_SHARE * len(inverters) or outside:
         return [], (f"footprint does not match: {len(inside)} of {len(inverters)} units in {target} weak, "
                     f"{len(outside)} weak units outside it")
-    explains = sorted(sid for sid in unexplained
-                      if memory.symptoms[sid].device_id in devices
+    explains = sorted(sid for sid in claimed
+                      if (memory.symptoms[sid].device_id in devices and (sid in unexplained or sid in cited))
                       or (sid in cited and memory.symptoms[sid].device_id in (plant.plant_controller_id, PLANT_TARGET)))
+    if not set(explains) & unexplained:
+        return [], "it explains nothing the rules left unexplained"
     return explains, ""
 
 
@@ -138,7 +152,7 @@ def consult(state: PollState) -> PollState:
     if router is None or memory.diagnosis is None:
         return {}
     unexplained = set(memory.diagnosis.unexplained)
-    changed = False
+    changed = accepted_now = False
 
     # Re-test what the model proposed before; keep what still fits, drop what no longer does
     for cause in _accepted(memory):
@@ -181,8 +195,13 @@ def consult(state: PollState) -> PollState:
             memory.causes[label] = Cause(hypothesis=tested, first_seen=now, last_selected=now, source=SOURCE_LLM,
                                          confidence=0.0)
             unexplained -= set(explains)
-            changed = True
+            changed = accepted_now = True
             memory.log(now, "consult", f"accepted model proposal {label} after testing: explains {', '.join(explains)}")
+    if accepted_now:
+        # Re-rank with the accepted causes pinned: the deterministic ranker (not the model) drops rule guesses
+        # they make redundant, and moves any ticket on such a guess to the accepted cause
+        rank({"memory": memory, "now": now, "rerank": True})
+        return {"diagnosis_changed": True}
     if changed or unexplained != set(memory.diagnosis.unexplained):
         _rebuild_diagnosis(memory, unexplained)
         return {"diagnosis_changed": True}

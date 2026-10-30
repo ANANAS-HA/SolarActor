@@ -85,8 +85,8 @@ _PLANT_WIDE = {FaultType.SOILING, FaultType.CURTAILMENT}
 _STATION = {FaultType.SENSOR_SOILING}
 _INVERTER = {FaultType.INVERTER_DERATE, FaultType.TRACKER_STUCK, FaultType.STRING_OPEN, FaultType.UNAUTHORIZED_CMD}
 
-FOOTER_EN = "Written by a language model ({role}) from the agent's records; numbers come from code. Plant data is synthetic."
-FOOTER_AR = "كتبه نموذج لغوي ({role}) من سجلات الوكيل، والأرقام محسوبة برمجياً. بيانات المحطة اصطناعية."
+FOOTER_EN = "Written by a language model ({model}) from the agent's records; numbers come from code. Plant data is synthetic."
+FOOTER_AR = "كتبه نموذج لغوي ({model}) من سجلات الوكيل، والأرقام محسوبة برمجياً. بيانات المحطة اصطناعية."
 _ARABIC_LETTER = re.compile(r"[؀-ۿ]")
 _LATIN_LETTER = re.compile(r"[A-Za-z]")
 
@@ -300,8 +300,9 @@ class Router:
                         "llm_calls": draft.llm_calls + len(calls)}
         if value is not None:
             role = next(c.role for c in reversed(calls) if c.ok).value
-            update |= {"summary_en": f"{value.summary_en.strip()}\n\n{FOOTER_EN.format(role=role)}",
-                       "summary_ar": f"{value.summary_ar.strip()}\n\n{FOOTER_AR.format(role=role)}"}
+            model = self.gateway.model_label(LlmRole(role))  # the model that actually wrote it
+            update |= {"summary_en": f"{value.summary_en.strip()}\n\n{FOOTER_EN.format(model=model)}",
+                       "summary_ar": f"{value.summary_ar.strip()}\n\n{FOOTER_AR.format(model=model)}"}
         return draft.model_copy(update=update), calls
 
     # --- routing core -----------------------------------------------------------------------
