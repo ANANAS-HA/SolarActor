@@ -129,6 +129,7 @@ class SymptomKind(StrEnum):
     TRACKER_ANGLE_FLAT = "TRACKER_ANGLE_FLAT"
     DC_STEP_LOSS = "DC_STEP_LOSS"
     UNEXPECTED_COMMAND = "UNEXPECTED_COMMAND"
+    DEVICE_LOG = "DEVICE_LOG"  # a free-text log line from a device: recorded by code and device, text never read
     ALARM = "ALARM"  # a raw alarm not yet folded into another symptom
 
 

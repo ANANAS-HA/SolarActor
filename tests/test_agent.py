@@ -260,12 +260,23 @@ def test_alarm_text_is_data_not_instructions():
 
 
 def test_causal_graph_covers_every_fault_type():
-    # PROMPT_INJECTION exists only as log text, which the agent never reads: it has no symptom to link to
-    # (the agent session decides whether Raqeeb reports it). Every other fault type needs a key link.
-    covered = set(FaultType) - {FaultType.PROMPT_INJECTION}
-    assert covered <= set(CAUSAL_GRAPH.nodes)
-    for fault in covered:
+    # PROMPT_INJECTION is a decoy known only by a DEVICE_LOG line's code and device (the text is never read)
+    assert set(FaultType) <= set(CAUSAL_GRAPH.nodes)
+    for fault in FaultType:
         assert any(link.key for _, _, link in CAUSAL_GRAPH.out_edges(fault, data="link")), fault
+    assert [link.kind for _, _, link in CAUSAL_GRAPH.out_edges(FaultType.PROMPT_INJECTION, data="link")] \
+        == [SymptomKind.DEVICE_LOG]
+
+
+def test_device_log_line_is_flagged_never_a_cause_and_adds_no_confidence():
+    plant = load_plant()
+    derate = [sym(SymptomKind.FLAT_CAP_DEVICE, "INV-07", level_kw=1500.0), sym(SymptomKind.HIGH_TEMPERATURE, "INV-07"),
+              sym(SymptomKind.ALARM, "INV-07", code="DERATE_TEMP"), sym(SymptomKind.ALARM, "INV-03", code="LOW_PR")]
+    log_line = sym(SymptomKind.DEVICE_LOG, "INV-07", code="DEVICE_LOG")
+    hyps, unexplained, confidence = rank_causes(derate, plant)
+    hyps2, unexplained2, confidence2 = rank_causes([*derate, log_line], plant)
+    assert {h.labels[0] for h in hyps2} == {h.labels[0] for h in hyps} | {"PROMPT_INJECTION@INV-07"}
+    assert (unexplained2, confidence2) == (unexplained, confidence) and confidence < 1
 
 
 def test_rank_separates_root_causes_from_symptoms():

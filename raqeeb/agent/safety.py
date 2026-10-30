@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from datetime import timedelta
 
-from raqeeb.agent.state import CauseStatus, Memory, PollState
+from raqeeb.agent.state import PASSIVE, Memory, PollState
 from raqeeb.contracts import PLANT_TARGET, ActionRequest, ActionStatus, ActionType
 
 MAX_ACTIONS_PER_POLL = 6
@@ -49,7 +49,7 @@ def check(memory: Memory, request: ActionRequest, label: str, now) -> tuple[Acti
         if kw is not None and not (0 < float(kw) <= plant.inverters.ac_kw):
             return None, f"power limit {kw} kW outside (0, {plant.inverters.ac_kw:.0f}]"
     cause = memory.causes.get(label)
-    if cause is None or cause.status == CauseStatus.EXPECTED:
+    if cause is None or cause.status in PASSIVE:
         return None, f"no confirmed root cause behind it ({label})"
     for pending in memory.pending.values():
         same = (pending.request.action == action and pending.request.target == target

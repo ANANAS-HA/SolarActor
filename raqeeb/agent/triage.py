@@ -19,6 +19,7 @@ from raqeeb.contracts import PLANT_TARGET, ActionOutcome, ActionStatus
 BURST_GAP = timedelta(minutes=30)  # alarms of one code further apart than this start a new burst
 PLANT_WIDE_SHARE = 0.75  # a burst on at least this share of inverters is plant-wide
 UNRECOGNISED = "UNRECOGNISED"
+LOG_CODE = "DEVICE_LOG"  # free-text log lines forwarded from devices (configs/alarm_codes.yaml): a record, never a command
 _DEVICE_RE = re.compile(r"^[A-Z0-9-]{1,16}$")
 
 

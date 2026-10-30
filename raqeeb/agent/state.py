@@ -37,7 +37,11 @@ class CauseStatus(StrEnum):
     RESOLVED = "resolved"  # verified recovered, or cleared on its own
     REOPENED = "reopened"  # a fix did not bring recovery: plan the next one
     EXPECTED = "expected"  # normal behaviour (grid curtailment): no action
+    FLAGGED = "flagged"  # a device log line: flagged for security review, never a root cause, no action
     BLOCKED = "blocked"  # approval refused or the fix failed: left to the operators
+
+
+PASSIVE = frozenset({CauseStatus.EXPECTED, CauseStatus.FLAGGED})  # decoys: reported, never a root cause or an action
 
 
 @dataclass

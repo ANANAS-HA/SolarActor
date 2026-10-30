@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from raqeeb.agent.state import Memory, PollState
-from raqeeb.agent.triage import UNRECOGNISED
+from raqeeb.agent.triage import LOG_CODE, UNRECOGNISED
 from raqeeb.contracts import PLANT_TARGET, Symptom, SymptomKind, ToolResult
 from raqeeb.tools import AGENT_TOOLS
 
@@ -122,6 +122,12 @@ def symptoms_from(results: dict[str, ToolResult], alarm_groups: list[dict], memo
         for c in r.values["commands"]:
             out.append(_make(SymptomKind.UNEXPECTED_COMMAND, c["device_id"], c["ts"], {
                 "tool": r.tool, "reasons": c["reasons"], "summary": f"unexpected command on {c['device_id']}"}))
+
+    # A device log line: only its code, device and time are used; the free text is untrusted and never read
+    for g in alarm_groups:
+        if g["code"] == LOG_CODE:
+            out += [_make(SymptomKind.DEVICE_LOG, device, g["first"], {
+                "code": g["code"], "count": g["count"], "summary": f"log line from {device}"}) for device in g["devices"]]
 
     # Alarms with a possible fault behind them; protective ones (wind stow) are weather, not faults
     for g in alarm_groups:

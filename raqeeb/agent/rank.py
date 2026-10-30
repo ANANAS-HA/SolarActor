@@ -13,7 +13,10 @@ add nothing), while the score stays positive. Symptoms (e.g. LOW_PR alarms) are 
 the root cause that explains them, and an extra cause must earn its place.
 
 CURTAILMENT is ranked like any cause (it explains a plant-wide cap under a grid limit), then
-reported as expected behaviour: never a root cause, never an action.
+reported as expected behaviour: never a root cause, never an action. PROMPT_INJECTION explains a
+device log line (known only by its code and device; the text is never read) and is reported as
+flagged for security review: never a root cause, never an action. Log lines count neither for
+nor against the confidence, so no log line can push an irreversible action over its threshold.
 """
 
 from __future__ import annotations
@@ -23,7 +26,7 @@ from dataclasses import dataclass
 
 import networkx as nx
 
-from raqeeb.agent.state import Cause, CauseStatus, PollState
+from raqeeb.agent.state import PASSIVE, Cause, CauseStatus, PollState
 from raqeeb.contracts import (
     DECOY_FAULTS,
     PLANT_TARGET,
@@ -40,6 +43,7 @@ CAUSE_PENALTY = 0.4
 DROP_AFTER_MISSES = 2  # a cause not selected for this many polls, with no action on it, is dropped
 WEIGHTS = {SymptomKind.ALARM: 0.5, SymptomKind.HIGH_WIND: 0.3}  # alarms are noisy; wind is weather
 BENIGN = {SymptomKind.HIGH_WIND}  # unexplained, these are just weather
+RECORD_ONLY = {SymptomKind.DEVICE_LOG}  # kept out of the confidence and the unexplained list
 PERFORMANCE_CODES = frozenset({"LOW_PR", "LOW_STRING_CURRENT", "DC_INPUT_LOW"})
 
 F, K = FaultType, SymptomKind
@@ -93,6 +97,8 @@ LINKS: list[Link] = [
     _alarm(F.UNAUTHORIZED_CMD, {"REMOTE_STOP"}, "device", key=True),
     Link(F.UNAUTHORIZED_CMD, K.DEVICE_UNDERPERFORMANCE, "device"),
     Link(F.UNAUTHORIZED_CMD, K.DATA_GAP, "device", when=lambda s: s.evidence.get("still_producing") is False),
+    # Injected instruction (decoy): a free-text log line from a device. Flagged, never acted on
+    Link(F.PROMPT_INJECTION, K.DEVICE_LOG, "device", key=True, predicted=True),
 ]
 
 
@@ -121,6 +127,8 @@ def valid_target(fault: FaultType, target: str, plant: PlantConfig) -> bool:
         return target == plant.weather_station_id
     if fault == F.COMMS_DROPOUT:
         return target in plant.inverters.ids or target == plant.weather_station_id
+    if fault == F.PROMPT_INJECTION:
+        return target in {*plant.inverters.ids, plant.weather_station_id, plant.meter_id, plant.plant_controller_id}
     return target in plant.inverters.ids
 
 
@@ -214,6 +222,7 @@ def rank_causes(symptoms: list[Symptom], plant: PlantConfig) -> tuple[list[Hypot
         for c, score in chosen
     ]
     explained = {sid for h in hypotheses for sid in h.explains}
+    symptoms = [s for s in symptoms if s.kind not in RECORD_ONLY]
     unexplained = sorted(s.id for s in symptoms if s.id not in explained and s.kind not in BENIGN)
     total = sum(weight(s) for s in symptoms if s.id in explained or s.kind not in BENIGN)
     confidence = sum(weight(s) for s in symptoms if s.id in explained) / total if total else 1.0
@@ -230,10 +239,11 @@ def rank(state: PollState) -> PollState:
     for label, h in selected.items():
         cause = memory.causes.get(label)
         if cause is None:
-            status = CauseStatus.EXPECTED if h.fault_type in DECOY_FAULTS else CauseStatus.OPEN
+            status = (CauseStatus.FLAGGED if h.fault_type == FaultType.PROMPT_INJECTION
+                      else CauseStatus.EXPECTED if h.fault_type in DECOY_FAULTS else CauseStatus.OPEN)
             memory.causes[label] = Cause(hypothesis=h, first_seen=now, last_selected=now, status=status)
-            memory.log(now, "rank", f"{'expected behaviour' if status == CauseStatus.EXPECTED else 'root cause'}: "
-                       f"{label} (score {h.score})", evidence=h.evidence)
+            what = {CauseStatus.FLAGGED: "flagged for security review", CauseStatus.EXPECTED: "expected behaviour"}
+            memory.log(now, "rank", f"{what.get(status, 'root cause')}: {label} (score {h.score})", evidence=h.evidence)
         else:
             cause.hypothesis, cause.last_selected, cause.misses = h, now, 0
     for label, cause in list(memory.causes.items()):
@@ -245,7 +255,7 @@ def rank(state: PollState) -> PollState:
             del memory.causes[label]
             memory.log(now, "rank", f"dropped {label}: no longer supported by the evidence")
 
-    roots = [c.hypothesis for c in memory.causes.values() if c.status != CauseStatus.EXPECTED]
+    roots = [c.hypothesis for c in memory.causes.values() if c.status not in PASSIVE]
     diagnosis = Diagnosis(root_causes=roots, unexplained=unexplained, confidence=confidence)
     old = memory.diagnosis
     changed = old is None or sorted(h.labels[0] for h in old.root_causes) != sorted(h.labels[0] for h in roots)

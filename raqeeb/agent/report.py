@@ -1,14 +1,15 @@
 """Report: the shift report (English and Arabic) from the agent's own records.
 
 Milestone 1 builds it from templates in code; no language model writes it yet. Times are shown in
-Asia/Riyadh. Only the agent's records go in: no alarm or log text is copied into the report.
+Asia/Riyadh. Only the agent's records go in: no alarm or log text is copied into the report. A
+device log line is reported by its device only, as flagged for security review.
 """
 
 from __future__ import annotations
 
 from zoneinfo import ZoneInfo
 
-from raqeeb.agent.state import CauseStatus, Memory, PollState
+from raqeeb.agent.state import PASSIVE, CauseStatus, Memory, PollState
 from raqeeb.contracts import DISPLAY_TZ, ActionStatus, FaultType, IncidentReport
 
 _TZ = ZoneInfo(DISPLAY_TZ)
@@ -22,6 +23,7 @@ FAULT_EN = {
     FaultType.TRACKER_STUCK: "stuck tracker",
     FaultType.STRING_OPEN: "open string",
     FaultType.UNAUTHORIZED_CMD: "unauthorised control command",
+    FaultType.PROMPT_INJECTION: "unrecognized log entry",
 }
 FAULT_AR = {
     FaultType.SOILING: "اتساخ الألواح بالغبار بعد عاصفة رملية",
@@ -32,6 +34,7 @@ FAULT_AR = {
     FaultType.TRACKER_STUCK: "توقف نظام التتبع",
     FaultType.STRING_OPEN: "انقطاع سلسلة ألواح",
     FaultType.UNAUTHORIZED_CMD: "أمر تحكم غير مصرح به",
+    FaultType.PROMPT_INJECTION: "سطر سجل غير معروف",
 }
 ACTION_AR = {
     "reset_comms_gateway": "إعادة تشغيل بوابة الاتصال",
@@ -45,12 +48,12 @@ ACTION_AR = {
 STATUS_EN = {
     CauseStatus.OPEN: "diagnosed", CauseStatus.WAITING: "fix waiting", CauseStatus.ACTING: "fix in progress",
     CauseStatus.RESOLVED: "resolved", CauseStatus.REOPENED: "fix did not work", CauseStatus.BLOCKED: "left to operators",
-    CauseStatus.EXPECTED: "expected",
+    CauseStatus.EXPECTED: "expected", CauseStatus.FLAGGED: "flagged for security review",
 }
 STATUS_AR = {
     CauseStatus.OPEN: "تم التشخيص", CauseStatus.WAITING: "الإصلاح بالانتظار", CauseStatus.ACTING: "الإصلاح جارٍ",
     CauseStatus.RESOLVED: "تمت المعالجة", CauseStatus.REOPENED: "الإصلاح لم ينجح", CauseStatus.BLOCKED: "محال إلى المشغلين",
-    CauseStatus.EXPECTED: "متوقع",
+    CauseStatus.EXPECTED: "متوقع", CauseStatus.FLAGGED: "محال للمراجعة الأمنية",
 }
 
 
@@ -59,8 +62,9 @@ def _local(ts) -> str:
 
 
 def build_report(memory: Memory, now) -> IncidentReport:
-    causes = [c for c in memory.causes.values() if c.status != CauseStatus.EXPECTED]
+    causes = [c for c in memory.causes.values() if c.status not in PASSIVE]
     expected = [c for c in memory.causes.values() if c.status == CauseStatus.EXPECTED]
+    flagged = sorted(c.hypothesis.targets[0] for c in memory.causes.values() if c.status == CauseStatus.FLAGGED)
     pendings = list(memory.pending.values())
     applied = [p for p in pendings if p.status == ActionStatus.APPLIED]
     verified = [p for p in applied if p.verification is not None and p.verification.recovered]
@@ -79,6 +83,9 @@ def build_report(memory: Memory, now) -> IncidentReport:
     if expected:
         en.append("Expected behaviour, no action: " + "; ".join(FAULT_EN[c.hypothesis.fault_type] for c in expected) + ".")
         ar.append("سلوك متوقع دون إجراء: " + "؛ ".join(FAULT_AR[c.hypothesis.fault_type] for c in expected) + ".")
+    for device in flagged:
+        en.append(f"Unrecognized log entry from {device}, not acted on, flagged for security review.")
+        ar.append(f"سطر سجل غير معروف من {device}، لم يُتخذ بشأنه أي إجراء، وأُحيل للمراجعة الأمنية.")
     en.append(f"Actions: {len(pendings)} requested, {len(applied)} applied, {len(verified)} verified as recovered.")
     ar.append(f"الإجراءات: {len(pendings)} مطلوبة، {len(applied)} منفذة، {len(verified)} تم التحقق من نجاحها.")
     for p in pendings:
@@ -105,8 +112,7 @@ def build_report(memory: Memory, now) -> IncidentReport:
 
 def is_done(memory: Memory) -> bool:
     """Every root cause is resolved or handed to operators, and no request is still in flight."""
-    settled = all(c.status in (CauseStatus.RESOLVED, CauseStatus.BLOCKED, CauseStatus.EXPECTED)
-                  for c in memory.causes.values())
+    settled = all(c.status in PASSIVE | {CauseStatus.RESOLVED, CauseStatus.BLOCKED} for c in memory.causes.values())
     in_flight = any(p.status is None or (p.status == ActionStatus.APPLIED and p.verification is None)
                     for p in memory.pending.values())
     return bool(memory.causes) and settled and not in_flight
