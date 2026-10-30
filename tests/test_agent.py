@@ -11,8 +11,10 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+import raqeeb.agent.plan as plan_module
 from raqeeb.agent import RaqeebAgent
 from raqeeb.agent.graph import GRAPH, NODES
+from raqeeb.agent.plan import STORM_DISPATCH_AFTER
 from raqeeb.agent.rank import CAUSAL_GRAPH, rank_causes
 from raqeeb.agent.safety import check
 from raqeeb.agent.state import Cause, CauseStatus
@@ -123,11 +125,28 @@ def test_trap_actions_are_the_right_fixes_and_verified(trap_run):
     assert verified and all(verified.values()) and set(verified) == {a.request.id for a in record.actions}
 
 
-def test_trap_cleaning_waits_for_the_storm_to_end(trap_run):
+def test_trap_cleaning_is_timed_to_the_storm(trap_run):
     scenario, record, _, _ = trap_run
     storm = next(f for f in scenario.faults if f.type.value == "SOILING")
-    cleaning = next(a for a in record.actions if a.request.action == ActionType.CREATE_CLEANING_WORK_ORDER)
-    assert cleaning.ts > scenario.resolve_time(storm.end)
+    cleaning = [a for a in record.actions if a.request.action == ActionType.CREATE_CLEANING_WORK_ORDER]
+    assert len(cleaning) == 1
+    assert cleaning[0].ts >= scenario.resolve_time(storm.start) + STORM_DISPATCH_AFTER  # not in the storm's first part
+    assert score_run(record)["wasted_washes"] == 0  # the crew arrives after the storm
+
+
+def test_a_wash_that_lands_mid_storm_is_redone_after_it(monkeypatch):
+    """Dispatch as soon as soiling shows: the first wash lands while the storm still blows, verify
+    (which waits for calm) sees the dust that settled again and orders a second wash."""
+    monkeypatch.setattr(plan_module, "STORM_DISPATCH_AFTER", timedelta(0))
+    scenario = Scenario(id="fx_long_storm", seed=5, start=datetime(2025, 1, 15, 3, tzinfo=timezone.utc),
+                        duration_hours=12, faults=[FaultSpec(type="SOILING", target="ALL", start="05:00",
+                                                             end="08:30", severity=0.25)])
+    record, _, _ = run(scenario)
+    washes = [a for a in record.actions if a.request.action == ActionType.CREATE_CLEANING_WORK_ORDER]
+    row = score_run(record)
+    assert len(washes) == 2 and row["wasted_washes"] == 1
+    assert washes[1].ts >= scenario.resolve_time("08:30")  # the re-wash waits for calm
+    assert row["mitigated_at_end"] and row["false_actions"] == 0
 
 
 def test_trap_agent_received_no_answer(trap_run):

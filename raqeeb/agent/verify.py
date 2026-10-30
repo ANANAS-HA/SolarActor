@@ -13,6 +13,7 @@ from datetime import datetime, timedelta
 import pandas as pd
 
 from raqeeb.agent.execute import output_kw
+from raqeeb.agent.plan import storm_over
 from raqeeb.agent.state import CauseStatus, Memory, PendingAction, PollState
 from raqeeb.contracts import PLANT_TARGET, ActionStatus, ActionType, Verification
 from raqeeb.tools.metrics import performance_series
@@ -72,6 +73,8 @@ def judge(memory: Memory, pending: PendingAction, now: datetime) -> Judgement:
     station = memory.plant.weather_station_id
 
     if action == ActionType.CREATE_CLEANING_WORK_ORDER:
+        if not storm_over(memory, now):
+            return None, None, None, "storm still blowing: judge the wash once it has passed"
         if target == PLANT_TARGET:
             return _plant_vs_reference(memory, start, end)
         after = output_kw(memory, target, start, end)

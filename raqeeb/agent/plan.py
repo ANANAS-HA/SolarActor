@@ -19,7 +19,7 @@ from raqeeb.tools.metrics import performance_series
 A, F = ActionType, FaultType
 
 LADDERS: dict[FaultType, list[list[ActionType]]] = {
-    F.SOILING: [[A.CREATE_CLEANING_WORK_ORDER]],
+    F.SOILING: [[A.CREATE_CLEANING_WORK_ORDER], [A.CREATE_CLEANING_WORK_ORDER]],  # re-wash if dust settled again
     F.SENSOR_SOILING: [[A.FLAG_SENSOR_USE_REFERENCE]],
     F.INVERTER_DERATE: [[A.DISPATCH_TECHNICIAN]],  # + the protective limit, see follow_ups()
     F.COMMS_DROPOUT: [[A.RESET_COMMS_GATEWAY], [A.DISPATCH_TECHNICIAN]],
@@ -28,6 +28,9 @@ LADDERS: dict[FaultType, list[list[ActionType]]] = {
     F.UNAUTHORIZED_CMD: [[A.ISOLATE_DEVICE]],
 }
 CALM_AFTER_STORM = timedelta(minutes=15)  # wind below the stow limit this long before cleaning
+# Dispatch the first wash during the storm once it has blown this long (crew needs cleaning_delay_min to
+# arrive, so it can land as the storm ends). None: always wait for calm. Tuned on the practice set only.
+STORM_DISPATCH_AFTER: timedelta | None = timedelta(minutes=45)  # 0-45 tie on practice; 45 = most cautious
 RECENT = timedelta(hours=1)  # window for the current shortfall
 CAP_WINDOW = timedelta(minutes=30)  # DERATED readings this recent give the cap level
 MIN_CAP_READINGS = 2
@@ -52,6 +55,14 @@ def storm_over(memory: Memory, now: datetime) -> bool:
     wind = memory.results.get("wind_summary")
     last = wind.values.get("last_above_stow") if wind is not None else None
     return last is None or now - last >= CALM_AFTER_STORM
+
+
+def storm_age(memory: Memory, now: datetime) -> timedelta | None:
+    """How long the current storm has blown (None when the wind is below the stow limit)."""
+    wind = memory.results.get("wind_summary")
+    if wind is None or storm_over(memory, now) or wind.values.get("first_above_stow") is None:
+        return None
+    return now - wind.values["first_above_stow"]
 
 
 def mwh_at_risk(memory: Memory, cause: Cause, now: datetime) -> float:
@@ -97,7 +108,10 @@ def fixes_for(memory: Memory, cause: Cause, now: datetime) -> tuple[list[ActionR
     out: list[ActionRequest] = []
     for action in rung:
         if action == A.CREATE_CLEANING_WORK_ORDER:
-            if not storm_over(memory, now):
+            age = storm_age(memory, now)
+            early_ok = (cause.attempts == 0 and STORM_DISPATCH_AFTER is not None and age is not None
+                        and age >= STORM_DISPATCH_AFTER)
+            if not storm_over(memory, now) and not early_ok:
                 return [], "storm still blowing: cleaning now would be wasted"
             out.append(_request(memory, action, target, cause, effect="plant output back to expected after cleaning"))
         elif action == A.RESET_COMMS_GATEWAY:
