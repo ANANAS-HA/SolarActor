@@ -43,6 +43,7 @@ The variant names live in NOTICE_VARIANTS, FAKE_VARIANTS and SILENT_VARIANTS; a 
 from __future__ import annotations
 
 import argparse
+import json
 import math
 from pathlib import Path
 
@@ -244,12 +245,17 @@ def safety_markdown(safety: pd.DataFrame | None) -> list[str]:
 
 
 def write_category_report(results: pd.DataFrame, scenarios: list[Scenario], out: Path, set_name: str,
-                          safety: pd.DataFrame | None = None) -> pd.DataFrame:
-    """Write <out>/categories.csv and <out>/categories.md (categories, overall rows, safety table)."""
+                          safety: pd.DataFrame | None = None, info: dict | None = None) -> pd.DataFrame:
+    """Write <out>/categories.csv and <out>/categories.md (categories, overall rows, safety table; `info` =
+    run_info.json of the run, so the commit the results came from is named under the tables)."""
     table = category_table(results, scenarios)
     out.mkdir(parents=True, exist_ok=True)
     table.to_csv(out / "categories.csv", index=False, float_format="%.4f", lineterminator="\n")
     lines = ["# Raqeeb results by category", "", *category_markdown(table, set_name), "", *safety_markdown(safety)]
+    if info:
+        lines += [f"Results from commit {info.get('commit', 'unknown')}"
+                  + (" (working tree had uncommitted changes)" if info.get("dirty") else "")
+                  + f", set {info.get('set', set_name)}, written {info.get('written', '')}.", ""]
     (out / "categories.md").write_text("\n".join(lines), encoding="utf-8", newline="\n")
     return table
 
@@ -265,7 +271,10 @@ def main(argv: list[str] | None = None) -> None:
     results = pd.read_csv(out / "results.csv")
     safety_path = BENCH_DIR / "safety" / "results.csv"
     safety = pd.read_csv(safety_path) if safety_path.exists() else None
-    table = write_category_report(results, load_scenarios(None, args.scenario_set), out, args.scenario_set, safety)
+    info_path = out / "run_info.json"
+    info = json.loads(info_path.read_text(encoding="utf-8")) if info_path.exists() else None
+    table = write_category_report(results, load_scenarios(None, args.scenario_set), out, args.scenario_set, safety,
+                                  info)
     with pd.option_context("display.width", 200, "display.max_columns", 20, "display.float_format", "{:.2f}".format):
         print(table.to_string(index=False))
     print(f"wrote {out / 'categories.csv'} and categories.md")

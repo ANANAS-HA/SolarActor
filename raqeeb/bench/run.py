@@ -17,7 +17,10 @@ competitors: they are left out of head-to-head comparisons.
 from __future__ import annotations
 
 import argparse
+import json
+import subprocess
 from collections.abc import Callable
+from datetime import datetime, timezone
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -31,6 +34,7 @@ from raqeeb.bench.harness import POLL_MIN, RunRecord, reference_energy, run_with
 from raqeeb.bench.safety_cases import SAFETY_CASES
 from raqeeb.bench.score import results_frame, summarize, summary_markdown
 from raqeeb.config import (
+    REPO_ROOT,
     BENCH_DIR,
     BENCH_LOCK,
     FINAL_SCENARIO_DIR,
@@ -104,6 +108,28 @@ def run_bench(scenarios: list[Scenario], agents: list[str], poll_min: int = POLL
     return records
 
 
+def source_commit() -> dict:
+    """The commit the bench ran from: {"commit": sha or "unknown", "dirty": bool} (git, from REPO_ROOT)."""
+    try:
+        sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=REPO_ROOT, capture_output=True, text=True,
+                             check=True, timeout=10).stdout.strip()
+        status = subprocess.run(["git", "status", "--porcelain", "--untracked-files=no", "--", ":!bench"],
+                                cwd=REPO_ROOT, capture_output=True, text=True, check=True, timeout=10).stdout
+        return {"commit": sha, "dirty": bool(status.strip())}
+    except (OSError, subprocess.SubprocessError):
+        return {"commit": "unknown", "dirty": False}
+
+
+def write_run_info(out: Path, set_name: str, n_scenarios: int, agents: list[str]) -> dict:
+    """<out>/run_info.json: the commit (and whether the tree was dirty, bench/ outputs excepted), the set,
+    the agents and the time the outputs were written; so a results folder names the code that produced it."""
+    info = source_commit() | {"set": set_name, "scenarios": n_scenarios, "agents": agents,
+                              "written": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "run_info.json").write_text(json.dumps(info, indent=2) + "\n", encoding="utf-8", newline="\n")
+    return info
+
+
 def write_outputs(records: list[RunRecord], out: Path = BENCH_DIR / "practice",
                   scenarios: list[Scenario] | None = None, set_name: str = "") -> tuple[pd.DataFrame, pd.DataFrame]:
     """`scenarios` (the set that was run) adds categories.csv / categories.md and the category section of
@@ -114,7 +140,8 @@ def write_outputs(records: list[RunRecord], out: Path = BENCH_DIR / "practice",
     out.mkdir(parents=True, exist_ok=True)
     results.to_csv(out / "results.csv", index=False, float_format="%.4f", lineterminator="\n")
     summary.to_csv(out / "summary.csv", index=False, float_format="%.4f", lineterminator="\n")
-    text = summary_markdown(results, summary) + category_section(results, scenarios, out, set_name)
+    info = write_run_info(out, set_name, len({r.scenario_id for r in records}), sorted({r.agent for r in records}))
+    text = summary_markdown(results, summary) + category_section(results, scenarios, out, set_name, info)
     (out / "summary.md").write_text(text, encoding="utf-8", newline="\n")
     audit_dir = out / "audit"
     for record in records:
@@ -125,14 +152,16 @@ def write_outputs(records: list[RunRecord], out: Path = BENCH_DIR / "practice",
     return results, summary
 
 
-def category_section(results: pd.DataFrame, scenarios: list[Scenario] | None, out: Path, set_name: str) -> str:
+def category_section(results: pd.DataFrame, scenarios: list[Scenario] | None, out: Path, set_name: str,
+                     info: dict | None = None) -> str:
     """The per-category tables appended to summary.md (also written to categories.csv / .md); "" without
-    scenarios. The safety table comes from bench/safety when that set has been run."""
+    scenarios. The safety table comes from bench/safety when that set has been run. `info` (run_info) puts
+    the commit the results came from under the tables."""
     if not scenarios:
         return ""
     safety_path = BENCH_DIR / "safety" / "results.csv"
     safety = pd.read_csv(safety_path) if safety_path.exists() and set_name != "safety" else None
-    write_category_report(results, scenarios, out, set_name, safety)
+    write_category_report(results, scenarios, out, set_name, safety, info)
     return "\n" + (out / "categories.md").read_text(encoding="utf-8").split("\n", 2)[2]
 
 

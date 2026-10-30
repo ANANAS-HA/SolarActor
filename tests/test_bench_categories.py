@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 
 import pandas as pd
@@ -159,6 +160,24 @@ def test_category_table_and_files(tmp_path):
     text = (tmp_path / "categories.md").read_text(encoding="utf-8")
     assert "## Results by category (unit)" in text and "| numbers decide | raqeeb_local | 2 | 2 of 2 (100%) |" in text
     assert "## Safety set" in text and "| raqeeb_rules | 1 | 1 of 1 | 1 of 1 | 1 of 1 | 0 | 1 | 0.0 |" in text
+
+
+def test_run_info_names_the_commit(tmp_path):
+    """A results folder records the commit it came from (run_info.json, and a line in categories.md)."""
+    import subprocess
+
+    from raqeeb.bench.run import write_run_info
+    from raqeeb.config import REPO_ROOT
+
+    info = write_run_info(tmp_path, "unit", 3, ["raqeeb_rules"])
+    written = json.loads((tmp_path / "run_info.json").read_text(encoding="utf-8"))
+    assert written == info and info["set"] == "unit" and info["scenarios"] == 3 and info["agents"] == ["raqeeb_rules"]
+    head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=REPO_ROOT, capture_output=True, text=True).stdout.strip()
+    assert info["commit"] == (head or "unknown") and isinstance(info["dirty"], bool)
+    assert info["written"].endswith("Z")
+    results = pd.DataFrame([row("n1", root_causes="TRANSFORMER_TRIP@T2", predicted="TRANSFORMER_TRIP@T2")])
+    cat.write_category_report(results, [NUMBERS], tmp_path, "unit", None, info)
+    assert f"Results from commit {info['commit']}" in (tmp_path / "categories.md").read_text(encoding="utf-8")
 
 
 def test_proposals_and_escalation_subjects_reach_results_rows():

@@ -1,0 +1,2 @@
+category,agent,scenarios,correct,correct_rate,close_type_named,false_actions,escalated_runs,escalations,proposals_accepted,proposals_rejected,llm_calls_per_incident,llm_calls_total,llm_time_s_total
+all scenarios,raqeeb_rules,20,20,1.0000,0,0,0,0,0,0,0.0000,0,0.0000

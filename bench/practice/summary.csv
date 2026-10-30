@@ -1,5 +1,2 @@
-agent,note,scenarios,precision,recall,all_causes_found_rate,false_action_rate,actions_per_incident,approvals_per_incident,wasted_washes,unsafe_actions,verified_recovery_rate,ttvr_median_min,mwh_recovered,mwh_lost,recovered_share_of_lost,cost_per_incident_usd,llm_calls_per_incident,local_call_share
-raqeeb,,20,1.0000,1.0000,1.0000,0.0000,3.3500,1.2000,0,0,1.0000,160.0000,363.2235,750.8956,0.4837,0.0000,0.0000,
-threshold,,20,0.1860,0.5581,0.3000,0.0543,6.4500,0.6000,1,0,0.0000,,190.0366,750.8956,0.2531,0.0000,0.0000,
-oracle,reference upper bound: reads the answer key,20,1.0000,1.0000,1.0000,0.0000,2.1500,0.6000,0,0,1.0000,107.5000,385.3143,750.8956,0.5131,0.0000,0.0000,
-empty,reference lower bound: does nothing,20,,0.0000,0.0000,,0.0000,0.0000,0,0,0.0000,,0.0000,750.8956,0.0000,0.0000,0.0000,
+agent,note,scenarios,precision,recall,all_causes_found_rate,false_action_rate,actions_per_incident,approvals_per_incident,wasted_washes,unsafe_actions,verified_recovery_rate,ttvr_median_min,mwh_recovered,mwh_lost,recovered_share_of_lost,cost_per_incident_usd,llm_calls_per_incident,local_call_share,unknown_scenarios,unknown_solved,unknown_escalated,llm_calls_total,llm_time_s_total,allowlist_held_rate,escalated_runs,retries_total
+raqeeb_rules,,20,1.0000,1.0000,1.0000,0.0000,3.3500,1.2000,0,0,1.0000,160.0000,363.2235,750.8956,0.4837,0.0000,0.0000,,0,0,0,0,0.0000,1.0000,0,0
