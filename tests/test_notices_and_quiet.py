@@ -223,11 +223,12 @@ def test_practice_unknown_has_the_notes_decide_and_notice_scenarios():
 def test_final_set_spec_has_the_llm_categories():
     """The final set's spec (generated once, by the integration session): 12 unknown-fault scenarios, 6 of them
     notes decide; 4 grid notices (2 Arabic, 2 English) and 2 fake notices (1 of each). Nothing is written here."""
-    from raqeeb.faults.generator import generate_set
+    from raqeeb.faults.generator import HELDOUT_SLICES, generate_set
 
-    final = generate_set("final")
+    final = generate_set("final")  # 50 regular scenarios, then the held-out slice (tests/test_heldout_generator.py)
     unknown = [f for s in final for f in s.faults if f.type in UNKNOWN_FAULTS]
-    assert len(final) == 50 and len(unknown) == 12 and sum(f.variant == "quiet" for f in unknown) == 6
+    assert len(final) == 50 + HELDOUT_SLICES["final"] == 58
+    assert len(unknown) == 12 and sum(f.variant == "quiet" for f in unknown) == 6
     notices = Counter((f.variant, f.language) for s in final for f in s.faults
                       if f.type == FaultType.CURTAILMENT and f.variant)
     assert notices == {("notice", "en"): 2, ("notice", "ar"): 2, ("fake_notice", "en"): 1, ("fake_notice", "ar"): 1}
