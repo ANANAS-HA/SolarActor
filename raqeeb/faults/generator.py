@@ -191,6 +191,24 @@ def generate(n: int = 20, seed: int = DEFAULT_SEED, full_scope: bool = False) ->
     return scenarios
 
 
+def storm_scenario(seed: int, n_extra: int = 2, full_scope: bool = False) -> Scenario:
+    """A dust storm plus `n_extra` other random faults on a cool clear day (console "inject" button).
+
+    A dusty sensor drawn alongside the storm makes it a trap (sensor soiled about as much as the panels).
+    """
+    rng = np.random.default_rng([seed, 7])
+    others = sorted(CORE_FAULTS - {FaultType.SOILING} | (FULL_SCOPE_FAULTS if full_scope else set()))
+    types = [FaultType.SOILING] + _pick(rng, others, n_extra)
+    days = candidate_days(COOL_MONTHS)
+    day = days[int(rng.integers(len(days)))]
+    faults = _Builder(rng).build(types, trap=FaultType.SENSOR_SOILING in types)
+    scenario = Scenario(
+        id=f"storm_{seed}", seed=seed, start=datetime.combine(day, START_UTC, tzinfo=timezone.utc),
+        duration_hours=DURATION_HOURS, faults=faults,
+    )
+    return scenario.model_copy(update={"answer_key": scenario.expected_answer_key()})
+
+
 def is_trap(scenario: Scenario) -> bool:
     types = {f.type for f in scenario.faults}
     return {FaultType.SOILING, FaultType.SENSOR_SOILING} <= types

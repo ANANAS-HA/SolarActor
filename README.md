@@ -35,4 +35,7 @@ copy .env.example .env   # then fill in the values
 uv run python scripts/download_weather.py
 uv run pytest
 uv run python -m raqeeb.llm.smoke   # needs the local LLM server running
+uv run streamlit run raqeeb/ui/app.py   # operator console
 ```
+
+The console runs real scenarios through the twin in memory. Its agent timeline, approvals, benchmark table and shift report are **sample** content, labelled as such, until the agent and the benchmark are integrated.
