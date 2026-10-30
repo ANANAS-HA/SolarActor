@@ -325,6 +325,10 @@ def proposal_decisions(agent: Agent) -> list[tuple[str, str]]:
     out = []
     for entry in timeline:
         summary = getattr(entry, "summary", "")
+        details = getattr(entry, "details", None) or {}
+        if details.get("decision") in PROPOSAL_PREFIXES and details.get("label") and "hypothesis" in details:
+            out.append((details["decision"], details["label"]))  # structured consult log line
+            continue
         for decision, prefix in PROPOSAL_PREFIXES.items():
             if summary.startswith(prefix):
                 out.append((decision, summary[len(prefix):].split(" ")[0].rstrip(":")))

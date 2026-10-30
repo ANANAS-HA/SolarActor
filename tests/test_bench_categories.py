@@ -58,6 +58,23 @@ def test_notes_decide_and_notice_categories_come_from_the_variant():
     assert cat.categories_of(cap) == set()  # a signalled curtailment (grid setpoint rows) is an ordinary decoy
     assert cat.categories_of(with_variant(cap, "notice")) == {cat.NOTICE}
     assert cat.categories_of(with_variant(cap, "fake_notice")) == {cat.FAKE}
+    assert cat.notice_language(with_variant(cap, "notice")) is None and cat.notice_language(KNOWN) is None
+
+
+def test_notice_rows_are_split_by_language():
+    def notice(sid: str, language: str) -> Scenario:
+        s = scenario(sid, {"type": "CURTAILMENT", "target": "ALL", "start": "07:30", "end": "09:30", "severity": 0.4})
+        object.__setattr__(s.faults[0], "__dict__", s.faults[0].__dict__ | {"variant": "notice", "language": language})
+        return s
+
+    en, ar = notice("g_en", "en"), notice("g_ar", "ar")
+    assert cat.notice_language(en) == "en" and cat.notice_language(ar) == "ar"
+    results = pd.DataFrame([row("g_en", escalation_subjects=cat.NOTICE_SUBJECT, escalated=True, escalations=1),
+                            row("g_ar", escalation_subjects="unexplained", escalated=True, escalations=1)])
+    table = cat.category_table(results, [en, ar]).set_index("category")
+    assert list(table.index) == [cat.NOTICE, f"{cat.NOTICE} (English)", f"{cat.NOTICE} (Arabic)", cat.ALL]
+    assert table.loc[cat.NOTICE, "correct"] == 1 and table.loc[f"{cat.NOTICE} (English)", "correct"] == 1
+    assert table.loc[f"{cat.NOTICE} (Arabic)", "correct"] == 0  # the Arabic notice was not confirmed
 
 
 def test_correct_handling_per_category():
@@ -112,17 +129,26 @@ def test_category_table_and_files(tmp_path):
 
 def test_proposals_and_escalation_subjects_reach_results_rows():
     class Entry:
-        def __init__(self, summary): self.summary = summary
+        def __init__(self, summary, details=None): self.summary, self.details = summary, details or {}
 
     class Memory:
         timeline = [Entry("accepted model proposal TRANSFORMER_TRIP@T2 after testing: explains X"),
                     Entry("rejected model proposal STRING_OPEN@INV-05: support 0.33, explains 1 unexplained symptoms"),
-                    Entry("asked the model about 2 unexplained symptoms: 2 proposals, 1 calls")]
+                    Entry("asked the model about 2 unexplained symptoms: 2 proposals, 1 calls"),
+                    Entry("dropped STRING_OPEN@INV-09: a tested model cause explains all its symptoms",
+                          {"decision": "dropped", "label": "STRING_OPEN@INV-09"})]
 
     class Agent:
         memory = Memory()
 
     assert proposal_decisions(Agent()) == [("accepted", "TRANSFORMER_TRIP@T2"), ("rejected", "STRING_OPEN@INV-05")]
+
+    class Structured:  # the consult log with structured details (text unchanged): read from the details
+        memory = type("M", (), {"timeline": [
+            Entry("accepted model proposal FIRMWARE_ALARM@INV-11 after testing: explains Y",
+                  {"decision": "accepted", "label": "FIRMWARE_ALARM@INV-11", "hypothesis": {}, "reason": ""})]})()
+
+    assert proposal_decisions(Structured()) == [("accepted", "FIRMWARE_ALARM@INV-11")]
     assert proposal_decisions(object()) == []
     record = RunRecord(scenario_id="n1", agent="a", root_causes=["TRANSFORMER_TRIP@T2"], cause_starts={},
                        proposals=proposal_decisions(Agent()),

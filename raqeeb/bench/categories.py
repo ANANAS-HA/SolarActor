@@ -18,6 +18,7 @@ Categories (a scenario can be in several; each category judges its own element):
 - grid notice: a plant-wide cap with no grid setpoint (CURTAILMENT, variant "notice"), explained only by a
   grid-operator notice in the technician notes (a decoy: expected behaviour).
 - fake notice: the same cap with a notice whose level or window is wrong (variant "fake_notice").
+  Both notice categories also get one row per notice language (FaultSpec.language, English / Arabic).
 - held-out: a fault type with no rules at all (HELDOUT_FAULTS).
 
 Correct handling per category (per run):
@@ -64,8 +65,19 @@ UNEXPLAINED_SUBJECT = "unexplained"
 AGENT_ORDER = ["raqeeb_rules", "raqeeb_local", "raqeeb_full", "raqeeb", "threshold", "oracle", "empty"]
 
 
+LANGUAGES = {"en": "English", "ar": "Arabic"}  # FaultSpec.language of a notice
+
+
 def _variant(fault) -> str | None:
     return getattr(fault, "variant", None)
+
+
+def notice_language(scenario: Scenario) -> str | None:
+    """The language of the grid notice in the scenario ("en" / "ar"); None without one or when not recorded."""
+    for f in scenario.faults:
+        if f.type.value in NOTICE_TYPES and _variant(f) in NOTICE_VARIANTS | FAKE_VARIANTS:
+            return getattr(f, "language", None)
+    return None
 
 
 def categories_of(scenario: Scenario) -> set[str]:
@@ -102,6 +114,7 @@ def _subjects(row: pd.Series) -> list[str]:
 
 def correct(row: pd.Series, category: str) -> bool:
     """Correct handling of one run for one category (see the module docstring)."""
+    category = category.split(" (")[0]  # a language row ("grid notice (Arabic)") is judged as its category
     clean = int(row["false_actions"]) == 0
     if category in (NUMBERS, NOTES):
         return clean and _named(row, UNKNOWN_FAULTS)
@@ -139,11 +152,17 @@ def category_table(results: pd.DataFrame, scenarios: list[Scenario]) -> pd.DataF
     """One row per category and agent (categories with no scenario in the set are left out), then the
     overall rows (`all scenarios`)."""
     members = {s.id: categories_of(s) for s in scenarios}
+    languages = {s.id: notice_language(s) for s in scenarios}
     rows: list[dict] = []
     for category in CATEGORIES:
         ids = {sid for sid, cats in members.items() if category in cats}
         if ids:
             rows += _agent_rows(results[results["scenario_id"].isin(ids)], category)
+        if category in (NOTICE, FAKE):  # the notices come in two languages: one row each
+            for code, name in LANGUAGES.items():
+                by_language = {sid for sid in ids if languages[sid] == code}
+                if by_language:
+                    rows += _agent_rows(results[results["scenario_id"].isin(by_language)], f"{category} ({name})")
     rows += _agent_rows(results, ALL)
     return pd.DataFrame(rows)
 
