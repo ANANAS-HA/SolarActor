@@ -51,6 +51,12 @@ Code computes every number; the LLM proposes and prunes hypotheses, orders plans
   sensor GHI / reference GHI). The injector's LOW_PR family and the tools both call it. Do not add another (erbs gave
   symptom alarms on 43/52 healthy days).
 
+## Agent (Phase 2)
+- `raqeeb.agent.RaqeebAgent` (contracts.Agent): one LangGraph pass per poll, triage -> investigate -> rank -> plan ->
+  safety -> execute -> verify -> report; verify loops back to plan once if it reopens a cause. State in `agent/state.py`.
+- Causes come from the causal graph in `agent/rank.py` (`LINKS`); fix ladders and timing in `agent/plan.py`.
+- Alarm `message` text is never read: only code, device and time, checked against the configs.
+
 ## Rules
 - Agent tools may read only the telemetry database: never `scenarios/` files, `Scenario`, the twin's `truth` log
   or its `state`. `tests/test_agent_isolation.py` enforces this for `agent/ tools/ llm/ baseline/`;

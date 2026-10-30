@@ -145,11 +145,13 @@ def plant_performance(store: TelemetryStore, start: datetime | None = None, end:
         return ToolResult(tool="plant_performance", verdict=VERDICT_INCONCLUSIVE, start=start, end=end,
                           values=values, thresholds=thresholds, evidence="no production steps in the window")
     underperforming = low or onset is not None
-    evidence = (f"meter {vs_ref['ratio']:.0%} of expected from the reference "
-                f"({vs_ref['ratio_unclipped']:.0%} outside clipping), "
+    # A short window around noon in summer can be clipped at every step (ratio_unclipped None)
+    clipping = (f" ({vs_ref['ratio_unclipped']:.0%} outside clipping)" if vs_ref["ratio_unclipped"] is not None
+                else " (every step clipped)")
+    evidence = (f"meter {vs_ref['ratio']:.0%} of expected from the reference{clipping}, "
                 f"{vs_sensor['ratio']:.0%} of expected from the site sensor"
                 if vs_sensor["ratio"] is not None else
-                f"meter {vs_ref['ratio']:.0%} of expected from the reference; no sensor data")
+                f"meter {vs_ref['ratio']:.0%} of expected from the reference{clipping}; no sensor data")
     if underperforming:
         evidence += f"; shortfall {vs_ref['shortfall_kwh'] / 1000:.1f} MWh"
         if onset is not None:

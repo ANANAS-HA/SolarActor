@@ -1,0 +1,120 @@
+"""Report: the shift report (English and Arabic) from the agent's own records.
+
+Milestone 1 builds it from templates in code; no language model writes it yet. Times are shown in
+Asia/Riyadh. Only the agent's records go in: no alarm or log text is copied into the report.
+"""
+
+from __future__ import annotations
+
+from zoneinfo import ZoneInfo
+
+from raqeeb.agent.state import CauseStatus, Memory, PollState
+from raqeeb.contracts import DISPLAY_TZ, ActionStatus, FaultType, IncidentReport
+
+_TZ = ZoneInfo(DISPLAY_TZ)
+
+FAULT_EN = {
+    FaultType.SOILING: "panel soiling after a dust storm",
+    FaultType.SENSOR_SOILING: "dusty irradiance sensor",
+    FaultType.INVERTER_DERATE: "inverter thermal derating",
+    FaultType.COMMS_DROPOUT: "communications loss",
+    FaultType.CURTAILMENT: "grid curtailment (expected behaviour)",
+    FaultType.TRACKER_STUCK: "stuck tracker",
+    FaultType.STRING_OPEN: "open string",
+    FaultType.UNAUTHORIZED_CMD: "unauthorised control command",
+}
+FAULT_AR = {
+    FaultType.SOILING: "اتساخ الألواح بالغبار بعد عاصفة رملية",
+    FaultType.SENSOR_SOILING: "اتساخ حساس الإشعاع الشمسي",
+    FaultType.INVERTER_DERATE: "خفض قدرة العاكس بسبب ارتفاع الحرارة",
+    FaultType.COMMS_DROPOUT: "انقطاع الاتصال",
+    FaultType.CURTAILMENT: "تقييد الإنتاج من مشغل الشبكة (سلوك متوقع)",
+    FaultType.TRACKER_STUCK: "توقف نظام التتبع",
+    FaultType.STRING_OPEN: "انقطاع سلسلة ألواح",
+    FaultType.UNAUTHORIZED_CMD: "أمر تحكم غير مصرح به",
+}
+ACTION_AR = {
+    "reset_comms_gateway": "إعادة تشغيل بوابة الاتصال",
+    "flag_sensor_use_reference": "تعليم الحساس كمشكوك فيه واعتماد بيانات المرجع",
+    "create_cleaning_work_order": "أمر عمل لتنظيف الألواح",
+    "resume_tracking": "استئناف التتبع",
+    "dispatch_technician": "إرسال فني",
+    "set_power_limit": "تحديد قدرة العاكس",
+    "isolate_device": "عزل الجهاز",
+}
+STATUS_EN = {
+    CauseStatus.OPEN: "diagnosed", CauseStatus.WAITING: "fix waiting", CauseStatus.ACTING: "fix in progress",
+    CauseStatus.RESOLVED: "resolved", CauseStatus.REOPENED: "fix did not work", CauseStatus.BLOCKED: "left to operators",
+    CauseStatus.EXPECTED: "expected",
+}
+STATUS_AR = {
+    CauseStatus.OPEN: "تم التشخيص", CauseStatus.WAITING: "الإصلاح بالانتظار", CauseStatus.ACTING: "الإصلاح جارٍ",
+    CauseStatus.RESOLVED: "تمت المعالجة", CauseStatus.REOPENED: "الإصلاح لم ينجح", CauseStatus.BLOCKED: "محال إلى المشغلين",
+    CauseStatus.EXPECTED: "متوقع",
+}
+
+
+def _local(ts) -> str:
+    return f"{ts.astimezone(_TZ):%H:%M}"
+
+
+def build_report(memory: Memory, now) -> IncidentReport:
+    causes = [c for c in memory.causes.values() if c.status != CauseStatus.EXPECTED]
+    expected = [c for c in memory.causes.values() if c.status == CauseStatus.EXPECTED]
+    pendings = list(memory.pending.values())
+    applied = [p for p in pendings if p.status == ActionStatus.APPLIED]
+    verified = [p for p in applied if p.verification is not None and p.verification.recovered]
+    diagnosis = memory.diagnosis
+
+    en = [f"Incident {memory.view.id}, {_local(memory.view.start)} to {_local(now)} Riyadh time."]
+    ar = [f"الحادثة {memory.view.id}، من {_local(memory.view.start)} إلى {_local(now)} بتوقيت الرياض."]
+    if causes:
+        en.append("Root causes: " + "; ".join(
+            f"{FAULT_EN[c.hypothesis.fault_type]} on {c.hypothesis.targets[0]} ({STATUS_EN[c.status]})" for c in causes) + ".")
+        ar.append("الأسباب الجذرية: " + "؛ ".join(
+            f"{FAULT_AR[c.hypothesis.fault_type]} في {c.hypothesis.targets[0]} ({STATUS_AR[c.status]})" for c in causes) + ".")
+    else:
+        en.append("No root cause found.")
+        ar.append("لم يتم العثور على سبب جذري.")
+    if expected:
+        en.append("Expected behaviour, no action: " + "; ".join(FAULT_EN[c.hypothesis.fault_type] for c in expected) + ".")
+        ar.append("سلوك متوقع دون إجراء: " + "؛ ".join(FAULT_AR[c.hypothesis.fault_type] for c in expected) + ".")
+    en.append(f"Actions: {len(pendings)} requested, {len(applied)} applied, {len(verified)} verified as recovered.")
+    ar.append(f"الإجراءات: {len(pendings)} مطلوبة، {len(applied)} منفذة، {len(verified)} تم التحقق من نجاحها.")
+    for p in pendings:
+        v = p.verification
+        state_en = "awaiting verification" if v is None else ("recovered" if v.recovered else "not recovered")
+        state_ar = "بانتظار التحقق" if v is None else ("تم التعافي" if v.recovered else "لم يتم التعافي")
+        if p.status not in (None, ActionStatus.APPLIED):
+            state_en = state_ar = p.status.value.lower()
+        en.append(f"- {p.request.action.value} on {p.request.target}: {state_en}" + (f" ({v.note})" if v else ""))
+        ar.append(f"- {ACTION_AR[p.request.action.value]} في {p.request.target}: {state_ar}")
+    if diagnosis is not None and diagnosis.unexplained:
+        en.append(f"Unexplained symptoms for the operators: {', '.join(diagnosis.unexplained)}.")
+        ar.append(f"أعراض غير مفسرة للمشغلين: {', '.join(diagnosis.unexplained)}.")
+    en.append("Draft written by rules in code (no language model). Plant data is synthetic.")
+    ar.append("مسودة مكتوبة بقواعد برمجية (دون نموذج لغوي). بيانات المحطة اصطناعية.")
+    return IncidentReport(
+        summary_en="\n".join(en), summary_ar="\n".join(ar),
+        causes=[c.hypothesis for c in causes],
+        actions=[p.request for p in pendings],
+        verifications=[p.verification for p in pendings if p.verification is not None],
+        cost_usd=0.0, llm_calls=0,
+    )
+
+
+def is_done(memory: Memory) -> bool:
+    """Every root cause is resolved or handed to operators, and no request is still in flight."""
+    settled = all(c.status in (CauseStatus.RESOLVED, CauseStatus.BLOCKED, CauseStatus.EXPECTED)
+                  for c in memory.causes.values())
+    in_flight = any(p.status is None or (p.status == ActionStatus.APPLIED and p.verification is None)
+                    for p in memory.pending.values())
+    return bool(memory.causes) and settled and not in_flight
+
+
+def report(state: PollState) -> PollState:
+    memory, now = state["memory"], state["now"]
+    if state.get("final") or (is_done(memory) and memory.report is None):
+        memory.report = build_report(memory, now)
+        memory.log(now, "report", "shift report written")
+    return {}

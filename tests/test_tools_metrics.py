@@ -1,8 +1,11 @@
+from datetime import datetime, timedelta, timezone
+
 import pandas as pd
 import pytest
 
 from raqeeb.tools import metrics
-from tests.conftest import call
+from tests import tool_scenarios
+from tests.conftest import call, checked
 from tests.tool_scenarios import at
 
 
@@ -30,6 +33,15 @@ def test_healthy_plant_performance(run):
     assert abs(perf.values["vs_reference"]["ratio"] - 1) < 0.06
     assert abs(perf.values["vs_sensor"]["ratio"] - 1) < 0.06
     assert (perf.start, perf.end) == (s.start, s.end)
+
+
+def test_plant_performance_on_a_fully_clipped_window():
+    """Regression: a short window around a summer noon is clipped at every step (no unclipped ratio)."""
+    store, s, _ = tool_scenarios.build("healthy", day=datetime(2025, 5, 15, tzinfo=timezone.utc))
+    noon = at(s, "08:30")
+    perf = checked(metrics.plant_performance(store, noon, noon + timedelta(minutes=30)), s)
+    assert perf.values["vs_reference"]["ratio_unclipped"] is None
+    assert "every step clipped" in perf.evidence and perf.verdict == "ok"
 
 
 def test_dust_storm_soiling_shows_against_reference_and_sensor(run):

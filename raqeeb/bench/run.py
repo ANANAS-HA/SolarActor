@@ -18,6 +18,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from raqeeb.agent import RaqeebAgent
 from raqeeb.baseline.threshold import ThresholdBaseline
 from raqeeb.bench.fakes import EmptyAgent, OracleAgent
 from raqeeb.bench.harness import POLL_MIN, RunRecord, reference_energy, run_scenario
@@ -34,11 +35,12 @@ class AgentEntry:
 
 
 AGENTS: dict[str, AgentEntry] = {
+    "raqeeb": AgentEntry(lambda s: RaqeebAgent()),  # gets only agent_view() and telemetry, like the baseline
     "threshold": AgentEntry(lambda s: ThresholdBaseline()),
     "oracle": AgentEntry(lambda s: OracleAgent(s), "reference upper bound: reads the answer key"),
     "empty": AgentEntry(lambda s: EmptyAgent(), "reference lower bound: does nothing"),
 }
-DEFAULT_AGENTS = ["threshold", "oracle", "empty"]
+DEFAULT_AGENTS = ["raqeeb", "threshold", "oracle", "empty"]
 
 
 def load_scenarios(ids: list[str] | None = None, folder: Path = SCENARIO_DIR) -> list[Scenario]:

@@ -257,4 +257,4 @@ def test_bench_run_writes_results(tmp_path, monkeypatch, capsys):
     assert "## Where threshold gets it wrong" in text and "missed SENSOR_SOILING@WS-01, SOILING@ALL" in text
     assert "wrote" in capsys.readouterr().out
     with pytest.raises(SystemExit):
-        bench_run.main(["--agents", "raqeeb"])
+        bench_run.main(["--agents", "no_such_agent"])
