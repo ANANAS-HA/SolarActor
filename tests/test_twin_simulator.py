@@ -206,3 +206,18 @@ def test_truth_records_exact_values(twin):
     batch = twin.advance(10)
     assert [t.plant_ac_kw for t in twin.truth] == meter_kw(batch)
     assert pd.Timestamp(twin.truth[0].ts) == pd.Timestamp(START)
+
+
+def test_practice2_runs_carry_the_reference_error(real_plant):
+    """Every practice2 run sees true irradiance = reference x (1 + bias + AR(1) error), capped at max_abs:
+    a per-run offset that differs between runs and a slow wander within each run."""
+    from raqeeb.config import PRACTICE2_SCENARIO_DIR
+    from raqeeb.faults.generator import load_scenarios
+
+    cfg = real_plant.reference_error
+    errors = [Twin(s.start, s.end, plant=real_plant, seed=s.seed).irradiance_factor - 1
+              for s in load_scenarios(PRACTICE2_SCENARIO_DIR, "pr2")]
+    run_means = np.array([e.mean() for e in errors])
+    assert run_means.std() > cfg.bias_sigma / 2  # the offset differs between runs
+    assert np.mean([e.std() for e in errors]) > cfg.sigma / 2  # and wanders within a run
+    assert max(e.abs().max() for e in errors) <= cfg.max_abs + 1e-9

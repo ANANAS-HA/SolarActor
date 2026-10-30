@@ -25,3 +25,4 @@ data/weather/*_raw.csv
 
 # generated plots
 data/plots/
+bench/.running

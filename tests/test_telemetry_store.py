@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 import pandas as pd
 import pytest
 
-from raqeeb.contracts import TABLE_DDL, Command, InverterStatus
+from raqeeb.contracts import TABLE_DDL, TABLE_MODELS, Command, InverterStatus
 from raqeeb.telemetry.store import TelemetryStore
 from raqeeb.twin.controls import flag_sensor
 from raqeeb.twin.simulator import Twin
@@ -112,3 +112,30 @@ def test_span_and_file_store(tmp_path, batch):
     with TelemetryStore(path) as s:
         assert s.span() == (START, END - timedelta(minutes=25))
         assert len(s.commands()) == 2
+
+
+def test_clock_clips_every_read_and_a_tool_sees_nothing_after_it():
+    """A store holding a whole day: with the clock set to t, no table, helper or tool returns a row after t."""
+    from datetime import datetime, timedelta, timezone
+
+    from raqeeb.contracts import FaultSpec, Scenario
+    from raqeeb.faults.injector import FaultInjector
+    from raqeeb.tools import AGENT_TOOLS
+
+    s = Scenario(id="fx_clock", seed=5, start=datetime(2025, 1, 15, 3, tzinfo=timezone.utc), duration_hours=12,
+                 faults=[FaultSpec(type="INVERTER_DERATE", target="INV-07", start="09:00", severity=0.4)])
+    store = TelemetryStore()
+    store.write_batch(FaultInjector.for_scenario(s).run_to_end())
+    t = s.start + timedelta(hours=4)
+    store.set_clock(t)
+    for table in TABLE_MODELS:
+        df = store.read(table)
+        assert df.empty or df.index.max() <= t, table
+    assert store.span()[1] <= t and store.inverter_wide("ac_kw").index.max() <= t
+    for name, tool in AGENT_TOOLS.items():
+        result = tool(store, s.start, None)
+        assert result.end <= t + timedelta(minutes=5), name  # windows end at the clock, not the day's end
+    flat = AGENT_TOOLS["flat_caps"](store, s.start, None)
+    assert "INV-07" not in flat.devices  # the derate starts at 09:00 UTC, after t: not visible yet
+    store.set_clock(None)
+    assert store.read("meter").index.max() > t

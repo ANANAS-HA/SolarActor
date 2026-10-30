@@ -76,9 +76,9 @@ def test_hypothesis(memory: Memory, h: Hypothesis, unexplained: set[str]) -> tup
         return [], "decoys and multi-target proposals are left to the rules"
     target = h.targets[0]
     active = [memory.symptoms[sid] for sid in sorted(memory.active)]
-    if h.fault_type in CAUSAL_GRAPH:
-        match = next((c for c in candidates(active, memory.plant) if (c.fault, c.target) == (h.fault_type, target)),
-                     None)
+    if h.fault_type in CAUSAL_GRAPH and h.fault_type not in memory.disabled:
+        match = next((c for c in candidates(active, memory.plant, memory.disabled)
+                      if (c.fault, c.target) == (h.fault_type, target)), None)
         if match is None:
             return [], "the causal graph finds no key symptom for it, or a symptom rules it out"
         explains = sorted({s.id for s in match.explains} & unexplained)
@@ -87,11 +87,21 @@ def test_hypothesis(memory: Memory, h: Hypothesis, unexplained: set[str]) -> tup
         return explains, ""
     devices = set(_devices(memory, target))
     plant = memory.plant
-    if target == PLANT_TARGET or not devices <= {*plant.inverters.ids, plant.weather_station_id}:
-        return [], f"{target} is not a device or a site area"
     cited = set(h.explains)
     if not cited or not cited <= set(memory.active):
         return [], "it cites symptoms that are not active"
+    if target in (PLANT_TARGET, plant.weather_station_id):
+        # A plant-wide or weather-station cause must explain unexplained symptoms on that target, and
+        # leave no unexplained weak inverter behind (that would need a device cause of its own)
+        here = (PLANT_TARGET, plant.plant_controller_id) if target == PLANT_TARGET else (target,)
+        explains = sorted(sid for sid in unexplained if memory.symptoms[sid].device_id in here)
+        weak = [sid for sid in unexplained if memory.symptoms[sid].kind in WEAK_KINDS
+                and memory.symptoms[sid].device_id in plant.inverters.ids]
+        if not explains or (target == plant.weather_station_id and weak):
+            return [], f"footprint does not match: {len(explains)} unexplained symptoms on {target}"
+        return explains, ""
+    if not devices <= {*plant.inverters.ids, plant.weather_station_id}:
+        return [], f"{target} is not a device or a site area"
     weak = {memory.symptoms[sid].device_id: sid for sid in unexplained
             if memory.symptoms[sid].kind in WEAK_KINDS and memory.symptoms[sid].device_id in plant.inverters.ids}
     inside = {d for d in weak if d in devices}
@@ -125,7 +135,7 @@ def _rebuild_diagnosis(memory: Memory, unexplained: set[str]) -> None:
 def consult(state: PollState) -> PollState:
     memory, now = state["memory"], state["now"]
     router = memory.router
-    if router is None or memory.diagnosis is None or state.get("final"):
+    if router is None or memory.diagnosis is None:
         return {}
     unexplained = set(memory.diagnosis.unexplained)
     changed = False
@@ -146,7 +156,8 @@ def consult(state: PollState) -> PollState:
     notes = notes_until(memory, now)
     # The same question again only if site staff have written something new since
     question = (frozenset(stuck) or frozenset(h.labels[0] for h in tie)) | {f"notes:{len(notes)}"}
-    if len(question) > 1 and question not in memory.consulted and memory.hypothesis_calls < MAX_HYPOTHESIS_CALLS:
+    asking = not state.get("final")  # the last poll re-tests what was accepted but asks nothing new
+    if asking and len(question) > 1 and question not in memory.consulted and memory.hypothesis_calls < MAX_HYPOTHESIS_CALLS:
         memory.consulted.add(question)
         memory.hypothesis_calls += 1
         ranked = sorted([*memory.hypotheses, *memory.alternatives], key=lambda h: h.score, reverse=True)

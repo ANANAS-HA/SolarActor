@@ -93,6 +93,8 @@ def test_a_tested_proposal_is_accepted_and_untested_or_wrong_ones_are_not():
     rejected = [e.summary for e in agent.memory.timeline if e.summary.startswith("rejected model proposal")]
     assert len(rejected) >= 3  # the wrong area, the open string and soiling all fail their tests
     assert "proposed by a language model and tested on tool data" in record.report.summary_en
+    trip_devices = {"INV-05", "INV-06", "INV-07", "INV-08", "PPC-01"}
+    assert not any(agent.memory.symptoms[sid].device_id in trip_devices for sid in agent.memory.diagnosis.unexplained)
 
 
 def test_an_accepted_unknown_device_fault_gets_only_a_ticket_and_is_verified():
@@ -164,3 +166,74 @@ def test_injected_log_text_never_reaches_a_prompt_and_notes_stay_inside_data_blo
     assert any(n[:30] in p for p in prompts for n in notes)  # the notes did reach the model, as data
     assert all(c.role == LlmRole.LOCAL for c in record.llm_calls)
     assert FaultType.PROMPT_INJECTION.value not in record.predicted
+
+
+# -- fully local: no API key, and a local server that is down -----------------------------------------
+
+
+def _local_only_settings():
+    return load_settings().model_copy(update={"local_llm_base_url": "http://fake", "local_llm_model": "fake",
+                                              "anthropic_api_key": "", "api_llm_model": ""})
+
+
+def test_without_an_api_key_the_router_never_tries_the_api():
+    asked: list[str] = []
+
+    def completion(**kw):
+        asked.append(kw["model"])
+
+        class R:
+            usage = None
+            choices = [type("C", (), {"message": type("M", (), {"content": "not json"})()})()]  # invalid every time
+        return R()
+
+    router = Router(Gateway(_local_only_settings(), completion=completion))  # api=True asked, but no key in .env
+    assert router.api is False
+    s = scenario(TRIP)  # many unexplained symptoms: the hard case that would go to the API
+    record, agent, _ = run(s, router)
+    assert asked and all(model.startswith("openai/") for model in asked)  # local model only
+    assert all(c.role == LlmRole.LOCAL for c in record.llm_calls)
+    text = (record.report.summary_en + record.report.summary_ar).lower()
+    assert "api" not in text and "(api)" not in text
+
+
+def test_an_unreachable_local_server_falls_back_to_rules_and_escalates():
+    import litellm
+
+    def completion(**kw):
+        raise litellm.exceptions.APIConnectionError(message="down", llm_provider="openai", model=kw["model"])
+
+    router = Router(Gateway(_local_only_settings(), completion=completion))
+    s = scenario(TRIP, {"type": "STRING_OPEN", "target": "INV-14", "start": "05:00", "severity": 0.25})
+    record, agent, _ = run(s, router)
+    rules, _, _ = run(s, None)
+    assert record.predicted == rules.predicted == ["STRING_OPEN@INV-14"]  # the rule result stands
+    assert [a.request.action for a in record.actions] == [a.request.action for a in rules.actions]
+    assert score_run(record)["unknown_escalated"] == 1  # the unexplained symptoms go to a human
+    assert record.llm_calls and not any(c.ok for c in record.llm_calls)
+    assert all(c.role == LlmRole.LOCAL for c in record.llm_calls)
+    assert record.report.summary_en.startswith(rules.report.summary_en.split("\n")[0])  # the template report
+
+
+def test_live_llm_tests_are_skipped_while_a_bench_run_holds_the_lock(pytester=None):
+    from raqeeb.config import BENCH_LOCK
+    from tests.conftest import pytest_collection_modifyitems
+
+    class Item:
+        def __init__(self, live):
+            self.keywords = {"llm": True} if live else {}
+            self.markers = []
+
+        def add_marker(self, marker):
+            self.markers.append(marker)
+
+    live, other = Item(True), Item(False)
+    existed = BENCH_LOCK.exists()
+    BENCH_LOCK.parent.mkdir(parents=True, exist_ok=True)
+    BENCH_LOCK.touch()
+    try:
+        pytest_collection_modifyitems(None, [live, other])
+    finally:
+        if not existed:
+            BENCH_LOCK.unlink()
+    assert live.markers and not other.markers

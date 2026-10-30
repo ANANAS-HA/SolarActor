@@ -193,3 +193,23 @@ def test_injections_only_on_request():
     assert not any(has_injection(s) for s in generate(n=30, seed=11, full_scope=True))
     assert all(FaultType.PROMPT_INJECTION not in {f.type for f in storm_scenario(k, full_scope=True).faults}
                for k in range(12))
+
+
+def test_committed_practice_unknown_set_is_frozen():
+    """scenarios/practice_unknown/: 10 scenarios, one unknown fault each (all three types) plus 0-2 known
+    faults. The router and the unknown-fault handling are tuned on it."""
+    from raqeeb.config import PRACTICE_UNKNOWN_SCENARIO_DIR
+    from raqeeb.contracts import UNKNOWN_FAULTS
+    from raqeeb.faults.generator import PRACTICE_UNKNOWN
+
+    scenarios = load_scenarios(PRACTICE_UNKNOWN_SCENARIO_DIR, PRACTICE_UNKNOWN["prefix"])
+    assert scenarios == generate_set("practice_unknown")
+    assert len(scenarios) == 10 and all(s.id.startswith("pru_") for s in scenarios)
+    others = load_scenarios(PRACTICE2_SCENARIO_DIR, "pr2") + load_scenarios(TEST_SCENARIO_DIR, TEST["prefix"])
+    assert not {s.seed for s in scenarios} & {s.seed for s in others}
+    unknown = Counter(f.type for s in scenarios for f in s.faults if f.type in UNKNOWN_FAULTS)
+    assert set(unknown) == UNKNOWN_FAULTS and sum(unknown.values()) == 10
+    for s in scenarios:
+        known = [f for f in s.faults if f.type not in UNKNOWN_FAULTS]
+        assert len(known) <= 2 and not any(f.type in DECOY_FAULTS for f in known)
+        assert s.answer_key == s.expected_answer_key()

@@ -1,0 +1,13 @@
+# Ablation set: the fault type whose rules are switched off for each scenario (bench only).
+abl_0001: SOILING
+abl_0002: SOILING
+abl_0003: INVERTER_DERATE
+abl_0004: INVERTER_DERATE
+abl_0005: COMMS_DROPOUT
+abl_0006: COMMS_DROPOUT
+abl_0007: TRACKER_STUCK
+abl_0008: TRACKER_STUCK
+abl_0009: STRING_OPEN
+abl_0010: STRING_OPEN
+abl_0011: UNAUTHORIZED_CMD
+abl_0012: UNAUTHORIZED_CMD

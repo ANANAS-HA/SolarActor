@@ -22,7 +22,8 @@ Guards keep the rules from forcing a known cause onto symptoms it does not fit (
 unexplained and are escalated instead): a `required` link must be present (soiling within one
 shift comes from a dust storm); a contradicting symptom on the target rules a cause out (a unit
 held at a flat cap is a controller limit, not lost strings); a single-device cause cannot take a
-loss that started on several units at the same moment (common onset: something they share).
+loss that started on several units at the same moment (common onset: something they share); and a
+unit that raises an alarm code no known cause covers gets no single-unit guess.
 
 Each selected cause also gets its own support (cause_support): the weight it explains over that
 weight plus its predicted-but-absent links. The safety gate uses it for irreversible actions.
@@ -112,7 +113,7 @@ LINKS: list[Link] = [
     _alarm(F.TRACKER_STUCK, {"TRACKER_FAULT"}, "device", key=True),
     _alarm(F.TRACKER_STUCK, PERFORMANCE_CODES, "device"),  # off-angle panels collect less: the LOW_PR family
     Link(F.STRING_OPEN, K.DEVICE_UNDERPERFORMANCE, "device", key=True, predicted=True,
-         when=lambda s: not s.evidence.get("common_onset")
+         when=lambda s: not s.evidence.get("common_onset") and not s.evidence.get("onset_hold")
          and (s.evidence.get("ratio_to_peers") or 1.0) >= STRING_MIN_PEER_RATIO),
     _alarm(F.STRING_OPEN, PERFORMANCE_CODES, "device"),
     Link(F.UNAUTHORIZED_CMD, K.UNEXPECTED_COMMAND, "device", key=True, predicted=True),
@@ -138,6 +139,7 @@ def build_graph(links: list[Link] = LINKS) -> nx.MultiDiGraph:
 
 
 CAUSAL_GRAPH = build_graph()
+LINKED_CODES = frozenset(c for link in LINKS for c in link.codes)  # alarm codes some known cause explains
 
 
 def links_of(fault: FaultType) -> list[Link]:
@@ -205,11 +207,15 @@ class Candidate:
         return round(explained / (explained + len(self.absent)), 3) if explained else 0.0
 
 
-def candidates(symptoms: list[Symptom], plant: PlantConfig) -> list[Candidate]:
+def candidates(symptoms: list[Symptom], plant: PlantConfig,
+               disabled: frozenset[FaultType] = frozenset()) -> list[Candidate]:
+    """`disabled`: fault types whose rules are switched off for this run (the ablation set)."""
     proposed: dict[tuple[FaultType, str], None] = {}
     for symptom in symptoms:
         for link in links_to(symptom.kind):
             target = _proposed_target(link, symptom)
+            if link.fault in disabled:
+                continue
             if (link.key and target is not None and valid_target(link.fault, target, plant)
                     and matches(link, symptom, target, plant)):
                 proposed[(link.fault, target)] = None
@@ -223,6 +229,9 @@ def candidates(symptoms: list[Symptom], plant: PlantConfig) -> list[Candidate]:
             continue
         if any(s.kind in CONTRADICTS.get(fault, ()) and s.device_id == target for s in symptoms):
             continue
+        if target in plant.inverters.ids and any(s.kind == K.ALARM and s.device_id == target
+                                                 and s.evidence.get("code") not in LINKED_CODES for s in symptoms):
+            continue  # the unit raises a code no known cause covers: leave it unexplained, do not guess
         out.append(Candidate(fault, target, explains, absent))
     return out
 
@@ -257,11 +266,12 @@ def _standalone(c: Candidate) -> float:
     return sum(weight(s) for s in c.explains) - ABSENT_PENALTY * len(c.absent) - CAUSE_PENALTY
 
 
-def alternatives(symptoms: list[Symptom], plant: PlantConfig, chosen: set[str]) -> list[Hypothesis]:
+def alternatives(symptoms: list[Symptom], plant: PlantConfig, chosen: set[str],
+                 disabled: frozenset[FaultType] = frozenset()) -> list[Hypothesis]:
     """Candidates rank did not select, with their standalone scores (for near-tie checks)."""
     return [Hypothesis(id=f"A-{c.label}", fault_type=c.fault, targets=[c.target],
                        explains=sorted(s.id for s in c.explains), score=round(_standalone(c), 3))
-            for c in candidates(symptoms, plant) if c.label not in chosen]
+            for c in candidates(symptoms, plant, disabled) if c.label not in chosen]
 
 
 def near_tie_candidates(memory: Memory, margin: float) -> list[Hypothesis]:
@@ -273,10 +283,10 @@ def near_tie_candidates(memory: Memory, margin: float) -> list[Hypothesis]:
     return [a, b] if set(a.explains) & set(b.explains) and a.score - b.score <= margin else []
 
 
-def rank_detail(symptoms: list[Symptom], plant: PlantConfig
+def rank_detail(symptoms: list[Symptom], plant: PlantConfig, disabled: frozenset[FaultType] = frozenset()
                 ) -> tuple[list[Hypothesis], list[str], float, dict[str, float]]:
     """rank_causes plus the support of each selected cause, by label (cause_support)."""
-    chosen = select(candidates(symptoms, plant))
+    chosen = select(candidates(symptoms, plant, disabled))
     supports = {c.label: c.support for c, _ in chosen}
     hypotheses = [
         Hypothesis(id=f"H-{c.label}", fault_type=c.fault, targets=[c.target],
@@ -329,9 +339,9 @@ def revise(memory: Memory, now, selected: dict[str, Hypothesis]) -> None:
 def rank(state: PollState) -> PollState:
     memory, now = state["memory"], state["now"]
     symptoms = [memory.symptoms[sid] for sid in sorted(memory.active)]
-    hypotheses, unexplained, confidence, supports = rank_detail(symptoms, memory.plant)
+    hypotheses, unexplained, confidence, supports = rank_detail(symptoms, memory.plant, memory.disabled)
     memory.hypotheses = hypotheses
-    memory.alternatives = alternatives(symptoms, memory.plant, {h.labels[0] for h in hypotheses})
+    memory.alternatives = alternatives(symptoms, memory.plant, {h.labels[0] for h in hypotheses}, memory.disabled)
     selected = {h.labels[0]: h for h in hypotheses}
 
     for label, h in selected.items():

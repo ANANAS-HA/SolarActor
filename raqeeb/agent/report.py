@@ -150,7 +150,7 @@ def escalate(memory: Memory, now) -> list[Escalation]:
     known cause explains for ESCALATE_UNEXPLAINED_AFTER polls (never guessed, never acted on)."""
     new: list[Escalation] = []
     for cause in memory.causes.values():
-        if cause.status == CauseStatus.ESCALATED and cause.label not in memory.escalated:
+        if cause.status in (CauseStatus.ESCALATED, CauseStatus.BLOCKED) and cause.label not in memory.escalated:
             memory.escalated.add(cause.label)
             target = cause.hypothesis.targets[0]
             devices = memory.plant.layout.area_of(target) or [target]
