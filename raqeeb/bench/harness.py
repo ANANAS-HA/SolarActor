@@ -32,6 +32,7 @@ from raqeeb.contracts import (
     ActionOutcome,
     ActionRequest,
     ActionStatus,
+    ActionType,
     Agent,
     FaultType,
     IncidentReport,
@@ -41,6 +42,7 @@ from raqeeb.contracts import (
     Scenario,
     Verification,
 )
+from raqeeb.faults.catalogue import STORM_DEFAULT_MIN
 from raqeeb.faults.injector import FaultInjector
 from raqeeb.telemetry.store import TelemetryStore
 from raqeeb.twin.controls import apply_action
@@ -101,6 +103,7 @@ class ActionRecord:
     status: ActionStatus
     gated: bool  # needed approval per configs/actions.yaml
     note: str = ""
+    effective_at: datetime | None = None  # when a delayed action takes effect in the twin (cleaning, reset, visit)
 
 
 @dataclass
@@ -132,6 +135,7 @@ class RunRecord:
     report: IncidentReport | None = None
     energy_mwh: float = 0.0
     reference: ReferenceEnergy | None = None
+    storms: list[tuple[datetime, datetime]] = field(default_factory=list)  # dust-storm windows [start, end)
 
     @property
     def incident_start(self) -> datetime | None:
@@ -139,6 +143,17 @@ class RunRecord:
 
 
 # -- runs ------------------------------------------------------------------------------------
+
+
+def storm_windows(scenario: Scenario) -> list[tuple[datetime, datetime]]:
+    """[start, end) of each dust storm (SOILING fault window), from the full scenario (bench only)."""
+    windows = []
+    for fault in scenario.faults:
+        if fault.type == FaultType.SOILING:
+            start = scenario.resolve_time(fault.start)
+            end = scenario.resolve_time(fault.end) if fault.end else start + timedelta(minutes=STORM_DEFAULT_MIN)
+            windows.append((start, end))
+    return windows
 
 
 def energy_mwh(truth: list[StepTruth]) -> float:
@@ -183,7 +198,10 @@ def run_scenario(scenario: Scenario, agent: Agent, *, poll_min: int = POLL_MIN,
     by_label = {f.label: f for f in scenario.faults}
     starts = {label: scenario.resolve_time(by_label[label].start) for label in labels}
     record = RunRecord(scenario_id=scenario.id, agent=agent.name, root_causes=labels, cause_starts=starts,
-                       reference=reference)
+                       reference=reference, storms=storm_windows(scenario))
+    delays = {ActionType.CREATE_CLEANING_WORK_ORDER: plant.controls.cleaning_delay_min,
+              ActionType.RESET_COMMS_GATEWAY: plant.controls.comms_reset_delay_min,
+              ActionType.DISPATCH_TECHNICIAN: plant.controls.technician_delay_min}
     seen_ids: set[str] = set()
 
     def execute(request: ActionRequest) -> ActionOutcome:
@@ -199,7 +217,10 @@ def run_scenario(scenario: Scenario, agent: Agent, *, poll_min: int = POLL_MIN,
             except (ValueError, TypeError, KeyError) as exc:
                 status, note = ActionStatus.FAILED, str(exc)
         seen_ids.add(request.id)
-        record.actions.append(ActionRecord(ts=twin.clock, request=request, status=status, gated=gated, note=note))
+        effective = (twin.clock + timedelta(minutes=delays.get(request.action, 0))
+                     if status == ActionStatus.APPLIED else None)
+        record.actions.append(ActionRecord(ts=twin.clock, request=request, status=status, gated=gated, note=note,
+                                           effective_at=effective))
         return ActionOutcome(action_id=request.id, status=status, ts=twin.clock, note=note)
 
     def mitigated(now: datetime) -> dict[str, bool]:

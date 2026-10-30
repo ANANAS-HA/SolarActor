@@ -7,6 +7,8 @@ Per run (one agent on one scenario), `score_run` gives one results.csv row:
 - all_found: every answer-key cause is in the diagnosis.
 - false actions: requested actions that address no answer-key cause (actions on symptoms,
   decoys or healthy devices), whatever their outcome. See ACTION_FIXES.
+- wasted washes: applied cleaning orders that finish while a dust storm is still blowing; the
+  storm's remaining dust settles on the clean panels again.
 - time to verified recovery (sim minutes from the first root cause's start): the first poll at
   which every cause is mitigated in the twin state AND the agent has reported recovered=True
   for every action it applied (at least one). NaN when that never happens; an agent that does
@@ -58,6 +60,14 @@ def addresses(request: ActionRequest, label: str) -> bool:
     """True if `request` acts on root cause `label`. A plant-wide cause covers any single target."""
     fault_type, target = parse_cause_label(label)
     return fault_type in ACTION_FIXES[request.action] and (request.target == target or target == PLANT_TARGET)
+
+
+def wasted_washes(record: RunRecord) -> int:
+    return sum(
+        1 for a in record.actions
+        if a.request.action == ActionType.CREATE_CLEANING_WORK_ORDER and a.status == ActionStatus.APPLIED
+        and a.effective_at is not None and any(start <= a.effective_at < end for start, end in record.storms)
+    )
 
 
 def _minutes(delta) -> float:
@@ -112,6 +122,7 @@ def score_run(record: RunRecord) -> dict:
         "false_actions": len(false_actions),
         "false_action_list": ";".join(f"{a.request.action.value}@{a.request.target}" for a in false_actions),
         "approvals": sum(a.gated for a in record.actions),
+        "wasted_washes": wasted_washes(record),
         "failed_actions": sum(a.status == ActionStatus.FAILED for a in record.actions),
         "mitigated_at_end": bool(final) and all(final.values()),
         "unmitigated_at_end": ";".join(sorted(label for label, ok in final.items() if not ok)),
@@ -146,6 +157,7 @@ def summarize(results: pd.DataFrame, notes: dict[str, str] | None = None) -> pd.
             "false_action_rate": _ratio(df["false_actions"].sum(), df["n_actions"].sum()),
             "actions_per_incident": df["n_actions"].mean(),
             "approvals_per_incident": df["approvals"].mean(),
+            "wasted_washes": int(df["wasted_washes"].sum()),
             "verified_recovery_rate": verified.mean(),
             "ttvr_median_min": df.loc[verified, "ttvr_min"].median() if verified.any() else NAN,
             "mwh_recovered": df["mwh_recovered"].sum(),
@@ -170,6 +182,8 @@ def _worse(a: dict, b: dict) -> list[str]:
         out.append(f"precision {a['precision']:.2f} vs {b['precision']:.2f}")
     if a["false_actions"] > b["false_actions"]:
         out.append(f"false actions {a['false_actions']} vs {b['false_actions']}")
+    if a["wasted_washes"] > b["wasted_washes"]:
+        out.append(f"wasted washes {a['wasted_washes']} vs {b['wasted_washes']}")
     if a["mwh_recovered"] < b["mwh_recovered"] - MWH_TIE:
         out.append(f"MWh recovered {a['mwh_recovered']:.2f} vs {b['mwh_recovered']:.2f}")
     if not math.isnan(b["ttvr_min"]) and (math.isnan(a["ttvr_min"]) or a["ttvr_min"] > b["ttvr_min"]):
@@ -221,6 +235,7 @@ _DISPLAY = [  # (column, header, format)
     ("all_causes_found_rate", "All causes found", "{:.0%}"),
     ("false_action_rate", "False-action rate", "{:.0%}"),
     ("approvals_per_incident", "Approvals / incident", "{:.1f}"),
+    ("wasted_washes", "Wasted washes", "{:d}"),
     ("verified_recovery_rate", "Verified recovery", "{:.0%}"),
     ("ttvr_median_min", "Median time to verified recovery (min)", "{:.0f}"),
     ("mwh_recovered", "MWh recovered", "{:.1f}"),
@@ -258,6 +273,7 @@ def summary_markdown(results: pd.DataFrame, summary: pd.DataFrame) -> str:
         "Lost MWh (no real fault vs no action) is not all recoverable: storm dimming, output before a",
         "fix lands and derates that no core action repairs are lost to every agent.",
         "A plant-wide cause (SOILING@ALL) counts an action on any single inverter as addressing it.",
+        "Wasted washes: cleaning orders that finish while the dust storm still blows (dust settles again).",
         "",
     ]
     agents = list(summary["agent"])

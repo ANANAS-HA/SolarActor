@@ -2,12 +2,12 @@
 
 All plant data, faults and alarms are **synthetic** (simulated plant twin, NASA POWER weather).
 
-| Agent | Scenarios | Root-cause precision | Root-cause recall | All causes found | False-action rate | Approvals / incident | Verified recovery | Median time to verified recovery (min) | MWh recovered | Share of lost MWh recovered | Cost / incident (USD) | Local LLM calls |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| raqeeb | 20 | 1.00 | 1.00 | 100% | 0% | 1.2 | 100% | 175 | 331.1 | 44% | 0.0000 | n/a |
-| threshold | 20 | 0.19 | 0.56 | 30% | 5% | 0.6 | 0% | n/a | 189.5 | 25% | 0.0000 | n/a |
-| oracle | 20 | 1.00 | 1.00 | 100% | 0% | 0.6 | 100% | 108 | 385.3 | 51% | 0.0000 | n/a |
-| empty | 20 | n/a | 0.00 | 0% | n/a | 0.0 | 0% | n/a | 0.0 | 0% | 0.0000 | n/a |
+| Agent | Scenarios | Root-cause precision | Root-cause recall | All causes found | False-action rate | Approvals / incident | Wasted washes | Verified recovery | Median time to verified recovery (min) | MWh recovered | Share of lost MWh recovered | Cost / incident (USD) | Local LLM calls |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| raqeeb | 20 | 1.00 | 1.00 | 100% | 0% | 1.2 | 0 | 100% | 175 | 331.1 | 44% | 0.0000 | n/a |
+| threshold | 20 | 0.19 | 0.56 | 30% | 5% | 0.6 | 1 | 0% | n/a | 190.0 | 25% | 0.0000 | n/a |
+| oracle | 20 | 1.00 | 1.00 | 100% | 0% | 0.6 | 0 | 100% | 108 | 385.3 | 51% | 0.0000 | n/a |
+| empty | 20 | n/a | 0.00 | 0% | n/a | 0.0 | 0 | 0% | n/a | 0.0 | 0% | 0.0000 | n/a |
 
 - **oracle**: reference upper bound: reads the answer key
 - **empty**: reference lower bound: does nothing
@@ -18,6 +18,7 @@ negative when an action costs output (e.g. a power limit below what the inverter
 Lost MWh (no real fault vs no action) is not all recoverable: storm dimming, output before a
 fix lands and derates that no core action repairs are lost to every agent.
 A plant-wide cause (SOILING@ALL) counts an action on any single inverter as addressing it.
+Wasted washes: cleaning orders that finish while the dust storm still blows (dust settles again).
 
 ## Where raqeeb gets it wrong
 
@@ -74,7 +75,7 @@ A plant-wide cause (SOILING@ALL) counts an action on any single inverter as addr
 
 ## Where raqeeb loses to threshold
 
-- scn_0006: MWh recovered 31.07 vs 35.40
+- scn_0006: MWh recovered 31.07 vs 35.99
 - scn_0012: MWh recovered 13.34 vs 15.43
 - scn_0015: MWh recovered 20.81 vs 22.52
 - scn_0017: MWh recovered 29.95 vs 33.64
@@ -87,7 +88,7 @@ A plant-wide cause (SOILING@ALL) counts an action on any single inverter as addr
 - scn_0003: recall 0.33 vs 1.00; MWh recovered 0.00 vs 28.89; verified recovery not verified vs 275 min
 - scn_0004: recall 0.50 vs 1.00; precision 0.67 vs 1.00; MWh recovered 0.40 vs 29.89; verified recovery not verified vs 340 min
 - scn_0005: recall 0.50 vs 1.00; precision 0.50 vs 1.00; false actions 1 vs 0; MWh recovered -0.00 vs 2.69; verified recovery not verified vs 230 min
-- scn_0006: recall 0.67 vs 1.00; precision 0.11 vs 1.00; verified recovery not verified vs 210 min
+- scn_0006: recall 0.67 vs 1.00; precision 0.11 vs 1.00; wasted washes 1 vs 0; verified recovery not verified vs 210 min
 - scn_0007: recall 0.50 vs 1.00; MWh recovered 0.00 vs 18.57; verified recovery not verified vs 225 min
 - scn_0008: precision 0.50 vs 1.00; false actions 1 vs 0; MWh recovered -0.01 vs 0.40; verified recovery not verified vs 145 min
 - scn_0009: recall 0.00 vs 1.00; verified recovery not verified vs 45 min

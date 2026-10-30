@@ -125,6 +125,19 @@ def test_dust_storm_soiling_persists_plant_wide(run, plant):
             assert all(0.74 < r < 0.86 for r in ratios), h.ts
 
 
+@pytest.mark.parametrize("cleaned_at, left", [("05:45", 8 / 18), ("06:30", 0.0)])
+def test_cleaning_mid_storm_is_partly_undone(plant, weather, cleaned_at, left):
+    """Dust keeps settling while the storm blows (05:00-06:30, 18 steps): a wash at 05:45 (after the
+    10th step's dust) gets the 8 remaining steps' dust back; a wash after the storm stays clean."""
+    scenario = Scenario(id="t", seed=1, start=JAN, duration_hours=HOURS, faults=[FaultSpec(**STORM)])
+    inj = FaultInjector.for_scenario(scenario, plant, weather[JAN])
+    inj.twin.schedule(at(JAN, cleaned_at), "wash",
+                      lambda s: [setattr(inv, "soiling_loss", 0.0) for inv in s.inverters.values()])
+    inj.run_to_end()
+    for inv in inj.twin.state.inverters.values():
+        assert inv.soiling_loss == pytest.approx(left * 0.2, abs=0.2 * 0.1 + 1e-9)  # +/- the 10% dust spread
+
+
 def test_dust_storm_alarm_flood(run):
     _, batch = run(STORM)
     counts = codes(batch)

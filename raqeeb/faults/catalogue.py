@@ -47,8 +47,10 @@ class DustStormSoiling(Fault):
     """SOILING: a dust storm, then plant-wide soiling that persists until cleaned.
 
     During [start, end): wind_add_ms pushes wind above the stow limit (trackers stow, HIGH_WIND)
-    and irradiance_factor < 1 dims plant, sensor and reference alike. Soiling builds linearly to
-    ~severity on every inverter and stays when the wind drops.
+    and irradiance_factor < 1 dims plant, sensor and reference alike. Dust deposits at a steady
+    rate on every inverter while the storm blows (~severity in total) and stays when the wind
+    drops. Deposition adds to whatever is on the panels, so a cleaning finished mid-storm is partly
+    undone: the dust of the remaining storm steps settles again.
     """
 
     fault_type = FaultType.SOILING
@@ -69,21 +71,21 @@ class DustStormSoiling(Fault):
             state.atmosphere.wind_add_ms = wind_add
             state.atmosphere.irradiance_factor = dimming
 
-        def soil(fraction: float):
-            def change(state: PlantState) -> None:
-                for inv_id, loss in zip(ids, final):
-                    state.inverters[inv_id].soiling_loss = max(state.inverters[inv_id].soiling_loss,
-                                                               float(loss) * fraction)
-            return change
+        times = step_times(self.start, end) or [self.start]
+        per_step = final / len(times)
+
+        def deposit(state: PlantState) -> None:
+            for inv_id, dust in zip(ids, per_step):
+                inv = state.inverters[inv_id]
+                inv.soiling_loss = min(inv.soiling_loss + float(dust), 1.0)
 
         def calm(state: PlantState) -> None:
             state.atmosphere.wind_add_ms = 0.0
             state.atmosphere.irradiance_factor = 1.0
 
         self.schedule(ctx, self.start, "storm begins", storm)
-        times = step_times(self.start, end) or [self.start]
         for k, at in enumerate(times, start=1):
-            self.schedule(ctx, at, f"dust {k}/{len(times)}", soil(k / len(times)))
+            self.schedule(ctx, at, f"dust {k}/{len(times)}", deposit)
         self.schedule(ctx, end, "storm ends", calm)
 
 

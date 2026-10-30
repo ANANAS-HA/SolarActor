@@ -54,6 +54,21 @@ def record(agent="a", scenario_id="scn_0007", **kw) -> RunRecord:
     return RunRecord(scenario_id=scenario_id, agent=agent, **{**defaults, **kw})
 
 
+def test_wasted_washes_count_cleanings_that_finish_mid_storm():
+    storm = (at(0), at(90))
+    early = applied("a1", "create_cleaning_work_order", "ALL", 0)
+    early.effective_at = at(60)  # finishes while the storm still blows
+    late = applied("a2", "create_cleaning_work_order", "ALL", 30)
+    late.effective_at = at(90)  # finishes as it ends: not wasted
+    rejected = applied("a3", "create_cleaning_work_order", "ALL", 0, status=ActionStatus.REJECTED)
+    reset = applied("a4", "reset_comms_gateway", "INV-12", 0)
+    reset.effective_at = at(5)
+    row = score_run(record(actions=[early, late, rejected, reset], storms=[storm]))
+    assert row["wasted_washes"] == 1
+    assert score_run(record(actions=[early]))["wasted_washes"] == 0  # no storm, nothing wasted
+    assert summarize(results_frame([record(actions=[early, late], storms=[storm])]))["wasted_washes"].iloc[0] == 1
+
+
 def test_fixture_answer_key_matches():
     scenario = Scenario.from_yaml(FIXTURE)
     assert sorted(scenario.answer_key.root_causes) == sorted(KEY)
