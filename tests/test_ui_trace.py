@@ -187,3 +187,43 @@ def test_a_bad_file_gives_a_message_not_an_exception(tmp_path):
     at.button(key="trace_open").click().run()
     assert not at.exception and at.session_state.run is before
     assert any("Could not open" in e.value for e in at.error)
+
+
+def test_every_free_text_in_the_trace_is_quoted_data_and_collapsed():
+    """Hostile text planted in every free-text field a v3 file can carry: a note, an alarm message, a model
+    transcript, a proposal's reason and evidence, the gate's reason. None of it is rendered as markdown."""
+    from raqeeb.ui.runlog import (
+        GateDecision,
+        GateRecord,
+        ProposalCheck,
+        ProposalRecord,
+        Transcript,
+    )
+
+    log = RunLog.load(FIXTURE)
+    poll = next(p for p in log.polls if p.gate)
+    poll.notes.append(NoteRecord(ts=poll.ts, source="technician", author="x", about="T1", text=HOSTILE))
+    poll.transcripts.append(Transcript(purpose="hypotheses", prompt=HOSTILE, reply=HOSTILE))
+    poll.proposals.append(ProposalRecord(ts=poll.ts, label="NEW_SHADING@EDGE-W", fault_type="NEW_SHADING",
+                                         target="EDGE-W", decision="rejected", reason=HOSTILE,
+                                         checks=[ProposalCheck(check="test", result=HOSTILE, passed=False)],
+                                         model_evidence=[HOSTILE]))
+    poll.gate.append(GateRecord(request=poll.gate[0].request.model_copy(update={"id": "held-1"}),
+                                decision=GateDecision.REJECTED, reason=HOSTILE, cause="SOILING@ALL"))
+    template = log.telemetry["events"][0]
+    log.telemetry["events"].append({**template, "ts": poll.ts.strftime("%Y-%m-%dT%H:%M:%SZ"), "message": HOSTILE})
+    at = _app(live.ReplayRun(log))
+    at.run()
+    at.button(key="to_end").click().run()
+    assert not at.exception
+    page = _page(at)
+    assert HOSTILE not in page and "<b>bold</b>" not in page and "](http" not in page  # never markdown or HTML
+    assert source.md_escape(HOSTILE) in page  # the proposal's reason, escaped
+    def column(name: str) -> list[str]:
+        return [v for d in at.dataframe for col in getattr(d.value, "columns", []) if name in col
+                for v in d.value[col].astype(str)]
+
+    for name in ("Text (quoted)", "Message (quoted)", "the model's words (quoted)", "Gate", "Result"):
+        assert any(HOSTILE in v for v in column(name)), name
+    assert [c.value for c in at.code].count(HOSTILE) == 2  # prompt and reply, as plain text
+    assert at.expander and all(not e.proto.expanded for e in at.expander)

@@ -79,6 +79,7 @@ class GateRow:
 class TurnCard:
     index: int  # 1-based turn number
     ts: datetime
+    since: datetime | None  # the previous turn's time (None for the first): this turn covers (since, ts]
     final: bool
     checks: list[CheckRow] | None  # None = same verdicts on the same devices as the last turn
     symptoms: list[str]  # new symptoms this turn (the agent's summaries)
@@ -201,7 +202,7 @@ def turn_cards(log: RunLog, now: datetime) -> list[TurnCard]:
             candidates = None
         last_candidates = key if key is not None else last_candidates
         cards.append(TurnCard(
-            index=k + 1, ts=poll.ts, final=poll.final, checks=checks,
+            index=k + 1, ts=poll.ts, since=previous, final=poll.final, checks=checks,
             symptoms=_symptoms(poll, polls[k - 1] if k else None),
             unexplained=list(poll.diagnosis.unexplained) if poll.diagnosis and candidates is not None else [],
             candidates=candidates, llm_calls=list(poll.llm_calls), proposals=list(poll.proposals),

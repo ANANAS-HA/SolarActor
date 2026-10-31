@@ -565,7 +565,7 @@ def trace_header(head: trace.Header) -> None:
         st.markdown(" ".join(f":{STATUS_BADGE[s]}-background[{md_escape(s)}: {len(labels)}]" for s, labels in named)
                     if named else "none named yet")
         if named:
-            st.caption(" · ".join(f"{s}: {', '.join(labels)}" for s, labels in named))
+            st.caption(" · ".join(f"{md_escape(s)}: {', '.join(md_escape(x) for x in labels)}" for s, labels in named))
     d.metric("Model calls", head.llm_calls)
     e.metric("Model time", f"{head.llm_s:.1f} s")
 
@@ -613,6 +613,13 @@ def trace_card(card: trace.TurnCard, run: source.Run) -> None:
             st.dataframe(pd.DataFrame([{"Escalated to a human": e.subject, "Devices": ", ".join(e.devices),
                                         "Reason": e.reason} for e in card.escalations]),
                          hide_index=True, key=f"trace_escalations_{card.index}")
+        alarms = _turn_alarms(run, card)
+        if len(alarms):
+            with st.expander(f"Alarms this turn ({len(alarms)}): messages quoted, untrusted", expanded=False):
+                st.dataframe(pd.DataFrame({"Time": alarms["ts"].map(local_hhmm), "Device": alarms["device_id"],
+                                           "Code": alarms["code"], "Severity": alarms["severity"].astype(str),
+                                           "Message (quoted)": alarms["message"]}),
+                             hide_index=True, key=f"trace_alarms_{card.index}")
         if card.notes:
             with st.expander(f"Notes ({len(card.notes)}): quoted, untrusted", expanded=False):
                 st.dataframe(pd.DataFrame([{"Time": local_hhmm(n.ts), "Source": n.source, "Author": n.author,
@@ -622,6 +629,13 @@ def trace_card(card: trace.TurnCard, run: source.Run) -> None:
             with st.expander(f"Agent steps ({len(card.steps)})", expanded=False):
                 st.dataframe(pd.DataFrame([{"Step": s.node, "What": s.summary} for s in card.steps]),
                              hide_index=True, key=f"trace_steps_{card.index}")
+
+
+def _turn_alarms(run: source.Run, card: trace.TurnCard) -> pd.DataFrame:
+    """Alarms that arrived during this turn, (previous turn, this turn], from the run's telemetry store."""
+    start = card.since + timedelta(seconds=1) if card.since else run.incident.start
+    events = run.store.read("events", start, card.ts + timedelta(seconds=1)).reset_index()
+    return events
 
 
 def trace_model(card: trace.TurnCard) -> None:
