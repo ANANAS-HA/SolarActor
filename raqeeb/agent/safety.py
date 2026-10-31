@@ -68,17 +68,20 @@ def check(memory: Memory, request: ActionRequest, label: str, now) -> tuple[Acti
 
 def safety(state: PollState) -> PollState:
     memory, now = state["memory"], state["now"]
-    approved, rejected = [], []
+    approved, rejected, held = [], [], []
     for request, label in state.get("proposals", []):
         checked, reason = check(memory, request, label, now)
         if checked is None:
             rejected.append(f"{request.action} on {request.target}: {reason}")
         elif len(approved) >= MAX_ACTIONS_PER_POLL:
-            rejected.append(f"{request.action.value} on {request.target}: deferred, {MAX_ACTIONS_PER_POLL} per poll")
+            reason = f"deferred, {MAX_ACTIONS_PER_POLL} per poll"
+            rejected.append(f"{request.action.value} on {request.target}: {reason}")
         else:
             approved.append((checked, label))
+            continue
+        held.append({"request": request.model_dump(mode="json"), "cause": label, "reason": reason})  # record only
     if rejected:
-        memory.log(now, "safety", "held back: " + "; ".join(rejected))
+        memory.log(now, "safety", "held back: " + "; ".join(rejected), held=held)
     gated = [r.action.value + " on " + r.target for r, _ in approved if r.needs_approval]
     if gated:
         memory.log(now, "safety", "needs human approval: " + ", ".join(gated))
