@@ -86,6 +86,24 @@ def test_failure_is_logged_and_ignored(caplog):
     assert record.status == alerts.FAILED and record.error == "HTTP 401"
 
 
+def test_refusal_keeps_the_reason_and_the_request_names_itself():
+    """Cloudflare in front of api.resend.com answers Python's default User-Agent with 403 "error code: 1010";
+    the request must carry its own agent, and a refusal's body must reach the record (and the console)."""
+    post = FakePost()
+    Alerter(CONFIGURED, post=post, background=False).send(_alert())
+    headers = post.calls[0][1]
+    assert headers["User-Agent"] == alerts.USER_AGENT and not headers["User-Agent"].startswith("Python-urllib")
+    assert headers["Accept"] == "application/json"
+
+    def refused(url, headers, payload):
+        return 403, "error code: 1010"
+
+    record = Alerter(CONFIGURED, post=refused, background=False).send(_alert())
+    assert record.status == alerts.FAILED and record.error == "HTTP 403: error code: 1010"
+    long = Alerter(CONFIGURED, post=lambda *a: (422, "x" * 1000), background=False).send(_alert())
+    assert len(long.error) <= len("HTTP 422: ") + alerts.ERROR_BODY_CHARS
+
+
 def test_off_sends_and_records_nothing():
     post = FakePost()
     alerter = Alerter(AlertConfig(enabled=False, api_key="k", sender="a@b", recipients=("c@d",)), post=post,

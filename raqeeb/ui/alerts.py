@@ -7,7 +7,10 @@ escalation. Sent by the console layer (ui/live.py), never by the agent, through 
 
 Off when RAQEEB_ALERTS=0 (the Docker image's default): nothing is sent or recorded. When the key is unset
 the alert is only recorded (status NOT_CONFIGURED) and the console shows "Alert (email not configured)".
-One email per request, one retry at most, never blocking the run; failures are logged and ignored.
+One email per request, one retry at most, never blocking the run; failures are logged and ignored, with
+the HTTP status and the first line of the response body kept on the record so the console can say why.
+The request carries its own User-Agent: api.resend.com sits behind Cloudflare, which answers Python's default
+urllib agent with "403 error code: 1010" before the request reaches Resend.
 The body carries the scenario (id, start, duration), the sim time, a one-line summary of the agent's
 diagnosis so far, what needs deciding, the agent's rationale and expected effect, and a line to open the
 console; Arabic and English summary lines; no plant data beyond that.
@@ -45,12 +48,14 @@ ALERTS_ENV = "RAQEEB_ALERTS"  # "0" switches alerts off entirely (the public ima
 KEY_ENV, FROM_ENV, TO_ENV = "RESEND_API_KEY", "RAQEEB_ALERT_FROM", "RAQEEB_ALERT_TO"
 TIMEOUT_S = 10.0
 RETRIES = 1  # one retry at most
+USER_AGENT = "raqeeb-console/0.1 (python-urllib)"  # Cloudflare rejects the default "Python-urllib/x.y" (1010)
+ERROR_BODY_CHARS = 200
 
 APPROVAL, ESCALATION = "approval", "escalation"
 SENT, FAILED, NOT_CONFIGURED, OFF = "sent", "failed", "not configured", "off"
 BANNER_NOT_CONFIGURED = "Alert (email not configured)"
 
-Poster = Callable[[str, dict, dict], int]  # (url, headers, payload) -> HTTP status
+Poster = Callable[[str, dict, dict], "int | tuple[int, str]"]  # (url, headers, payload) -> status[, response body]
 
 
 @dataclass(frozen=True)
@@ -135,13 +140,20 @@ class AlertConfig:
         return f"AlertConfig(enabled={self.enabled}, configured={self.configured}, recipients={len(self.recipients)})"
 
 
-def post_json(url: str, headers: dict, payload: dict) -> int:
+def post_json(url: str, headers: dict, payload: dict) -> tuple[int, str]:
+    """POST the payload; (HTTP status, response body) so a refusal keeps its reason."""
     req = urllib.request.Request(url, data=json.dumps(payload).encode(), headers=headers, method="POST")
     try:
         with urllib.request.urlopen(req, timeout=TIMEOUT_S) as resp:
-            return resp.status
+            return resp.status, resp.read().decode("utf-8", "replace")
     except urllib.error.HTTPError as exc:
-        return exc.code
+        return exc.code, exc.read().decode("utf-8", "replace")
+
+
+def _reason(status: int, body: str) -> str:
+    """"HTTP 403: error code: 1010" - the status and the first line of the body, shortened."""
+    text = " ".join(body.split())[:ERROR_BODY_CHARS]
+    return f"HTTP {status}" + (f": {text}" if text else "")
 
 
 class Alerter:
@@ -188,17 +200,19 @@ class Alerter:
         return record
 
     def _deliver(self, record: AlertRecord) -> None:
-        headers = {"Authorization": f"Bearer {self.config.api_key}", "Content-Type": "application/json"}
+        headers = {"Authorization": f"Bearer {self.config.api_key}", "Content-Type": "application/json",
+                   "Accept": "application/json", "User-Agent": USER_AGENT}
         body = payload(record.alert, self.config)
         error = ""
         for attempt in range(1 + RETRIES):
             record.attempts = attempt + 1
             try:
-                status = self._post(RESEND_URL, headers, body)
+                result = self._post(RESEND_URL, headers, body)
+                status, text = result if isinstance(result, tuple) else (result, "")
                 if 200 <= status < 300:
                     record.status = SENT
                     break
-                error = f"HTTP {status}"
+                error = _reason(status, text)
             except Exception as exc:  # noqa: BLE001 - delivery failures never reach the run
                 error = f"{type(exc).__name__}: {exc}"
         else:
