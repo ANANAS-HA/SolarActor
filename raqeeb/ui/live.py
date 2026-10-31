@@ -21,6 +21,7 @@ The log is filled by runlog.Recorder, the same code the bench harness uses for i
 
 from __future__ import annotations
 
+import json
 import os
 import tempfile
 import time
@@ -84,22 +85,46 @@ def local_model_status() -> tuple[bool, str]:
         return False, "the local model server is not reachable"
 
 
-def make_router(mode: Mode):
-    """None for rules only; the local model (no API fallback) or the scripted test model otherwise."""
+def list_local_models() -> list[str]:
+    """The model ids the local server lists at /models (OpenAI-compatible), the .env model first; [] when
+    the deployment disables the model, .env names no server, or it is not reachable."""
+    if os.environ.get(NO_LLM_ENV):
+        return []
+    settings = load_settings()
+    if not settings.local_llm_configured:
+        return []
+    try:
+        with urllib.request.urlopen(settings.local_llm_base_url.rstrip("/") + "/models", timeout=REACH_TIMEOUT_S) as r:
+            data = json.loads(r.read().decode("utf-8", "replace"))
+    except Exception:  # noqa: BLE001 - any failure means "not reachable"
+        return []
+    items = data.get("data", data) if isinstance(data, dict) else data
+    ids = [str(m.get("id") if isinstance(m, dict) else m) for m in items or [] if m]
+    ids = [i for i in ids if i]
+    return sorted(set(ids), key=lambda i: (i != settings.local_llm_model, i))
+
+
+def make_router(mode: Mode, model: str | None = None):
+    """None for rules only; the local model (no API fallback) or the scripted test model otherwise. `model`
+    picks another model the local server lists; only the model name changes, the routing does not."""
     if mode == Mode.RULES:
         return None
     if mode == Mode.TEST:
         from raqeeb.ui.testmodel import scripted_router
         return scripted_router()
+    from raqeeb.llm.gateway import Gateway
     from raqeeb.llm.router import Router
-    return Router(api=False)
+    settings = load_settings()
+    if model and model != settings.local_llm_model:
+        settings = settings.model_copy(update={"local_llm_model": model})
+    return Router(Gateway(settings), api=False)
 
 
-def model_name(mode: Mode) -> str:
+def model_name(mode: Mode, model: str | None = None) -> str:
     if mode == Mode.TEST:
         from raqeeb.ui.testmodel import TEST_MODEL
         return TEST_MODEL
-    return load_settings().local_llm_model if mode == Mode.LOCAL else ""
+    return (model or load_settings().local_llm_model) if mode == Mode.LOCAL else ""
 
 
 def run_dir() -> Path:
@@ -111,7 +136,8 @@ def run_dir() -> Path:
 
 class LiveRun:
     def __init__(self, scenario: Scenario, mode: Mode = Mode.RULES, *, router=None, poll_min: int = POLL_MIN,
-                 plant: PlantConfig | None = None, db_path: Path | None = None, alerter: Alerter | None = None):
+                 plant: PlantConfig | None = None, db_path: Path | None = None, alerter: Alerter | None = None,
+                 model: str | None = None):
         if poll_min < STEP_MINUTES or poll_min % STEP_MINUTES:
             raise ValueError(f"poll_min must be a multiple of {STEP_MINUTES}")
         self.plant = plant or load_plant()
@@ -124,10 +150,10 @@ class LiveRun:
         self.mode = mode
         self.specs = load_actions()
         self.alerter = alerter if alerter is not None else Alerter.from_env()
-        router = router if router is not None else make_router(mode)
+        router = router if router is not None else make_router(mode, model)
         self.agent = RaqeebAgent(self.plant, router=router, name=f"raqeeb_{mode.value}")
         self.incident: AgentScenario = scenario.agent_view()
-        self.log = RunLog(label=MODE_LABEL[mode], mode=mode, agent=self.agent.name, model=model_name(mode),
+        self.log = RunLog(label=MODE_LABEL[mode], mode=mode, agent=self.agent.name, model=model_name(mode, model),
                           poll_min=poll_min, incident=self.incident)
         self.rec = Recorder(self.log, self.agent)
         self._outcomes: list[ActionOutcome] = []
@@ -283,7 +309,11 @@ class LiveRun:
         """The replay log of a finished run, labelled for playback (e.g. "recorded with test model")."""
         if not self.finished:
             raise RuntimeError("only a finished run can be saved as a replay")
-        return self.log.model_copy(update={"label": label or RECORDED_LABEL[self.mode]})
+        if label is None:
+            label = RECORDED_LABEL[self.mode]
+            if self.mode == Mode.LOCAL and self.log.model:
+                label += f" ({self.log.model})"
+        return self.log.model_copy(update={"label": label})
 
     def close(self) -> None:
         self.store.close()

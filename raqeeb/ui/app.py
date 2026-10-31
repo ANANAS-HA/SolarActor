@@ -28,7 +28,7 @@ import streamlit as st
 from raqeeb.config import REPO_ROOT, load_plant
 from raqeeb.contracts import DISPLAY_TZ, ActionStatus, IncidentReport
 from raqeeb.ui import alerts, plantmap, source, summary, trace
-from raqeeb.ui.live import LiveRun, ReplayRun, local_model_status
+from raqeeb.ui.live import LiveRun, ReplayRun, list_local_models, local_model_status
 from raqeeb.ui.runner import DEFAULT_PACE, PACES, Runner
 from raqeeb.ui.proposals import effect
 from raqeeb.ui.runlog import MODE_LABEL, Mode
@@ -36,6 +36,8 @@ from raqeeb.ui.source import local_hhmm, md_escape
 
 LIVE_RULES, LIVE_LOCAL, REPLAY = MODE_LABEL[Mode.RULES], MODE_LABEL[Mode.LOCAL], "Replay"
 MODES = [LIVE_RULES, LIVE_LOCAL, REPLAY]
+RULES_ONLY = "Rules only"  # the Model selector's first entry; the others are what the local server lists
+API_TIER = "API tier (not configured)"
 SPEEDS = [15, 30, 60, 120, 240]  # sim minutes per tick
 TICK_S = 0.4  # wall-clock pause between ticks while playing
 TRACE_REFRESH_S = 1.0  # the Trace tab re-renders this often while the background runner advances a live run
@@ -72,6 +74,11 @@ def replay_choices() -> dict[str, str]:
 @st.cache_data(ttl=60, show_spinner=False)
 def local_status() -> tuple[bool, str]:
     return local_model_status()
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def local_models() -> list[str]:
+    return list_local_models()
 
 
 def lines(run: source.Run) -> pd.DataFrame:
@@ -127,7 +134,22 @@ def _set_run(run: source.Run) -> None:
 
 def _start_live(scenario_id: str | None = None) -> None:
     mode = Mode.LOCAL if st.session_state.mode_choice == LIVE_LOCAL else Mode.RULES
-    _set_run(source.start_live(scenario_id or st.session_state.scenario_id, mode))
+    model = st.session_state.get("model_choice")
+    model = model if mode == Mode.LOCAL and model and model != RULES_ONLY else None
+    _set_run(source.start_live(scenario_id or st.session_state.scenario_id, mode, model=model))
+
+
+def _model_chosen() -> None:
+    """The Model selector and the Mode radio say the same thing: a model means the local-model mode."""
+    st.session_state.mode_choice = LIVE_RULES if st.session_state.model_choice == RULES_ONLY else LIVE_LOCAL
+
+
+def _mode_chosen() -> None:
+    choice, models = st.session_state.mode_choice, local_models()
+    if choice == LIVE_RULES:
+        st.session_state.model_choice = RULES_ONLY
+    elif choice == LIVE_LOCAL and models and st.session_state.get("model_choice", RULES_ONLY) == RULES_ONLY:
+        st.session_state.model_choice = models[0]
 
 
 def _start_storm() -> None:
@@ -233,10 +255,21 @@ def sidebar(run: source.Run) -> None:
     available, reason = local_status()
     with st.sidebar:
         st.header("Run")
-        st.radio("Mode", MODES, key="mode_choice",
+        st.radio("Mode", MODES, key="mode_choice", on_change=_mode_chosen,
                  captions=["The agent's rules, no language model", f"{'Available' if available else 'Unavailable'}: "
                            f"{reason}", "Play back a recorded run"])
         choice = st.session_state.mode_choice
+        models = local_models()
+        options = [RULES_ONLY, *models]
+        if st.session_state.get("model_choice") not in options:
+            st.session_state.model_choice = models[0] if choice == LIVE_LOCAL and models else RULES_ONLY
+        if choice != REPLAY:
+            st.selectbox("Model", options, key="model_choice", on_change=_model_chosen,
+                         help="Rules only, or one of the models the local server lists at /models. The choice "
+                              "changes only the model name the agent's router calls.")
+            st.button(API_TIER, key="api_tier", disabled=True, width="stretch",
+                      help="An API model (ANTHROPIC_API_KEY, API_LLM_MODEL in .env) is not configured in this "
+                           "deployment: the console runs fully local.")
         if choice == REPLAY:
             replays = replay_choices()
             if replays:
