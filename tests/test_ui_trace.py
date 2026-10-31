@@ -122,3 +122,68 @@ def test_v1_replay_still_renders(tmp_path):
     at.run()
     assert not at.exception
     assert run.now - run.incident.start <= timedelta(hours=run.incident.duration_hours)
+
+
+# -- opening trajectory files (v3, bench-written, gzip) -----------------------------------------------
+
+FIXTURE = REPO_ROOT / "tests" / "fixtures" / "trajectory_v3_example.json"
+
+
+def test_trace_tab_renders_the_v3_fixture_end_to_end():
+    at = AppTest.from_file(str(APP), default_timeout=300)
+    at.run()
+    at.text_input(key="trace_path").input(str(FIXTURE)).run()
+    at.button(key="trace_open").click().run()
+    assert not at.exception
+    run = at.session_state.run
+    assert isinstance(run, live.ReplayRun) and run.log.version == 3
+    assert "Hidden while the run is in progress" in _page(at)  # the file has the key: still hidden
+    at.button(key="to_end").click().run()
+    assert not at.exception
+    page = _page(at)
+    assert f"Turn {len(run.log.polls)}" in page
+    gate = [d.value for d in at.dataframe if "Gate" in getattr(d.value, "columns", [])]
+    gates = {v for df in gate for v in df["Gate"]}
+    assert {"auto (allowlisted)", "needs approval"} <= gates
+    assert "applied by the operator" in {v for df in gate for v in df["Decision"]}
+    candidates = [d.value for d in at.dataframe if "Selected" in getattr(d.value, "columns", [])]
+    assert {"✓ selected", "not selected"} <= {v for df in candidates for v in df["Selected"]}  # v3 alternatives
+    checks = [d.value for d in at.dataframe if "Verdict" in getattr(d.value, "columns", [])]
+    assert any(v.startswith("OK:") for df in checks for v in df["Verdict"])  # v3 records the checks that passed
+
+
+def test_trajectory_files_plain_gzip_and_folders(tmp_path):
+    import gzip
+    import shutil
+
+    folder = tmp_path / "final"
+    (folder / "trajectories").mkdir(parents=True)
+    shutil.copy(FIXTURE, folder / "trajectories" / "scn_0007__raqeeb_rules.json")
+    (folder / "trajectories" / "scn_0007__raqeeb_local.json.gz").write_bytes(gzip.compress(FIXTURE.read_bytes()))
+    (folder / "summary.csv").write_text("agent\n", encoding="utf-8")
+    files = source.trajectory_files(folder)
+    assert [f.name for f in files] == ["scn_0007__raqeeb_local.json.gz", "scn_0007__raqeeb_rules.json"]
+    assert source.trajectory_files(files[1]) == [files[1]] and source.trajectory_files(tmp_path / "none") == []
+    plain = source.start_replay(files[1])
+    zipped = source.start_replay(files[0])
+    uploaded = source.start_replay(gzip.compress(FIXTURE.read_bytes()))  # an upload hands over bytes
+    assert plain.log == zipped.log == uploaded.log
+
+    at = AppTest.from_file(str(APP), default_timeout=300)
+    at.run()
+    at.text_input(key="trace_path").input(str(folder)).run()
+    at.selectbox(key="trace_pick").set_value(str(files[0])).run()
+    at.button(key="trace_open").click().run()
+    assert not at.exception and at.session_state.run.log == zipped.log
+
+
+def test_a_bad_file_gives_a_message_not_an_exception(tmp_path):
+    bad = tmp_path / "not_a_run.json"
+    bad.write_text('{"format": "something-else"}', encoding="utf-8")
+    at = AppTest.from_file(str(APP), default_timeout=300)
+    at.run()
+    before = at.session_state.run
+    at.text_input(key="trace_path").input(str(bad)).run()
+    at.button(key="trace_open").click().run()
+    assert not at.exception and at.session_state.run is before
+    assert any("Could not open" in e.value for e in at.error)

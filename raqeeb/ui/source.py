@@ -13,6 +13,7 @@ scenarios/practice_unknown/pru_*) and generated dust storms; the held-out sets a
 
 from __future__ import annotations
 
+import gzip
 import html
 import os
 import re
@@ -36,7 +37,7 @@ from raqeeb.contracts import (
 from raqeeb.faults.generator import is_trap, load_scenarios, storm_scenario
 from raqeeb.tools import physics as tool_physics
 from raqeeb.ui.live import LiveRun, ReplayRun
-from raqeeb.ui.runlog import Mode, RunLog
+from raqeeb.ui.runlog import GZIP_MAGIC, Mode, RunLog
 
 Run = LiveRun | ReplayRun
 
@@ -96,9 +97,24 @@ def replay_title(path: Path) -> str:
 
 
 def start_replay(source: Path | str | bytes) -> ReplayRun:
-    """A replay from a file path or the bytes of an uploaded file."""
-    log = RunLog.load(Path(source)) if isinstance(source, (str, Path)) else RunLog.from_json(source)
-    return ReplayRun(log)
+    """A replay from a file path or the bytes of an uploaded file (plain or gzip-compressed JSON)."""
+    if isinstance(source, (str, Path)):
+        return ReplayRun(RunLog.load(Path(source)))
+    raw = gzip.decompress(source) if source[:2] == GZIP_MAGIC else source
+    return ReplayRun(RunLog.from_json(raw))
+
+
+def trajectory_files(path: Path | str) -> list[Path]:
+    """Replay / trajectory files at `path`: the file itself, or the *.json and *.json.gz in a folder (and in
+    its trajectories/ subfolder, where the bench writes them), sorted by name."""
+    path = Path(path)
+    if path.is_file():
+        return [path]
+    if not path.is_dir():
+        return []
+    found = [p for folder in (path, path / "trajectories") if folder.is_dir()
+             for pattern in ("*.json", "*.json.gz") for p in folder.glob(pattern)]
+    return sorted(set(found), key=lambda p: (p.parent != path, p.name))
 
 
 def mode_label(run: Run) -> str:
