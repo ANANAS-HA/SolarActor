@@ -1,37 +1,49 @@
-"""What the console records about one run, and the replay JSON format.
+"""What is recorded about one agent run: the console's replay file and the bench's trajectory file.
 
-A live run (ui/live.py) fills a RunLog poll by poll; a replay loads one from a JSON file. The
-console draws both the same way: from the log and a telemetry store, cut at the current sim time.
+A live run (ui/live.py) or a bench run (bench/harness.py) fills a RunLog poll by poll through a
+Recorder; a replay loads one from a JSON file. The console draws both the same way: from the log
+and a telemetry store, cut at the current sim time. `python -m raqeeb.bench.trajectory <file>`
+prints one turn by turn.
 
-Replay file (format "raqeeb-replay", version 2), one JSON object:
+Replay / trajectory file (format "raqeeb-replay", version 3), one JSON object:
 
-    format, version      "raqeeb-replay", 2
+    format, version      "raqeeb-replay", 3
     label                how it was recorded, shown on screen, e.g. "recorded with test model"
-    mode                 "rules" | "local" | "test" (test = scripted stand-in for the model, no LLM)
+    mode                 "rules" | "local" | "test" | "bench" (test = scripted stand-in for the model, no LLM;
+                         bench = written by the bench harness, any agent, a simulated operator decides)
     agent, model         agent name; model name ("" for rules only)
     recorded_at          UTC, ISO 8601
     poll_min             sim minutes between agent polls
     incident             {id, start, duration_hours}: all the agent was told (AgentScenario)
     telemetry            {table: [row, ...]} for every table in contracts.TABLE_MODELS, audit included
-    polls                one per agent poll, in order: ts, outcomes the agent received, timeline entries,
-                         diagnosis (when it changed), actions requested, verifications, escalations,
-                         llm_calls, tool findings (when they changed), report (when written), agent_s,
-                         notes (technician notes posted since the last poll), proposals (model proposals
-                         and how the agent's tool test decided them, see ProposalRecord)
-    actions              every action request: gate, decision (who, when, note), status, effective_at,
-                         cause (label of the cause the agent requested it for)
+    polls                one per agent poll, in order (agent-side data only: what the agent saw, computed and
+                         decided; nothing from the answer key):
+                           ts, final, outcomes the agent received, timeline entries, diagnosis (when it
+                           changed), actions requested, verifications, escalations, llm_calls, findings
+                           (tool results with a finding, when they changed), report (when written), agent_s,
+                           notes (technician notes since the last poll), proposals (model proposals and how the
+                           agent's test decided them)                                          -- v1 / v2
+                           checks (every tool result of the poll: tool, devices, window, verdict, values,
+                           thresholds, evidence), symptoms (active: id, kind, device, since), candidates (the
+                           ranker's candidates with scores, selected or not), gate (each planned request with
+                           the safety gate's decision: auto / needs_approval / rejected, and the reason),
+                           transcripts ({purpose, prompt, reply} per model call; empty unless enabled)  -- v3
+    actions              every action request: gate, decision (who, when, note), status, effective_at, cause
     finished             true once the run reached the end of its window
-    answer_key           planted faults and root causes; null until the run has finished
+    answer_key           planted faults and root causes; null until the run has finished   (not agent-side)
+    bench                bench-only truth: per-poll mitigation state from the twin, energy, reference energies,
+                         storm windows; null unless the bench harness wrote the file     (not agent-side)
 
-Version 1 files (no notes, proposals or action causes) still load: from_json upgrades them, taking
-the notes from the recorded technician_notes table and the proposals from the recorded timeline.
+Version 1 files (no notes, proposals, action causes or v3 fields) and version 2 files (no v3 fields)
+still load: the fields they lack are empty. The gzip form (<name>.json.gz) loads the same way.
 
-Model types are the contracts' (ActionRequest, Diagnosis, Verification, LlmCall, ...); the types
-here are the console's own record of a run, used only by raqeeb/ui.
+Model types are the contracts' (ActionRequest, Diagnosis, Verification, LlmCall, ToolResult, ...); the
+types here are the record of a run, used by raqeeb/ui and raqeeb/bench.
 """
 
 from __future__ import annotations
 
+import gzip
 import json
 from datetime import datetime, timezone
 from enum import StrEnum
@@ -46,11 +58,13 @@ from raqeeb.contracts import (
     ActionRequest,
     ActionStatus,
     AgentScenario,
+    AgentTurn,
     Diagnosis,
     Escalation,
     FaultSpec,
     IncidentReport,
     LlmCall,
+    LlmRole,
     ToolResult,
     UtcDatetime,
     Verification,
@@ -58,20 +72,24 @@ from raqeeb.contracts import (
 from raqeeb.telemetry.store import TelemetryStore
 
 REPLAY_FORMAT = "raqeeb-replay"
-REPLAY_VERSION = 2
-READABLE_VERSIONS = (1, 2)
+REPLAY_VERSION = 3
+READABLE_VERSIONS = (1, 2, 3)
+GZIP_MAGIC = b"\x1f\x8b"
 
 
 class Mode(StrEnum):
     RULES = "rules"
     LOCAL = "local"
     TEST = "test"  # the scripted test model (ui/testmodel.py): exercises the LLM path, no language model
+    BENCH = "bench"  # written by the bench harness (any agent); gated actions decided by the simulated operator
 
 
+LIVE_MODES = (Mode.RULES, Mode.LOCAL, Mode.TEST)  # modes the console can start a run in
 MODE_LABEL = {Mode.RULES: "Live: rules only", Mode.LOCAL: "Live: rules + local model",
-              Mode.TEST: "Live: rules + test model (scripted, not a language model)"}
+              Mode.TEST: "Live: rules + test model (scripted, not a language model)",
+              Mode.BENCH: "Benchmark run"}
 RECORDED_LABEL = {Mode.RULES: "recorded with rules only", Mode.LOCAL: "recorded with the local model",
-                  Mode.TEST: "recorded with test model"}
+                  Mode.TEST: "recorded with test model", Mode.BENCH: "recorded by the bench harness"}
 
 
 class _Record(BaseModel):
@@ -84,6 +102,9 @@ class TimelineItem(_Record):
     actor: str = "agent"  # "agent", "operator", "console"
     summary: str
     details: dict[str, Any] = Field(default_factory=dict)
+
+
+# -- v2 records (console, phase2/lane-c): kept so version 2 files load; filled by the console ----------
 
 
 class NoteRecord(_Record):
@@ -118,6 +139,55 @@ class ProposalRecord(_Record):
     llm_s: float = 0.0  # time of the model call(s) that proposed it
 
 
+# -- v3 records: the agent's reasoning per poll ---------------------------------------------------
+
+
+class SymptomRecord(_Record):
+    """A symptom the tools report as active at this poll (agent/investigate.py)."""
+
+    id: str  # "KIND:device" (or "KIND:code:device" for alarms)
+    kind: str  # contracts.SymptomKind value
+    device: str  # device id, or PLANT_TARGET for plant-wide
+    since: UtcDatetime  # onset the tools computed (kept from the first poll that saw it)
+    summary: str = ""  # the tool's one-line summary of it, computed by code
+
+
+class CandidateRecord(_Record):
+    """A cause the ranker considered this poll (agent/rank.py): selected into the diagnosis or not."""
+
+    id: str
+    label: str  # FAULT_TYPE@TARGET (the first target for a multi-target cause)
+    fault_type: str
+    targets: list[str]
+    score: float  # rank.py score: selected causes in the simplest explanation, alternatives standalone
+    selected: bool
+    explains: list[str] = Field(default_factory=list)  # symptom ids
+    evidence: list[str] = Field(default_factory=list)
+
+
+class GateDecision(StrEnum):
+    AUTO = "auto"  # allowlisted, no approval needed: sent to the environment to run
+    NEEDS_APPROVAL = "needs_approval"  # allowlisted but gated: sent, the environment asks a human
+    REJECTED = "rejected"  # held back by the agent's safety gate: never sent
+
+
+class GateRecord(_Record):
+    """One planned ActionRequest and what the agent's safety gate (agent/safety.py) decided."""
+
+    request: ActionRequest
+    decision: GateDecision
+    reason: str = ""  # why it was held back ("" when sent)
+    cause: str = ""  # label of the cause the plan requested it for
+
+
+class Transcript(_Record):
+    """The text of one model call; recorded only when the gateway keeps transcripts (opt-in)."""
+
+    purpose: str  # LlmCall.purpose, in the order of the poll's llm_calls
+    prompt: str  # the messages sent, one "[role]" block each
+    reply: str  # the model's reply text ("" when the call failed)
+
+
 class PollRecord(_Record):
     ts: UtcDatetime
     final: bool = False
@@ -131,8 +201,15 @@ class PollRecord(_Record):
     findings: list[ToolResult] | None = None  # tool results with a finding; None = same as the last poll
     report: IncidentReport | None = None
     agent_s: float = 0.0  # wall-clock seconds the agent took for this poll
+    # v2 (filled by the console)
     notes: list[NoteRecord] = Field(default_factory=list)  # technician notes posted since the last poll
     proposals: list[ProposalRecord] = Field(default_factory=list)  # model proposals decided at this poll
+    # v3 (from the agent's memory after the poll; empty for agents without one)
+    checks: list[ToolResult] = Field(default_factory=list)  # every tool result of this poll, finding or not
+    symptoms: list[SymptomRecord] = Field(default_factory=list)  # active symptoms after this poll
+    candidates: list[CandidateRecord] = Field(default_factory=list)  # the ranker's candidates, best first
+    gate: list[GateRecord] = Field(default_factory=list)  # planned requests and the safety gate's decisions
+    transcripts: list[Transcript] = Field(default_factory=list)  # one per llm_call when enabled, else empty
 
 
 class ActionEntry(_Record):
@@ -140,7 +217,7 @@ class ActionEntry(_Record):
     requested_at: UtcDatetime
     gated: bool  # needs human approval per configs/actions.yaml
     status: ActionStatus | None = None  # None = waiting for a decision
-    decided_by: str = ""  # "auto" (allowlisted, no approval needed) or "operator"
+    decided_by: str = ""  # "auto" (allowlisted, no approval needed), "operator", or the bench's simulated human
     decided_at: UtcDatetime | None = None
     note: str = ""  # operator note, or why it failed
     effective_at: UtcDatetime | None = None  # when a delayed action takes effect in the plant
@@ -150,6 +227,23 @@ class ActionEntry(_Record):
 class AnswerKey(_Record):
     faults: list[FaultSpec]
     root_causes: list[str]
+
+
+class MitigationRecord(_Record):
+    ts: UtcDatetime
+    mitigated: dict[str, bool]  # answer-key label -> mitigated in the twin state after this poll
+
+
+class BenchTruth(_Record):
+    """BENCH-ONLY TRUTH, read from the twin by the harness. Never shown to the agent, never part of a
+    poll's agent-side data (tests/leakcheck applies to the polls, not to this section)."""
+
+    polls: list[MitigationRecord] = Field(default_factory=list)
+    energy_mwh: float | None = None  # plant energy of this run (twin.truth)
+    no_action_mwh: float | None = None  # the same faults, nobody fixes anything
+    decoy_only_mwh: float | None = None  # only the decoys: output with no real fault at all
+    storms: list[tuple[UtcDatetime, UtcDatetime]] = Field(default_factory=list)  # dust-storm windows [start, end)
+    control: bool = False  # this is the neutral-text control run of an injected-instruction scenario
 
 
 class RunLog(_Record):
@@ -167,6 +261,7 @@ class RunLog(_Record):
     actions: list[ActionEntry] = Field(default_factory=list)
     finished: bool = False
     answer_key: AnswerKey | None = None  # set only when the run has finished
+    bench: BenchTruth | None = None  # bench-only truth (see BenchTruth); None for console runs
 
     # -- views ------------------------------------------------------------------
 
@@ -226,8 +321,14 @@ class RunLog(_Record):
         return self.model_dump_json()
 
     def save(self, path: Path) -> Path:
+        """Write the log; a ".gz" suffix writes it gzip-compressed."""
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(self.to_json(), encoding="utf-8", newline="\n")
+        text = self.to_json()
+        if path.suffix == ".gz":
+            with gzip.open(path, "wt", encoding="utf-8", newline="\n") as f:
+                f.write(text)
+        else:
+            path.write_text(text, encoding="utf-8", newline="\n")
         return path
 
     @classmethod
@@ -238,29 +339,39 @@ class RunLog(_Record):
         if data.get("version") not in READABLE_VERSIONS:
             raise ValueError(f"replay version {data.get('version')!r} not supported (expected one of "
                              f"{', '.join(map(str, READABLE_VERSIONS))})")
-        log = cls.model_validate(data)
-        return _upgrade_v1(log) if data["version"] == 1 else log
+        log = _derive_v2(cls.model_validate(data))
+        # An older file becomes a current-version object (its missing fields are empty), so saving it again
+        # writes a file that a reader of this version accepts
+        return log if log.version == REPLAY_VERSION else log.model_copy(update={"version": REPLAY_VERSION})
 
     @classmethod
     def load(cls, path: Path) -> RunLog:
-        return cls.from_json(path.read_text(encoding="utf-8"))
+        """Load a plain or gzip-compressed file (detected by content, whatever the suffix)."""
+        raw = path.read_bytes()
+        if raw[:2] == GZIP_MAGIC:
+            raw = gzip.decompress(raw)
+        return cls.from_json(raw.decode("utf-8"))
 
 
-def _upgrade_v1(log: RunLog) -> RunLog:
-    """Version 1 had no notes or proposals per poll: take them from the recorded telemetry and timeline."""
-    from raqeeb.ui.proposals import proposals_from_poll
+def _derive_v2(log: RunLog) -> RunLog:
+    """A file with no notes or no proposals in any poll (version 1, or written without them) gets them
+    derived as a live run records them: notes from its technician_notes table, proposals from its timeline."""
+    if not any(p.notes for p in log.polls):
+        notes = sorted((NoteRecord(ts=r["ts"], source="technician", author=r["author"], about=r["area_or_device"],
+                                   text=r["text"]) for r in log.telemetry.get("technician_notes", [])),
+                       key=lambda n: n.ts)
+        previous = None
+        for poll in log.polls:
+            poll.notes = [n for n in notes if (previous is None or n.ts > previous) and n.ts <= poll.ts]
+            previous = poll.ts
+    if not any(p.proposals for p in log.polls):
+        from raqeeb.ui.proposals import proposals_from_poll
 
-    notes = sorted((NoteRecord(ts=r["ts"], source="technician", author=r["author"], about=r["area_or_device"],
-                               text=r["text"]) for r in log.telemetry.get("technician_notes", [])),
-                   key=lambda n: n.ts)
-    previous = None
-    findings: list[ToolResult] = []
-    for poll in log.polls:
-        poll.notes = [n for n in notes if (previous is None or n.ts > previous) and n.ts <= poll.ts]
-        findings = poll.findings if poll.findings is not None else findings
-        poll.proposals = proposals_from_poll(poll.ts, poll.timeline, poll.llm_calls, findings)
-        previous = poll.ts
-    return log.model_copy(update={"version": REPLAY_VERSION})
+        findings: list[ToolResult] = []
+        for poll in log.polls:
+            findings = poll.findings if poll.findings is not None else findings
+            poll.proposals = proposals_from_poll(poll.ts, poll.timeline, poll.llm_calls, poll.checks or findings)
+    return log
 
 
 def _decision_item(a: ActionEntry) -> TimelineItem:
@@ -268,6 +379,187 @@ def _decision_item(a: ActionEntry) -> TimelineItem:
     return TimelineItem(ts=a.decided_at, node="approval", actor="operator",
                         summary=f"operator {verb} {a.request.action.value} on {a.request.target} ({a.request.id})",
                         details={"note": a.note} if a.note else {})
+
+
+# -- filling a log poll by poll (shared by ui/live.py and bench/harness.py) -------------------------
+
+
+class Recorder:
+    """Fills `log` from what the environment hands the agent and what the agent returns, plus (for an agent
+    with a `memory`, i.e. RaqeebAgent) its timeline, tool results, symptoms, candidates and gate decisions,
+    read after each poll. Reads only; the agent is never changed.
+
+        rec = Recorder(log, agent)
+        rec.poll(now, final, outcomes, turn, agent_s)          # one PollRecord
+        entry = rec.request(request, now, gated)               # the environment's gate: an ActionEntry
+        rec.settle(entry, status, by="auto", at=now, note="", effective_at=None)
+        rec.finish(faults, root_causes, store)                 # answer key + telemetry, once the run has ended
+    """
+
+    def __init__(self, log: RunLog, agent: Any):
+        self.log = log
+        self.agent = agent
+        self._timeline_seen = 0
+        self._last_findings: list[dict] | None = None
+        self._transcripts_seen = 0
+        self._notes_seen = 0
+
+    @property
+    def memory(self) -> Any | None:
+        return getattr(self.agent, "memory", None)
+
+    @property
+    def gateway(self) -> Any | None:
+        return getattr(getattr(self.agent, "router", None), "gateway", None)
+
+    def poll(self, now: datetime, final: bool, outcomes: list[ActionOutcome], turn: AgentTurn,
+             agent_s: float = 0.0, store: Any | None = None) -> PollRecord:
+        """`store` (the environment's telemetry store) gives the technician notes posted since the last poll;
+        without it the notes are derived from the saved telemetry when the file is loaded."""
+        record = PollRecord(ts=now, final=final, outcomes=list(outcomes), diagnosis=turn.diagnosis,
+                            actions=list(turn.actions), verifications=list(turn.verifications),
+                            escalations=list(turn.escalations), llm_calls=list(turn.llm_calls), report=turn.report,
+                            agent_s=agent_s)
+        record.timeline = self._take_timeline()
+        record.findings = self._take_findings()
+        memory = self.memory
+        if memory is not None:
+            record.checks = list(memory.results.values())
+            record.symptoms = active_symptoms(memory)
+            record.candidates = rank_candidates(memory)
+            record.gate = gate_records(memory, record.timeline, turn.actions)
+        record.transcripts = self._take_transcripts()
+        record.notes = self._take_notes(store)
+        record.proposals = self._take_proposals(record)
+        self.log.polls.append(record)
+        return record
+
+    def request(self, request: ActionRequest, requested_at: datetime, gated: bool) -> ActionEntry:
+        """The environment received `request`; `gated` per configs/actions.yaml. Returns the new entry."""
+        entry = ActionEntry(request=request, requested_at=requested_at, gated=gated,
+                            cause=cause_of(self.memory, request.id))
+        self.log.actions.append(entry)
+        return entry
+
+    @staticmethod
+    def settle(entry: ActionEntry, status: ActionStatus, by: str, at: datetime, note: str = "",
+               effective_at: datetime | None = None) -> None:
+        entry.status, entry.decided_by, entry.decided_at, entry.note = status, by, at, note
+        entry.effective_at = effective_at
+
+    def finish(self, faults: list[FaultSpec], root_causes: list[str], store: Any | None) -> None:
+        """End of run: the answer key goes into the log (shown only now) and the telemetry is attached."""
+        if self.log.finished:
+            return
+        self.log.answer_key = AnswerKey(faults=list(faults), root_causes=list(root_causes))
+        self.log.finished = True
+        if store is not None:
+            self.log.telemetry = dump_telemetry(store)
+
+    # -- what the agent did ---------------------------------------------------------
+
+    def _take_timeline(self) -> list[TimelineItem]:
+        memory = self.memory
+        if memory is None:
+            return []
+        new = memory.timeline[self._timeline_seen:]
+        self._timeline_seen = len(memory.timeline)
+        return [TimelineItem(ts=e.ts, node=e.node, summary=e.summary, details=plain(e.details)) for e in new]
+
+    def _take_findings(self) -> list[ToolResult] | None:
+        memory = self.memory
+        findings = [r for r in (memory.results.values() if memory else []) if r.finding]
+        dumped = [r.model_dump(mode="json") for r in findings]
+        if dumped == self._last_findings:
+            return None
+        self._last_findings = dumped
+        return findings
+
+    def _take_notes(self, store: Any | None) -> list[NoteRecord]:
+        if store is None:
+            return []
+        rows = store.read("technician_notes")
+        new = rows.iloc[self._notes_seen:]
+        self._notes_seen = len(rows)
+        return [NoteRecord(ts=ts.to_pydatetime(), source="technician", author=r.author, about=r.area_or_device,
+                           text=r.text) for ts, r in zip(new.index, new.itertuples())]
+
+    def _take_proposals(self, record: PollRecord) -> list[ProposalRecord]:
+        """The model proposals the agent decided this poll (ui/proposals.py reads its consult lines)."""
+        memory = self.memory
+        if memory is None:
+            return []
+        from raqeeb.ui.proposals import proposals_from_poll
+
+        evidence = {label: list(c.hypothesis.evidence) for label, c in memory.causes.items()}
+        return proposals_from_poll(record.ts, record.timeline, record.llm_calls, memory.results.values(), evidence,
+                                   getattr(getattr(memory, "plant", None), "layout", None))
+
+    def _take_transcripts(self) -> list[Transcript]:
+        gateway = self.gateway
+        kept = getattr(gateway, "transcripts", None)
+        if not kept:
+            return []
+        new = kept[self._transcripts_seen:]
+        self._transcripts_seen = len(kept)
+        return [Transcript(purpose=t["purpose"], prompt=t["prompt"], reply=t["reply"]) for t in new]
+
+
+def active_symptoms(memory: Any) -> list[SymptomRecord]:
+    out = []
+    for sid in sorted(memory.active):
+        s = memory.symptoms.get(sid)
+        if s is None:
+            continue
+        summary = s.evidence.get("summary", "") if isinstance(s.evidence, dict) else ""
+        out.append(SymptomRecord(id=s.id, kind=str(s.kind.value if hasattr(s.kind, "value") else s.kind),
+                                 device=s.device_id, since=s.start, summary=str(summary)))
+    return out
+
+
+def rank_candidates(memory: Any) -> list[CandidateRecord]:
+    """The ranker's selection (memory.hypotheses, best first) then the candidates it left out
+    (memory.alternatives, standalone scores)."""
+    def record(h, selected: bool) -> CandidateRecord:
+        return CandidateRecord(id=h.id, label=h.labels[0] if h.targets else h.id, fault_type=h.fault_type.value,
+                               targets=list(h.targets), score=h.score, selected=selected,
+                               explains=list(h.explains), evidence=list(h.evidence))
+    return [record(h, True) for h in memory.hypotheses] + [record(h, False) for h in memory.alternatives]
+
+
+def gate_records(memory: Any, timeline: list[TimelineItem], sent: list[ActionRequest]) -> list[GateRecord]:
+    """Sent requests (auto or needs_approval, from the request's allowlist flags) followed by the requests
+    the safety gate held back this poll (its "held" details on the timeline, with the reason)."""
+    out = [GateRecord(request=r, decision=GateDecision.NEEDS_APPROVAL if r.needs_approval else GateDecision.AUTO,
+                      cause=cause_of(memory, r.id)) for r in sent]
+    for item in timeline:
+        if item.node != "safety":
+            continue
+        for held in item.details.get("held", []) or []:
+            try:
+                request = ActionRequest.model_validate(held["request"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            out.append(GateRecord(request=request, decision=GateDecision.REJECTED, reason=str(held.get("reason", "")),
+                                  cause=str(held.get("cause", ""))))
+    return out
+
+
+def cause_of(memory: Any, action_id: str) -> str:
+    pending = getattr(memory, "pending", None) or {}
+    p = pending.get(action_id)
+    return getattr(p, "cause", "") or ""
+
+
+def model_label(agent: Any) -> str:
+    """The model name for the log header: "" for an agent without a router."""
+    gateway = getattr(getattr(agent, "router", None), "gateway", None)
+    if gateway is None:
+        return ""
+    try:
+        return gateway.model_label(LlmRole.LOCAL)
+    except Exception:  # noqa: BLE001 - a header string only
+        return ""
 
 
 # -- telemetry in and out of a store ----------------------------------------------

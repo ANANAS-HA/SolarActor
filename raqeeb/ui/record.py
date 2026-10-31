@@ -17,7 +17,7 @@ from pathlib import Path
 
 from raqeeb.ui import source
 from raqeeb.ui.live import local_model_status
-from raqeeb.ui.runlog import Mode
+from raqeeb.ui.runlog import LIVE_MODES, Mode
 
 NOTE = "decided by the recording script (recorded run)"
 
@@ -36,7 +36,7 @@ def record(scenario_id: str, mode: Mode, out: Path | None = None, approve: bool 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--scenario", required=True, help="practice scenario id, e.g. scn_0007, or storm_<seed>")
-    parser.add_argument("--mode", choices=[m.value for m in Mode], default=Mode.RULES.value)
+    parser.add_argument("--mode", choices=[m.value for m in LIVE_MODES], default=Mode.RULES.value)
     parser.add_argument("--reject", action="store_true", help="reject every gated action (default: approve)")
     parser.add_argument("--label", help="label shown in the console (default from the mode)")
     parser.add_argument("--out", type=Path, help="output file (default raqeeb/ui/replays/<scenario>_<mode>.json)")

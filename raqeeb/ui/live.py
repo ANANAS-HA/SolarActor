@@ -14,6 +14,7 @@ actions with configs/actions.yaml, runs allowed ones with twin.controls.apply_ac
 outcomes back on the next poll. Unlike the bench, a gated action waits for an operator decision:
 the run pauses until decide() is called. Actions, decisions and verifications go to the audit table.
 The planted scenario stays inside LiveRun; its faults are copied into the log only when the run ends.
+The log is filled by runlog.Recorder, the same code the bench harness uses for its trajectory files.
 """
 
 from __future__ import annotations
@@ -37,23 +38,18 @@ from raqeeb.contracts import (
     AgentScenario,
     PlantConfig,
     Scenario,
-    ToolResult,
 )
 from raqeeb.faults.injector import FaultInjector
 from raqeeb.telemetry.store import TelemetryStore
 from raqeeb.twin.controls import apply_action
-from raqeeb.ui.proposals import proposals_from_poll
 from raqeeb.ui.runlog import (
     MODE_LABEL,
     RECORDED_LABEL,
     ActionEntry,
-    AnswerKey,
     Mode,
-    NoteRecord,
     PollRecord,
+    Recorder,
     RunLog,
-    TimelineItem,
-    dump_telemetry,
     load_telemetry,
     plain,
 )
@@ -126,10 +122,8 @@ class LiveRun:
         self.incident: AgentScenario = scenario.agent_view()
         self.log = RunLog(label=MODE_LABEL[mode], mode=mode, agent=self.agent.name, model=model_name(mode),
                           poll_min=poll_min, incident=self.incident)
+        self.rec = Recorder(self.log, self.agent)
         self._outcomes: list[ActionOutcome] = []
-        self._timeline_seen = 0
-        self._notes_seen = 0
-        self._last_findings: list[dict] | None = None
         self.delays = {ActionType.CREATE_CLEANING_WORK_ORDER: self.plant.controls.cleaning_delay_min,
                        ActionType.RESET_COMMS_GATEWAY: self.plant.controls.comms_reset_delay_min,
                        ActionType.DISPATCH_TECHNICIAN: self.plant.controls.technician_delay_min}
@@ -184,14 +178,7 @@ class LiveRun:
         outcomes, self._outcomes = self._outcomes, []
         started = time.perf_counter()
         turn = self.agent.step(now, outcomes, final=final)
-        record = PollRecord(ts=now, final=final, outcomes=outcomes, diagnosis=turn.diagnosis, actions=turn.actions,
-                            verifications=turn.verifications, escalations=turn.escalations,
-                            llm_calls=turn.llm_calls, report=turn.report, agent_s=time.perf_counter() - started)
-        record.timeline = self._take_timeline()
-        record.findings = self._take_findings()
-        record.notes = self._take_notes()
-        record.proposals = self._take_proposals(record)
-        self.log.polls.append(record)
+        record = self.rec.poll(now, final, outcomes, turn, agent_s=time.perf_counter() - started, store=self.store)
         for v in turn.verifications:
             self._audit("verify", "agent", v.model_dump(mode="json"))
         for e in turn.escalations:
@@ -219,10 +206,7 @@ class LiveRun:
 
     def _gate(self, request: ActionRequest) -> None:
         spec = self.specs.get(request.action)
-        pending = getattr(getattr(self.agent, "memory", None), "pending", {}).get(request.id)
-        entry = ActionEntry(request=request, requested_at=self.now, gated=bool(spec and spec.needs_approval),
-                            cause=getattr(pending, "cause", ""))
-        self.log.actions.append(entry)
+        entry = self.rec.request(request, self.now, gated=bool(spec and spec.needs_approval))
         self._audit("request", "agent", request.model_dump(mode="json"))
         if any(a.request.id == request.id for a in self.log.actions[:-1]):
             self._settle(entry, ActionStatus.FAILED, by="console", note=f"duplicate action id {request.id!r}")
@@ -247,8 +231,7 @@ class LiveRun:
 
     def _settle(self, entry: ActionEntry, status: ActionStatus, by: str, note: str = "",
                 effective_at: datetime | None = None) -> None:
-        entry.status, entry.decided_by, entry.decided_at, entry.note = status, by, self.now, note
-        entry.effective_at = effective_at
+        self.rec.settle(entry, status, by, self.now, note, effective_at)
         self._outcomes.append(ActionOutcome(action_id=entry.request.id, status=status, ts=self.now, note=note))
         self._audit("execute", "console", {"action_id": entry.request.id, "action": entry.request.action.value,
                                            "target": entry.request.target, "status": status.value, "note": note})
@@ -256,50 +239,11 @@ class LiveRun:
     def _audit(self, step: str, actor: str, payload: dict) -> None:
         self.store.write_audit(step, actor, plain(payload), self.now)
 
-    # -- what the agent did ---------------------------------------------------------
-
-    def _take_timeline(self) -> list[TimelineItem]:
-        memory = getattr(self.agent, "memory", None)
-        if memory is None:
-            return []
-        new = memory.timeline[self._timeline_seen:]
-        self._timeline_seen = len(memory.timeline)
-        return [TimelineItem(ts=e.ts, node=e.node, summary=e.summary, details=plain(e.details)) for e in new]
-
-    def _take_findings(self) -> list[ToolResult] | None:
-        memory = getattr(self.agent, "memory", None)
-        findings = [r for r in (memory.results.values() if memory else []) if r.finding]
-        dumped = [r.model_dump(mode="json") for r in findings]
-        if dumped == self._last_findings:
-            return None
-        self._last_findings = dumped
-        return findings
-
-    def _take_notes(self) -> list[NoteRecord]:
-        """Technician notes the plant posted since the last poll (the environment's table, not the agent's view)."""
-        rows = self.store.read("technician_notes")
-        new = rows.iloc[self._notes_seen:]
-        self._notes_seen = len(rows)
-        return [NoteRecord(ts=ts.to_pydatetime(), source="technician", author=r.author, about=r.area_or_device,
-                           text=r.text) for ts, r in zip(new.index, new.itertuples())]
-
-    def _take_proposals(self, record: PollRecord):
-        memory = getattr(self.agent, "memory", None)
-        if memory is None:
-            return []
-        evidence = {label: list(c.hypothesis.evidence) for label, c in memory.causes.items()}
-        return proposals_from_poll(record.ts, record.timeline, record.llm_calls, memory.results.values(),
-                                   evidence, self.plant.layout)
-
     def _close(self) -> None:
         """End of run: the answer key goes into the log (shown only now) and the telemetry is attached."""
-        if self.log.finished:
-            return
         s = self._scenario
         key = s.answer_key or s.expected_answer_key()
-        self.log.answer_key = AnswerKey(faults=s.faults, root_causes=list(key.root_causes))
-        self.log.finished = True
-        self.log.telemetry = dump_telemetry(self.store)
+        self.rec.finish(s.faults, list(key.root_causes), self.store)
 
     def recording(self, label: str | None = None) -> RunLog:
         """The replay log of a finished run, labelled for playback (e.g. "recorded with test model")."""
