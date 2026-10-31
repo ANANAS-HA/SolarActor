@@ -91,8 +91,7 @@ def test_summary_tab_renders_a_replay_and_jumps_to_a_turn():
     assert "Incident summary" in text and "Key moments" in text and "Shift report" in text
     labels = [m.label for m in at.metric]
     assert "Energy below expected" in labels and "Model calls" in labels
-    frames = {d.proto.id if hasattr(d, "proto") else i: d for i, d in enumerate(at.dataframe)}
-    assert len(frames) >= 2  # moments and causes
+    assert len(at.dataframe) >= 2  # the causes table, and the raw moments and causes behind Show data
     assert "العربية" in text  # the bilingual report, in the first tab
     go = [b for b in at.button if b.key and b.key.startswith("summary_go_")]
     assert go

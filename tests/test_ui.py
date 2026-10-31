@@ -387,4 +387,4 @@ def test_results_page_reads_the_bench_output(tmp_path):
     assert "Results not available yet" in _page(at)
     at.text_input(key="results_path").input(str(BENCH_DIR / "practice")).run()
     assert not at.exception
-    assert "raqeeb" in set(_table(at, "MWh recovered")["Agent"])
+    assert "Raqeeb" in set(_table(at, "MWh recovered")["Agent"])  # agent ids are shown in words

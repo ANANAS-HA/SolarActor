@@ -514,7 +514,7 @@ def action_text(action_type: str | ActionType, target: str = "", params: Mapping
     key = str(getattr(action_type, "value", action_type))
     params = params or {}
     d = device(target, plant) if target else "the device"
-    if key == ActionType.SET_POWER_LIMIT and params.get("kw") is None:
+    if key == ActionType.SET_POWER_LIMIT and "kw" in params and params["kw"] is None:
         return (f"Remove {d}'s output limit" if not past else f"Removed {d}'s output limit")
     template = ACTIONS.get(key)
     if template is None:

@@ -133,9 +133,15 @@ button[role="tab"] p { font-size: 1rem; }
        "ok": SEMANTIC["healthy"][0], "att": SEMANTIC["attention"][0]}
 
 
+def inline(text: object) -> str:
+    """Record text inside an HTML snippet given to st.markdown: neither markdown nor HTML is rendered
+    (the markdown parser still runs around allowed HTML, so both escapes are needed)."""
+    return html_text(md_escape(text))
+
+
 def chip(text: str, state: str) -> str:
     ink, bg = SEMANTIC.get(state, SEMANTIC["info"])
-    return f'<span class="rq-chip" style="color:{ink};background:{bg}">{html_text(text)}</span>'
+    return f'<span class="rq-chip" style="color:{ink};background:{bg}">{inline(text)}</span>'
 
 
 # -- data ------------------------------------------------------------------------------
@@ -477,7 +483,7 @@ def notification_strip(run: source.Run) -> None:
 
     if moments:
         last = moments[-1]
-        event = f'<span class="rq-time">{local_hhmm(last.ts)}</span> {html_text(last.said or last.text)}'
+        event = f'<span class="rq-time">{local_hhmm(last.ts)}</span> {inline(last.said or last.text)}'
     else:
         event = "Nothing has happened yet. Press Play, or Step for one agent turn."
     state = "human" if waiting else "critical" if escalated and not recovered else "healthy" if recovered else "info"
@@ -822,7 +828,7 @@ def actions_panel(run: source.Run) -> None:
             rows.append({"Time": local_hhmm(a.requested_at),
                          "Action": plain.action_text(a.request.action, a.request.target, a.request.params),
                          "For": plain.cause(a.cause) if a.cause else "",
-                         "Gate": plain.gate("needs_approval" if a.gated else "auto"),
+                         "Approval": plain.gate("needs_approval" if a.gated else "auto"),
                          "Outcome": plain.action_status(a.status) + (f" {plain.decided_by(a.decided_by)}" if a.status else ""),
                          "Takes effect": local_hhmm(a.effective_at) if a.effective_at else "",
                          "Verified": ("" if check is None else
@@ -922,10 +928,10 @@ def trace_card(card: trace.TurnCard, run: source.Run) -> None:
         title = f"Turn {card.index}, {local_hhmm(card.ts)}" + (" (final step)" if card.final else "")
         st.markdown((":violet-background[**%s**]" if focused else "**%s**") % title)
         if card.checks is not None and results:
-            st.markdown(f'<p class="rq-headline">{html_text(plain.checks_headline(results, named))}</p>',
+            st.markdown(f'<p class="rq-headline">{inline(plain.checks_headline(results, named))}</p>',
                         unsafe_allow_html=True)
         elif card.checks is None and named:
-            st.markdown(f'<p class="rq-headline">{html_text("Named: " + ", ".join(plain.cause_short(x) for x in named) + ".")}</p>',
+            st.markdown(f'<p class="rq-headline">{inline("Named: " + ", ".join(plain.cause_short(x) for x in named) + ".")}</p>',
                         unsafe_allow_html=True)
         for o in card.outcomes:
             st.markdown(f"- {md_escape(_outcome_sentence(o, actions_by_id))}")
@@ -937,8 +943,8 @@ def trace_card(card: trace.TurnCard, run: source.Run) -> None:
             found = [r for r in results if r.finding and r.tool not in plain.ALARM_TOOLS]
             quiet = [r for r in results if not r.finding]
             for r in found:
-                st.markdown(f'<div class="rq-found"><b>{html_text(plain.tool(r.tool))}:</b> '
-                            f'{html_text(plain.verdict(r))}</div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="rq-found"><b>{inline(plain.tool(r.tool))}:</b> '
+                            f'{inline(plain.verdict(r))}</div>', unsafe_allow_html=True)
             unsure = sum(1 for r in quiet if r.verdict == trace.INCONCLUSIVE)
             nothing = len(quiet) - unsure
             if quiet:
@@ -947,7 +953,7 @@ def trace_card(card: trace.TurnCard, run: source.Run) -> None:
                     words.append(f"{nothing} check{'s' if nothing != 1 else ''} found nothing")
                 if unsure:
                     words.append(f"{unsure} had too little data yet")
-                st.markdown(f'<p class="rq-quiet">{html_text(" and ".join(words))}.</p>', unsafe_allow_html=True)
+                st.markdown(f'<p class="rq-quiet">{inline(" and ".join(words))}.</p>', unsafe_allow_html=True)
         elif card.checks is not None:
             st.markdown('<p class="rq-quiet">Checks ran; nothing unusual.</p>', unsafe_allow_html=True)
         if card.candidates is not None and named:
@@ -1382,7 +1388,7 @@ def summary_tab(run: source.Run, power: pd.DataFrame) -> None:
     c.metric("Energy below expected", f"{e.lost_mwh:.2f} MWh",
              f"{e.lost_before_mwh:.2f} before first fix, {e.lost_after_mwh:.2f} after"
              if e.first_effective else "no fix in effect yet", delta_color="off")
-    d.metric("Shortfall (worst hour / last hour)",
+    d.metric("Shortfall, worst / last hour",
              "none yet" if e.gap_worst_pct is None else f"{e.gap_worst_pct:.0f}% / "
              + ("0%" if e.gap_last_pct is None else f"{e.gap_last_pct:.0f}%"))
     f.metric("Model calls", head.llm_calls, f"{head.llm_s:.1f} s in the model" if head.llm_calls else "rules only",
@@ -1401,7 +1407,7 @@ def summary_tab(run: source.Run, power: pd.DataFrame) -> None:
                 text_col, go_col = st.columns([7, 1])
                 state = OUTCOME_STATE.get(m.outcome)
                 mark = chip(m.outcome, state) if state else ""
-                text_col.markdown(f'<span class="rq-time">{local_hhmm(m.ts)}</span> {html_text(m.said or m.text)} {mark}',
+                text_col.markdown(f'<span class="rq-time">{local_hhmm(m.ts)}</span> {inline(m.said or m.text)} {mark}',
                                   unsafe_allow_html=True)
                 go_col.button(f"Turn {m.turn}", key=f"summary_moment_{i}", on_click=_jump_to_turn, args=(m.turn,),
                               width="stretch")
@@ -1527,12 +1533,18 @@ def answer_key_tab(run: source.Run) -> None:
                 + (f"; it also named {', '.join(md_escape(plain.cause(c)) for c in result.extra_causes)}, which were not planted."
                    if result.extra_causes else "."))
     faults = result.faults.copy()
-    faults.insert(1, "In words", faults["Planted fault"].map(plain.cause))
+    faults.insert(0, "What was planted", faults["Planted fault"].map(plain.cause))
+    faults["Agent actions on it"] = faults["Agent actions on it"].map(plain.humanize)
     st.dataframe(faults, hide_index=True, key="reveal_faults")
     st.markdown("**Actions against the answer key**")
     actions = result.actions.copy()
     if len(actions):
-        actions["Action"] = [plain.action_text(a, t) for a, t in zip(actions["Action"], actions["Target"])]
+        by_time = {(local_hhmm(a.requested_at), a.request.action.value, a.request.target): a.request.params
+                   for a in run.log.actions_until(run.now)}
+        actions["Action"] = [plain.action_text(a, t, by_time.get((ts, a, t), {}))
+                             for ts, a, t in zip(actions["Time"], actions["Action"], actions["Target"])]
+        actions["Target"] = actions["Target"].map(plain.device)
+        actions["Status"] = actions["Status"].map(plain.action_status)
         actions["Addresses"] = actions["Addresses"].map(lambda s: ", ".join(plain.cause(x) for x in s.split(", "))
                                                         if "@" in str(s) else s)
     st.dataframe(actions, hide_index=True, key="reveal_actions")
