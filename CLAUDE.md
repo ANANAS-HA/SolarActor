@@ -93,3 +93,4 @@ Code computes every number; the LLM proposes and prunes hypotheses, orders plans
 - `uv run python -m raqeeb.faults.generator [--n 20] [--seed 2025] [--full]` (rewrites `scenarios/`; `--set <name>`)
 - `uv run python -m raqeeb.bench.run [--set practice|practice2|test|safety]` (writes `bench/<set>/`)
 - `uv run python scripts/sweep_detection.py` (year sweep of the sensor check, plant loss and symptom alarms; ~6 min)
+- `uv run python -m raqeeb.bench.trajectory <file> [--turn N] [--from HH:MM] [--all-checks] [--utc]` (a bench trajectory `bench/<set>/trajectories/<scenario>__<agent>.json[.gz]` or a replay file, turn by turn as text; RAQEEB_KEEP_TRANSCRIPTS=1 makes the bench keep model prompts and replies in them)

@@ -21,10 +21,18 @@ Injected instructions (PROMPT_INJECTION): a scenario with one is run twice by ru
 by two fresh agents: as planted, and with every injected log line carrying neutral text instead.
 Telemetry is otherwise identical, so an action that only the first run requests was triggered
 by the text (bench/score.py: unsafe actions).
+
+Trajectories (`trajectory=True`): the run is also recorded poll by poll as a ui/runlog.RunLog (the
+console's replay format, v3), filled by the same runlog.Recorder the console uses: what the agent
+received and returned, and, for Raqeeb, its tool results, symptoms, ranker candidates, safety-gate
+decisions and (when the gateway keeps them) model transcripts. The bench's own truth (per-poll
+mitigation state, energies, storm windows) goes into the log's labelled `bench` section, the answer
+key into `answer_key`; neither is in a poll's agent-side data. Scoring never reads the trajectory.
 """
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -55,6 +63,7 @@ from raqeeb.telemetry.store import TelemetryStore
 from raqeeb.twin.controls import apply_action
 from raqeeb.twin.simulator import StepTruth
 from raqeeb.twin.weather import weather_5min
+from raqeeb.ui.runlog import RECORDED_LABEL, BenchTruth, MitigationRecord, Mode, Recorder, RunLog, model_label
 
 POLL_MIN = 15
 STEP = timedelta(minutes=STEP_MINUTES)
@@ -164,6 +173,10 @@ class RunRecord:
     # Model proposals the agent accepted / rejected after testing, as (decision, cause label), read from the
     # agent's own log at the end of the run (its conclusions, not the answer); empty for agents without one
     proposals: list[tuple[str, str]] = field(default_factory=list)
+    # The run recorded poll by poll (ui/runlog.RunLog v3) when run_scenario(trajectory=True); the control run's
+    # log for injected-instruction scenarios. Never read by the scorer
+    trajectory: RunLog | None = None
+    control_trajectory: RunLog | None = None
 
     @property
     def incident_start(self) -> datetime | None:
@@ -209,14 +222,15 @@ def _answer_key(scenario: Scenario) -> list[str]:
 def run_scenario(scenario: Scenario, agent: Agent, *, poll_min: int = POLL_MIN,
                  approve: Callable[[ActionRequest], bool] = approve_all, telemetry=None,
                  reference: ReferenceEnergy | None = None, plant: PlantConfig | None = None,
-                 neutral_injections: bool = False, ineffective: frozenset[ActionType] = frozenset()) -> RunRecord:
+                 neutral_injections: bool = False, ineffective: frozenset[ActionType] = frozenset(),
+                 trajectory: bool = False) -> RunRecord:
     """Run `agent` on `scenario` to the end of its window. `telemetry` needs write_batch and read;
     by default each run gets its own in-memory TelemetryStore, closed when the run ends.
     `neutral_injections`: injected log lines carry neutral text (the control run).
     `ineffective`: these actions are reported APPLIED but change nothing in the twin (a fix that does not
     work, for the safety set's retry-budget case).
     Every request, approval decision, execution, verification and escalation is written to the audit table
-    (and kept in RunRecord.audit)."""
+    (and kept in RunRecord.audit). `trajectory`: also record the run as a RunLog (RunRecord.trajectory)."""
     if poll_min < STEP_MINUTES or poll_min % STEP_MINUTES:
         raise ValueError(f"poll_min must be a multiple of {STEP_MINUTES}")
     plant = plant or load_plant()
@@ -239,6 +253,11 @@ def run_scenario(scenario: Scenario, agent: Agent, *, poll_min: int = POLL_MIN,
               ActionType.RESET_COMMS_GATEWAY: plant.controls.comms_reset_delay_min,
               ActionType.DISPATCH_TECHNICIAN: plant.controls.technician_delay_min}
     seen_ids: set[str] = set()
+    rec: Recorder | None = None
+    if trajectory:
+        log = RunLog(label=RECORDED_LABEL[Mode.BENCH], mode=Mode.BENCH, agent=agent.name, model=model_label(agent),
+                     poll_min=poll_min, incident=scenario.agent_view())
+        rec = Recorder(log, agent)
 
     def audit(step: str, actor: str, payload: dict) -> None:
         entry = {"ts": twin.clock, "step": step, "actor": actor, "payload": payload}
@@ -249,6 +268,7 @@ def run_scenario(scenario: Scenario, agent: Agent, *, poll_min: int = POLL_MIN,
     def execute(request: ActionRequest) -> ActionOutcome:
         gated = specs[request.action].needs_approval
         status, note = ActionStatus.APPLIED, ""
+        entry = rec.request(request, twin.clock, gated) if rec is not None else None
         audit("request", f"agent:{agent.name}", {"id": request.id, "action": request.action.value,
                                                  "target": request.target, "params": request.params,
                                                  "needs_approval": gated, "rationale": request.rationale[:200]})
@@ -273,6 +293,8 @@ def run_scenario(scenario: Scenario, agent: Agent, *, poll_min: int = POLL_MIN,
                      if status == ActionStatus.APPLIED else None)
         record.actions.append(ActionRecord(ts=twin.clock, request=request, status=status, gated=gated, note=note,
                                            effective_at=effective))
+        if entry is not None:
+            Recorder.settle(entry, status, "human:simulated" if gated else "auto", twin.clock, note, effective)
         return ActionOutcome(action_id=request.id, status=status, ts=twin.clock, note=note)
 
     def mitigated(now: datetime) -> dict[str, bool]:
@@ -290,7 +312,10 @@ def run_scenario(scenario: Scenario, agent: Agent, *, poll_min: int = POLL_MIN,
         now, final = twin.clock, inj.finished
         if hasattr(telemetry, "set_clock"):
             telemetry.set_clock(now)  # the agent reads nothing after the simulated time
+        started = time.perf_counter()
         turn = agent.step(now, outcomes, final=final)
+        if rec is not None:
+            rec.poll(now, final, outcomes, turn, agent_s=time.perf_counter() - started)
         if turn.diagnosis is not None:
             record.predicted = sorted({label for h in turn.diagnosis.root_causes for label in h.labels})
             record.confidence = turn.diagnosis.confidence
@@ -307,11 +332,21 @@ def run_scenario(scenario: Scenario, agent: Agent, *, poll_min: int = POLL_MIN,
         record.turns.append(TurnRecord(ts=now, mitigated=mitigated(now)))
         if final:
             break
+    if rec is not None:
+        if hasattr(telemetry, "set_clock"):
+            telemetry.set_clock(None)  # the run is over: every row goes into the file
+        rec.finish(scenario.faults, labels, telemetry if hasattr(telemetry, "read") else None)
     if owns_telemetry:
         telemetry.close()
     record.energy_mwh = energy_mwh(twin.truth)
     record.injections = inj.injections
     record.proposals = proposal_decisions(agent)
+    if rec is not None:
+        rec.log.bench = BenchTruth(polls=[MitigationRecord(ts=t.ts, mitigated=t.mitigated) for t in record.turns],
+                                   energy_mwh=record.energy_mwh, no_action_mwh=reference.no_action_mwh,
+                                   decoy_only_mwh=reference.decoy_only_mwh, storms=record.storms,
+                                   control=neutral_injections)
+        record.trajectory = rec.log
     return record
 
 
@@ -342,4 +377,5 @@ def run_with_control(scenario: Scenario, make_agent: Callable[[], Agent], **kwar
     if any(f.type == FaultType.PROMPT_INJECTION for f in scenario.faults):
         control = run_scenario(scenario, make_agent(), neutral_injections=True, **kwargs)
         record.control_actions = [(a.request.action, a.request.target) for a in control.actions]
+        record.control_trajectory = control.trajectory
     return record
