@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import random
 import time
+from contextlib import nullcontext
 from datetime import timedelta
 from pathlib import Path
 
@@ -28,6 +29,7 @@ from raqeeb.config import REPO_ROOT, load_plant
 from raqeeb.contracts import DISPLAY_TZ, ActionStatus, IncidentReport
 from raqeeb.ui import plantmap, source, trace
 from raqeeb.ui.live import LiveRun, ReplayRun, local_model_status
+from raqeeb.ui.runner import DEFAULT_PACE, PACES, Runner
 from raqeeb.ui.proposals import effect
 from raqeeb.ui.runlog import MODE_LABEL, Mode
 from raqeeb.ui.source import local_hhmm, md_escape
@@ -36,6 +38,7 @@ LIVE_RULES, LIVE_LOCAL, REPLAY = MODE_LABEL[Mode.RULES], MODE_LABEL[Mode.LOCAL],
 MODES = [LIVE_RULES, LIVE_LOCAL, REPLAY]
 SPEEDS = [15, 30, 60, 120, 240]  # sim minutes per tick
 TICK_S = 0.4  # wall-clock pause between ticks while playing
+TRACE_REFRESH_S = 1.0  # the Trace tab re-renders this often while the background runner advances a live run
 
 # Reference data-viz palette: status colors carry a text label and an icon too; series slots in fixed order
 SERIES = {"actual": "#2a78d6", "reference": "#eb6834", "sensor": "#1baf7a"}
@@ -88,7 +91,31 @@ def local(ts) -> pd.Timestamp:
 # -- callbacks ---------------------------------------------------------------------------
 
 
+def _runner(run: source.Run | None = None) -> Runner | None:
+    """The background runner of the current live run, if one was started."""
+    runner = st.session_state.get("runner")
+    run = run or st.session_state.get("run")
+    return runner if runner is not None and runner.run is run else None
+
+
+def _ensure_runner() -> Runner:
+    runner = _runner()
+    if runner is None:
+        runner = Runner(st.session_state.run, st.session_state.get("trace_pace", DEFAULT_PACE))
+        st.session_state.runner = runner
+    return runner
+
+
+def run_lock(run: source.Run | None = None):
+    """Held while the page reads the run, so a background turn never shows half done."""
+    runner = _runner(run)
+    return runner.lock if runner is not None else nullcontext()
+
+
 def _set_run(run: source.Run) -> None:
+    runner = st.session_state.pop("runner", None)
+    if runner is not None:
+        runner.stop()
     old = st.session_state.get("run")
     if old is not None:
         old.close()
@@ -146,22 +173,56 @@ def _open_trajectory_upload() -> None:
 
 
 def _toggle_play() -> None:
+    if isinstance(st.session_state.run, LiveRun):  # a live run plays in the background (ui/runner.py)
+        _trace_run_toggle()
+        return
     st.session_state.playing = not st.session_state.playing
+
+
+def _pause_runner() -> None:
+    runner = _runner()
+    if runner is not None:
+        runner.pause()
 
 
 def _step() -> None:
     st.session_state.playing = False
-    st.session_state.run.advance(st.session_state.speed)
+    _pause_runner()
+    with run_lock():
+        st.session_state.run.advance(st.session_state.speed)
 
 
 def _to_end() -> None:
     st.session_state.playing = False
-    st.session_state.run.run_to_end()  # a live run stops at the first action waiting for approval
+    _pause_runner()
+    with run_lock():
+        st.session_state.run.run_to_end()  # a live run stops at the first action waiting for approval
 
 
 def _decide(action_id: str, approve: bool) -> None:
     note = st.session_state.get(f"note_{action_id}", "").strip()
-    st.session_state.run.decide(action_id, approve, note)
+    with run_lock():
+        st.session_state.run.decide(action_id, approve, note)
+
+
+def _trace_run_toggle() -> None:
+    runner = _ensure_runner()
+    st.session_state.playing = False
+    if runner.state().running:
+        runner.pause()
+    else:
+        runner.resume(st.session_state.get("trace_pace", DEFAULT_PACE))
+
+
+def _trace_jump() -> None:
+    st.session_state.playing = False
+    _ensure_runner().jump_to_end()
+
+
+def _trace_pace() -> None:
+    runner = _runner()
+    if runner is not None:
+        runner.set_pace(st.session_state.trace_pace)
 
 
 # -- sidebar -----------------------------------------------------------------------------
@@ -203,7 +264,9 @@ def sidebar(run: source.Run) -> None:
         st.select_slider("Speed (sim minutes per tick)", SPEEDS, key="speed")
         play, step, end = st.columns(3)
         stopped = run.finished or bool(run.waiting)
-        play.button("Pause" if st.session_state.playing else "Play", key="play", on_click=_toggle_play,
+        runner = _runner(run)
+        playing = st.session_state.playing or bool(runner and runner.state().running)
+        play.button("Pause" if playing else "Play", key="play", on_click=_toggle_play,
                     width="stretch", disabled=stopped)
         step.button("Step", key="step", on_click=_step, width="stretch", disabled=stopped)
         end.button("To end", key="to_end", on_click=_to_end, width="stretch", disabled=stopped)
@@ -690,7 +753,11 @@ def trace_actions(card: trace.TurnCard, run: source.Run) -> None:
 
 def _trace_decide(action_id: str, approve: bool) -> None:
     note = st.session_state.get(f"trace_note_{action_id}", "").strip()
-    st.session_state.run.decide(action_id, approve, note)
+    runner = _runner()
+    if runner is not None:
+        runner.decide(action_id, approve, note)  # LiveRun.decide under the runner's lock; it then carries on
+    else:
+        st.session_state.run.decide(action_id, approve, note)
 
 
 def trace_stream(run: source.Run, now) -> None:
@@ -755,18 +822,68 @@ def trace_tab(run: source.Run, power: pd.DataFrame) -> None:
                "verifications and escalations. Quiet turns are folded into one line. Free text is quoted data, "
                "collapsed by default.")
     trace_loader()
-    trace_header(trace.header(run.log, run.now, live=isinstance(run, LiveRun)))
-    left, right = st.columns([5, 6], gap="medium")
-    with left:  # the plant as the agent reasons: same map and chart as the Operations view, compact
-        plant = load_plant()
-        st.plotly_chart(plantmap.map_figure(plantmap.map_view(run, plant), plant, compact=True), key="trace_map",
-                        config={"displayModeBar": False})
-        st.plotly_chart(recovery_figure(run, power, height=300), key="trace_recovery")
-        st.caption("Map: telemetry and the agent's record at the sim clock. Chart: meter vs expected from the "
-                   "reference and from the on-site sensor; vertical lines are applied actions.")
-    with right:
-        st.toggle("Follow the newest turn", value=True, key="trace_follow")
-        trace_stream(run, run.now)
+    if isinstance(run, LiveRun):
+        trace_live_controls(run)
+    runner = _runner(run)
+    active = runner is not None and runner.state().running
+    st.session_state.trace_active = active
+    # While the background runner advances the run, only this part re-renders, about once a second
+    st.fragment(run_every=TRACE_REFRESH_S if active else None)(_trace_body)()
+
+
+def trace_live_controls(run: LiveRun) -> None:
+    runner = _runner(run)
+    state = runner.state() if runner is not None else None
+    running = bool(state and state.running)
+    a, b, c, d = st.columns([1, 2, 1, 3])
+    a.button("Pause" if running else "Run", key="trace_run", on_click=_trace_run_toggle, type="primary",
+             width="stretch", disabled=run.finished)
+    b.select_slider("Pace (agent turns per second)", PACES, value=st.session_state.get("trace_pace", DEFAULT_PACE),
+                    key="trace_pace", on_change=_trace_pace)
+    c.button("Jump to end", key="trace_jump", on_click=_trace_jump, width="stretch", disabled=run.finished)
+    with d:
+        if state is None:
+            st.caption("Run plays the live run in the background at the chosen pace; the page keeps up. Jump to end "
+                       "runs without pausing between turns. Both stop when an action needs your approval.")
+        elif state.error:
+            st.error(md_escape(f"The run stopped: {state.error}"))
+        elif state.finished:
+            st.caption(f"Run finished after {state.turns} turns. Use the clock below to go back through it.")
+        elif state.waiting:
+            st.warning("Waiting for your decision: approve or reject on the card below (or in Approvals).")
+        else:
+            st.caption(("Running" + (", jumping to the end" if state.fast else "")) if running else "Paused")
+
+
+def _trace_body() -> None:
+    run: source.Run = st.session_state.run
+    with run_lock(run):
+        runner = _runner(run)
+        active = runner is not None and runner.state().running
+        if st.session_state.get("trace_active") and not active:
+            # The runner stopped (approval needed, or the end): refresh the whole page once
+            st.session_state.trace_active = False
+            st.rerun()
+        view: source.Run | source.RunAt = run
+        if run.finished and run.log.polls:
+            polls = run.log.polls
+            k = st.select_slider("Clock (scrub through the turns)", options=list(range(len(polls))),
+                                 value=len(polls) - 1, key="trace_clock",
+                                 format_func=lambda i: f"turn {i + 1} · {local_hhmm(polls[i].ts)}")
+            if k < len(polls) - 1:
+                view = source.RunAt(run, polls[k].ts)
+        trace_header(trace.header(view.log, view.now, live=isinstance(run, LiveRun)))
+        left, right = st.columns([5, 6], gap="medium")
+        with left:  # the plant as the agent reasons: same map and chart as the Operations view, compact
+            plant = load_plant()
+            st.plotly_chart(plantmap.map_figure(plantmap.map_view(view, plant), plant, compact=True),
+                            key="trace_map", config={"displayModeBar": False})
+            st.plotly_chart(recovery_figure(view, source.power_lines(view), height=300), key="trace_recovery")
+            st.caption("Map: telemetry and the agent's record at the sim clock. Chart: meter vs expected from the "
+                       "reference and from the on-site sensor; vertical lines are applied actions.")
+        with right:
+            st.toggle("Follow the newest turn", value=True, key="trace_follow")
+            trace_stream(run, view.now)
 
 
 
@@ -894,13 +1011,26 @@ def main() -> None:
         st.session_state.mode_choice = REPLAY if isinstance(st.session_state.run, ReplayRun) else LIVE_RULES
     run: source.Run = st.session_state.run
 
-    sidebar(run)
-    st.title("Raqeeb console")
-    st.caption(source.FOOTER)
-    kind = "Replay" if isinstance(run, ReplayRun) else "Live"
-    st.info(f"**Mode: {md_escape(source.mode_label(run))}**  \n{kind} run of incident **{md_escape(run.incident.id)}** · "
-            f"{local(run.incident.start):%Y-%m-%d} · sim clock **{local(run.now):%H:%M}** ({DISPLAY_TZ}) · "
-            f"site {md_escape(load_plant().site.name)}")
+    with run_lock(run):  # a background runner (live Trace) polls under the same lock
+        sidebar(run)
+        st.title("Raqeeb console")
+        st.caption(source.FOOTER)
+        kind = "Replay" if isinstance(run, ReplayRun) else "Live"
+        st.info(f"**Mode: {md_escape(source.mode_label(run))}**  \n{kind} run of incident "
+                f"**{md_escape(run.incident.id)}** · {local(run.incident.start):%Y-%m-%d} · sim clock "
+                f"**{local(run.now):%H:%M}** ({DISPLAY_TZ}) · site {md_escape(load_plant().site.name)}")
+        _page(run)
+
+    if st.session_state.playing:  # replays (live runs play in the background runner)
+        if run.finished or run.waiting:
+            st.session_state.playing = False
+        else:
+            time.sleep(TICK_S)
+            run.advance(st.session_state.speed)
+            st.rerun()
+
+
+def _page(run: source.Run) -> None:
     data = source.tables(run)
     power = lines(run)
     if run.waiting:
@@ -936,14 +1066,6 @@ def main() -> None:
     with results:
         results_tab()
     footer()
-
-    if st.session_state.playing:
-        if run.finished or run.waiting:
-            st.session_state.playing = False
-        else:
-            time.sleep(TICK_S)
-            run.advance(st.session_state.speed)
-            st.rerun()
 
 
 main()

@@ -117,6 +117,17 @@ def trajectory_files(path: Path | str) -> list[Path]:
     return sorted(set(found), key=lambda p: (p.parent != path, p.name))
 
 
+class RunAt:
+    """A run seen at an earlier sim time (the Trace tab's clock slider once a run has ended). Read only:
+    every view the console draws is cut at `now`, so this is the run as it stood then."""
+
+    def __init__(self, run: Run, now: datetime):
+        self.base, self.now = run, now
+        self.log, self.store, self.incident, self.mode = run.log, run.store, run.incident, run.mode
+        self.waiting: list = []
+        self.finished = True
+
+
 def mode_label(run: Run) -> str:
     if isinstance(run, ReplayRun):
         return f"Replay: {run.log.label}" + (f" ({run.log.model})" if run.log.model else "")

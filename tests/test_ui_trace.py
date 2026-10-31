@@ -227,3 +227,96 @@ def test_every_free_text_in_the_trace_is_quoted_data_and_collapsed():
         assert any(HOSTILE in v for v in column(name)), name
     assert [c.value for c in at.code].count(HOSTILE) == 2  # prompt and reply, as plain text
     assert at.expander and all(not e.proto.expanded for e in at.expander)
+
+
+# -- live: the background runner ----------------------------------------------------------------------
+
+
+def _wait(condition, timeout: float = 120.0, step: float = 0.1) -> bool:
+    import time
+
+    end = time.time() + timeout
+    while time.time() < end:
+        if condition():
+            return True
+        time.sleep(step)
+    return condition()
+
+
+def test_live_run_in_the_background_completes_with_inline_approvals():
+    """scn_0007 rules only, played by the background runner from the Trace tab; every gated request approved
+    on its card; reruns never restart the run."""
+    import time
+
+    at = AppTest.from_file(str(APP), default_timeout=300)
+    at.run()
+    at.radio(key="mode_choice").set_value(live.MODE_LABEL[live.Mode.RULES]).run()
+    at.selectbox(key="scenario_id").set_value("scn_0007").run()
+    at.button(key="start_live").click().run()
+    run = at.session_state.run
+    at.button(key="trace_jump").click().run()
+    runner = at.session_state.runner
+    assert runner.run is run
+    approved = []
+    deadline = time.time() + 180
+    while not run.finished and time.time() < deadline:
+        _wait(lambda: run.finished or bool(run.waiting), timeout=30)
+        at.run()  # a rerun, as the page's refresh does
+        assert not at.exception
+        assert at.session_state.runner is runner and at.session_state.run is run  # never restarted
+        if run.waiting:
+            action_id = run.waiting[0].request.id
+            at.text_input(key=f"trace_note_{action_id}").input("checked on the card")
+            at.button(key=f"trace_approve_{action_id}").click().run()
+            approved.append(action_id)
+    assert run.finished and approved
+    decided = {a.request.id: a for a in run.log.actions}
+    assert all(decided[i].decided_by == "operator" and decided[i].note == "checked on the card" for i in approved)
+    roots = {label for h in run.log.diagnosis_until(run.now).root_causes for label in h.labels}
+    assert set(run.log.answer_key.root_causes) <= roots
+    audit = run.store.audit(step="approval")
+    assert sum(audit["actor"] == "human:operator") == len(approved)
+    at.run()
+    assert not at.exception
+    at.select_slider(key="trace_clock").set_value(5).run()  # scrub back once the run has ended
+    assert not at.exception and "Turn 6" in _page(at) and "Turn 7" not in _page(at)
+
+
+def test_runner_pace_and_pause():
+    from raqeeb.ui.runner import Runner
+
+    run = source.start_live("scn_0002", live.Mode.RULES)
+    runner = Runner(run, turns_per_s=8)
+    runner.resume()
+    assert _wait(lambda: len(run.log.polls) >= 3, timeout=60)
+    runner.pause()
+    _wait(lambda: not runner.state().running, timeout=5)
+    with runner.lock:
+        held = len(run.log.polls)
+    import time
+
+    time.sleep(0.6)
+    assert len(run.log.polls) == held and runner.state().paused  # paused means no new turn
+    runner.jump_to_end()
+    assert _wait(lambda: run.finished or bool(run.waiting), timeout=60)
+    assert run.waiting and not run.finished  # it stops for the operator
+    runner.decide(run.waiting[0].request.id, approve=False, note="not now")
+    assert _wait(lambda: run.finished or bool(run.waiting), timeout=60)  # and carries on by itself
+    runner.stop()
+    assert not runner.state().running
+    run.close()
+
+
+def test_a_new_run_stops_the_old_runner():
+    at = AppTest.from_file(str(APP), default_timeout=300)
+    at.run()
+    at.radio(key="mode_choice").set_value(live.MODE_LABEL[live.Mode.RULES]).run()
+    at.selectbox(key="scenario_id").set_value("scn_0002").run()
+    at.button(key="start_live").click().run()
+    at.select_slider(key="trace_pace").set_value(0.5).run()
+    at.button(key="trace_run").click().run()
+    runner = at.session_state.runner
+    assert _wait(lambda: runner.state().running, timeout=10)
+    at.button(key="start_live").click().run()  # replace the run
+    assert _wait(lambda: not (runner._thread and runner._thread.is_alive()), timeout=15)
+    assert "runner" not in at.session_state or at.session_state.runner is not runner
