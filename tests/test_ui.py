@@ -284,7 +284,8 @@ def test_app_reveals_the_answer_key_only_after_the_end():
     at.run()
     replay = at.session_state.run
     labels = [f.label for f in replay.log.answer_key.faults]
-    assert "Hidden while the run is in progress" in _page(at) and not at.get("toggle")
+    assert "Hidden while the run is in progress" in _page(at)
+    assert not [t for t in at.get("toggle") if t.key == "reveal"]
     assert _table(at, "Planted fault") is None
     at.button(key="to_end").click().run()
     assert not at.exception
