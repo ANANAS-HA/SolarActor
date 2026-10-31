@@ -7,7 +7,7 @@
     verdict(result)                         -> "Sun sensor reads 28% below the reference on a clear sky; ..."
     action_text(ActionType.SET_POWER_LIMIT, "INV-03", {"kw": 1624}) -> "Lower Inverter 3's output limit to 1.6 MW"
     gate("needs_approval")                  -> "Needs your approval"
-    power_change(6992, 24528, 25364)        -> "7.0 MW -> 24.5 MW, 3% below expected"
+    power_change(6992, 24528, 25364)        -> "7.0 MW → 24.5 MW, 3% below expected"
 
 Only dictionaries and formatting; no Streamlit, no telemetry, no agent code. Every function has a safe
 fallback for a name it does not know (the identifier itself, in words). The strings returned here are
@@ -243,8 +243,9 @@ def below(ratio: float | None) -> str:
 
 
 def power_change(before_kw: float, after_kw: float, expected_kw: float | None = None) -> str:
-    """"7.0 MW -> 24.5 MW, 3% below expected"; without an expected value, the change alone."""
-    text = f"{kw(before_kw)} -> {kw(after_kw)}"
+    """"7.0 MW → 24.5 MW, 3% below expected"; without an expected value, the change alone. The arrow is the
+    character, not "->": ">" would be escaped on its way into the page."""
+    text = f"{kw(before_kw)} → {kw(after_kw)}"
     if expected_kw and float(expected_kw) > 0:
         text += f", {below(float(after_kw) / float(expected_kw))}"
     return text

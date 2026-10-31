@@ -100,8 +100,8 @@ def test_devices_come_from_the_plant_layout():
 
 def test_numbers_read_as_power_and_percent():
     assert plain.kw(6992) == "7.0 MW" and plain.kw(650.4) == "650 kW" and plain.kw(24528) == "24.5 MW"
-    assert plain.power_change(6992, 24528, 25364) == "7.0 MW -> 24.5 MW, 3% below expected"
-    assert plain.power_change(0, 1624.9, 0) == "0 kW -> 1.6 MW"
+    assert plain.power_change(6992, 24528, 25364) == "7.0 MW → 24.5 MW, 3% below expected"
+    assert plain.power_change(0, 1624.9, 0) == "0 kW → 1.6 MW"
     assert plain.pct(0.7157) == "72%" and plain.below(1.0) == "on expected" and plain.below(1.04) == "4% above expected"
 
 
@@ -137,7 +137,7 @@ def test_timeline_sentences_are_one_line_active_voice():
     assert plain.decided(ActionType.SET_POWER_LIMIT, "INV-03", True, "operator", "fan replaced", {"kw": 1624}) == \
         "You approved: lower Inverter 3's output limit to 1.6 MW (fan replaced)."
     assert plain.verified(ActionType.CREATE_CLEANING_WORK_ORDER, "ALL", True, 7181, 31502, 32431) == \
-        "Verified: ordered cleaning of all panels and output recovered (7.2 MW -> 31.5 MW, 3% below expected)."
+        "Verified: ordered cleaning of all panels and output recovered (7.2 MW → 31.5 MW, 3% below expected)."
     assert plain.verified(ActionType.RESET_COMMS_GATEWAY, "INV-12", False, 0, 0, 100).startswith("Not recovered yet")
     assert plain.escalated("TRANSFORMER_TRIP@T4", ["INV-13"], "no automatic fix for this fault") == \
         "Handed to a human: transformer trip (Transformer T4 (inverters 13-16)): no automatic fix for this fault."

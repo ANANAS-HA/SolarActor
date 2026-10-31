@@ -30,7 +30,7 @@ import streamlit as st
 
 from raqeeb.config import REPO_ROOT, load_plant
 from raqeeb.contracts import DISPLAY_TZ, ActionStatus, IncidentReport
-from raqeeb.ui import alerts, ask, plain, plantmap, source, summary, trace
+from raqeeb.ui import alerts, ask, plain, plantmap, plantpanels, source, summary, trace
 from raqeeb.ui.live import LiveRun, ReplayRun, list_local_models, local_model_status
 from raqeeb.ui.runner import DEFAULT_PACE, PACES, Runner
 from raqeeb.ui.proposals import effect
@@ -47,20 +47,20 @@ TRACE_REFRESH_S = 1.0  # the Trace tab re-renders this often while the backgroun
 
 # -- design tokens ("desert noon", docs/design/REDESIGN_HANDOFF.md): every colour has a word beside it ----
 TOKENS = {
-    "page": "#f6f2ea", "surface": "#ffffff", "ink": "#1d1f22", "body": "#3d3f43", "muted": "#5d5f63",
+    "page": "#f6f2ea", "surface": "#ffffff", "ink": "#1d1f22", "body": "#2e3135", "muted": "#4a4d52",
     "accent": "#8a4b00", "navy": "#1b2f4a", "amber": "#e8a33d", "line": "#dedad2", "row": "#ece9e3",
     "sidebar": "#efe9dc", "subtle": "#faf9f6", "tint": "#fdf1de", "approval": "#c9822a",
 }
 # semantic states: (text/ink, background); each pair is at least 4.5:1
 SEMANTIC = {
     "healthy": ("#1f6b3a", "#e4f2e8"), "attention": ("#7a4300", "#fdf1de"), "critical": ("#9a2420", "#fbe7e5"),
-    "no data": ("#5d5f63", "#f1efea"), "needs a human": ("#7a4300", "#fdf1de"), "info": ("#1b2f4a", "#e9eef5"),
+    "no data": ("#4a4d52", "#f1efea"), "needs a human": ("#7a4300", "#fdf1de"), "info": ("#1b2f4a", "#e9eef5"),
 }
-SERIES = {"actual": "#1b2f4a", "reference": "#1f6b3a", "sensor": "#c9822a"}  # actual navy, satellite green, sensor amber
+SERIES = {"actual": "#1b2f4a", "reference": "#1f7a45", "sensor": "#b06d12", "sun": "#b06d12"}  # PLANT_TAB.md colours
+SUN_FILL, STORM_FILL, STORM_INK = "rgba(232,163,61,0.22)", "#f6e3c1", "#6b3d00"
+THRESHOLD, PANEL_GRID = "#b3261e", "#ece6d9"  # stow-limit line; horizontal grid on the white panel
 MUTED = TOKENS["muted"]
-RECENT_ALARM_MIN = 30
-MIN_GAP_FRACTION = 0.05  # of the plant rating: below this (dawn, dusk) no "vs expected" delta
-ON_EXPECTED_FRACTION = 0.01
+CHART_GRID, CHART_AXIS = "#e4ddcf", "#b9b2a3"  # Plotly grid and axis lines on the white chart card
 SUMMARY_COLUMNS = {  # bench summary.csv column -> shown name
     "agent": "Agent", "scenarios": "Scenarios", "precision": "Precision", "recall": "Recall",
     "all_causes_found_rate": "All causes found", "false_action_rate": "False-action rate",
@@ -106,7 +106,9 @@ CSS = """
         --rq-subtle: %(subtle)s; --rq-tint: %(tint)s; --rq-approval: %(approval)s;
         --rq-sans: 'IBM Plex Sans', 'Source Sans 3', system-ui, sans-serif; --rq-mono: 'IBM Plex Mono', ui-monospace, monospace; }
 .stApp, .stApp :not([data-testid="stIconMaterial"]):not(.material-symbols-rounded) { font-family: var(--rq-sans); }
-.stApp { background: var(--rq-page); color: var(--rq-ink); }
+.stApp { background: var(--rq-page); color: var(--rq-body); }
+[data-testid="stMainBlockContainer"] { max-width: 1180px; }
+.stApp p, .stApp li { color: var(--rq-body); font-size: 15px; line-height: 1.55; }
 .stApp code, .stApp pre, .rq-mono { font-family: var(--rq-mono) !important; }
 [data-testid="stSidebar"] { background-color: %(sidebar)s; border-right: 1px solid var(--rq-line);
   background-image: linear-gradient(rgba(27,47,74,.045) 1px, transparent 1px), linear-gradient(90deg, rgba(27,47,74,.045) 1px, transparent 1px);
@@ -114,12 +116,14 @@ CSS = """
 [data-testid="stSidebar"] [data-testid="stRadio"] > label { display: none; }
 [data-testid="stSidebar"] [data-testid="stRadio"] label[data-baseweb="radio"] { padding: 0.45rem 0.6rem; border-radius: 8px;
   margin: 0; width: 100%%; }
-[data-testid="stSidebar"] [data-testid="stRadio"] label[data-baseweb="radio"]:hover { background: #e3e0d9; }
+[data-testid="stSidebar"] [data-testid="stRadio"] label[data-baseweb="radio"]:hover { background: #e6dfcf; }
 [data-testid="stSidebar"] [data-testid="stRadio"] label[data-baseweb="radio"]:has(input:checked) { background: var(--rq-surface); }
-[data-testid="stSidebar"] [data-testid="stRadio"] label[data-baseweb="radio"]:has(input:checked) p { font-weight: 600; }
+[data-testid="stSidebar"] [data-testid="stRadio"] label[data-baseweb="radio"] p { color: var(--rq-ink); font-size: 15px; font-weight: 500; }
+[data-testid="stSidebar"] [data-testid="stRadio"] label[data-baseweb="radio"]:has(input:checked) p { font-weight: 700; }
 [data-testid="stSidebar"] [data-testid="stRadio"] label[data-baseweb="radio"] > div:first-child { display: none; }
 [data-testid="stSidebar"] [data-testid="stRadio"] [data-testid="stCaptionContainer"] { margin: 0; }
-.rq-group { font-size: 11px; font-weight: 600; color: #6b6d71; text-transform: uppercase; letter-spacing: 0.06em;
+[data-testid="stSidebar"] [data-testid="stRadio"] [data-testid="stCaptionContainer"] p { font-size: 13px !important; font-weight: 400; }
+.rq-group { font-size: 12px; font-weight: 700; color: var(--rq-muted); text-transform: uppercase; letter-spacing: 0.06em;
             padding: 6px 10px 2px; }
 .rq-logo { display: flex; align-items: center; gap: 10px; padding: 4px 8px 10px; }
 .rq-logo .mark { width: 32px; height: 32px; border-radius: 8px; background: var(--rq-navy); position: relative; overflow: hidden; flex: none; }
@@ -127,39 +131,52 @@ CSS = """
 .rq-logo .mark b { position: absolute; left: 0; right: 0; top: 15px; bottom: 0; background: var(--rq-navy); }
 .rq-logo .mark s { position: absolute; left: 5px; right: 5px; height: 2px; background: #8fa6c4; }
 .rq-logo .name { font-weight: 700; font-size: 16px; letter-spacing: -0.01em; display: block; }
-.rq-logo .sub { font-size: 12px; color: var(--rq-muted); display: block; }
+.rq-logo .sub { font-size: 13px; color: var(--rq-muted); display: block; }
 .rq-synthetic { margin-top: 1rem; padding: 12px; border: 1px solid var(--rq-line); border-radius: 10px; background: var(--rq-page);
-                font-size: 12px; color: var(--rq-muted); line-height: 1.45; }
+                font-size: 13px; color: var(--rq-muted); line-height: 1.45; }
 .rq-synthetic b { color: var(--rq-ink); display: block; }
 .st-key-header { position: sticky; top: 0; z-index: 5; background: rgba(246,242,234,.94); backdrop-filter: blur(8px);
                  border-bottom: 2px solid var(--rq-amber); padding: 0.3rem 0 0.4rem; margin-bottom: 0.4rem; }
-.rq-title small { font-size: 12px; color: var(--rq-muted); display: block; }
-.st-key-header [data-testid="stCaptionContainer"] p { font-size: 12px; line-height: 1.35; }
-.st-key-header [data-testid="stPopover"] > button p { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.rq-title span { font-size: 17px; font-weight: 600; display: block; }
-.rq-eyebrow { font-size: 11px; font-weight: 600; color: var(--rq-muted); text-transform: uppercase; letter-spacing: 0.06em; }
-.rq-clock { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--rq-muted); padding-top: 0.35rem; }
-.rq-clock b { font-family: var(--rq-mono); font-size: 13px; font-weight: 500; color: var(--rq-ink); }
+.rq-title small { font-size: 13px; color: var(--rq-muted); display: block; }
+.st-key-header [data-testid="stCaptionContainer"] p { line-height: 1.35; }
+.st-key-header [data-testid="stPopover"] > button p { font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rq-title span { font-size: 17px; font-weight: 600; display: block; color: var(--rq-ink); }
+.rq-eyebrow { font-size: 12px; font-weight: 700; color: var(--rq-muted); text-transform: uppercase; letter-spacing: 0.06em; }
+.rq-clock { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--rq-muted); padding-top: 0.35rem; }
+.rq-clock b { font-family: var(--rq-mono); font-size: 14px; font-weight: 500; color: var(--rq-ink); }
 .rq-bar { flex: 1; height: 4px; background: #e6e3dc; border-radius: 2px; position: relative; min-width: 60px; }
 .rq-bar i { position: absolute; left: 0; top: 0; bottom: 0; background: var(--rq-amber); border-radius: 2px; }
 h1, h2, h3 { color: var(--rq-ink); letter-spacing: -0.01em; }
 h1 { font-size: 26px; font-weight: 700; }  h2 { font-size: 20px; font-weight: 600; }  h3 { font-size: 18px; font-weight: 600; }
 .rq-intro { font-size: 15px; color: var(--rq-body); margin: -0.4rem 0 0.8rem; }
-[data-testid="stCaptionContainer"] { color: var(--rq-muted); }
-[data-testid="stMetricLabel"] p { color: var(--rq-muted); font-size: 13px; }
-[data-testid="stMetricValue"] { font-variant-numeric: tabular-nums; letter-spacing: -0.02em; }
+[data-testid="stCaptionContainer"], [data-testid="stCaptionContainer"] p { color: var(--rq-muted) !important; font-size: 14px !important; }
+[data-testid="stMetricLabel"] p { color: var(--rq-body) !important; font-size: 14px !important; font-weight: 600; }
+[data-testid="stMetricValue"] { color: var(--rq-ink) !important; font-variant-numeric: tabular-nums; letter-spacing: -0.02em; }
+[data-testid="stMetricDelta"], [data-testid="stMetricDelta"] div { color: var(--rq-body) !important; background: #ebe4d4 !important;
+  font-size: 14px !important; border-radius: 6px; }
+[data-testid="stMetricDelta"] svg { fill: var(--rq-body) !important; }
 [data-testid="stVerticalBlockBorderWrapper"] { background: var(--rq-surface); border-color: var(--rq-line) !important; border-radius: 12px; }
-.stButton > button[kind="primary"] { background: var(--rq-navy); border-color: var(--rq-navy); }
+.stButton button, .stDownloadButton button { font-size: 14px; font-weight: 600; border-radius: 8px; }
+.stButton button p, .stDownloadButton button p { font-size: 14px; color: inherit; }
+.stButton button[kind="primary"], .stButton button[kind="primary"] * { background: var(--rq-navy) !important; color: #fff !important;
+  border-color: var(--rq-navy) !important; }
+.stButton button[kind="secondary"], .stButton button[kind="secondary"] *, .stDownloadButton button[kind="secondary"],
+.stDownloadButton button[kind="secondary"] * { background: var(--rq-surface) !important; color: var(--rq-ink) !important;
+  border-color: #b9b2a3 !important; }
+.stButton button:disabled, .stButton button:disabled * { color: var(--rq-muted) !important; background: #ebe4d4 !important;
+  border-color: #ebe4d4 !important; }
+.stButton button[kind="primary"]:hover { background: #24406a !important; border-color: #24406a !important; }
+.stButton button[kind="secondary"]:hover { border-color: var(--rq-navy) !important; }
 .rq-strip { display: flex; align-items: center; gap: 0.9rem; flex-wrap: wrap; background: var(--rq-surface);
             border: 1px solid var(--rq-line); border-left: 6px solid var(--rq-navy); border-radius: 12px; padding: 0.55rem 0.9rem;
-            margin: 0.2rem 0 0.4rem; font-size: 14px; }
+            margin: 0.2rem 0 0.4rem; font-size: 15px; color: var(--rq-body); }
 .rq-strip.critical { border-left-color: %(crit)s; }  .rq-strip.human { border-left-color: %(human)s; }
 .rq-strip.healthy { border-left-color: %(ok)s; }
 .rq-time { font-family: var(--rq-mono); font-variant-numeric: tabular-nums; color: var(--rq-muted); }
 .rq-event { flex: 1 1 24rem; min-width: 16rem; }
-.rq-chip { display: inline-flex; align-items: center; gap: 6px; padding: 0.15rem 0.6rem; border-radius: 999px; font-size: 12px;
+.rq-chip { display: inline-flex; align-items: center; gap: 6px; padding: 0.15rem 0.6rem; border-radius: 999px; font-size: 13px;
            font-weight: 600; white-space: nowrap; }
-.rq-chip::before { content: ""; width: 8px; height: 8px; border-radius: 50%%; background: currentColor; opacity: .85; }
+.rq-chip::before { content: ""; width: 8px; height: 8px; border-radius: 50%%; background: currentColor; }
 .rq-pulse::before { animation: rq-pulse 1.2s ease-in-out infinite; }
 @keyframes rq-pulse { 0%%, 100%% { opacity: 1; } 50%% { opacity: 0.25; } }
 @media (prefers-reduced-motion: reduce) { .rq-pulse::before { animation: none; } }
@@ -171,11 +188,77 @@ h1 { font-size: 26px; font-weight: 700; }  h2 { font-size: 20px; font-weight: 60
 .st-key-ask_fab [data-testid="stPopover"] > button { background: var(--rq-navy); color: #fff; border: 0; border-radius: 999px;
   padding: 10px 18px; font-weight: 600; box-shadow: 0 10px 30px rgba(27,47,74,.25); }
 .st-key-ask_fab [data-testid="stPopover"] > button:hover { background: #24406a; color: #fff; }
-.st-key-ask_fab [data-testid="stPopover"] > button p { color: #fff; }
+.st-key-ask_fab [data-testid="stPopover"] > button p { color: #fff; font-size: 15px; }
+.stExpander summary p, .stExpander summary span { font-size: 15px; color: var(--rq-ink); }
 .st-key-approval_card [data-testid="stVerticalBlockBorderWrapper"] { border: 1.5px solid var(--rq-approval) !important; }
+/* Plant tab panels (docs/design/PLANT_TAB.md) */
+.rq-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin: 0.2rem 0 0.9rem; }
+.rq-stat { position: relative; background: var(--rq-surface); border: 1px solid #d9d2c3; border-radius: 6px; padding: 12px 14px 42px;
+           overflow: hidden; min-height: 124px; }
+.rq-stat .label { font-size: 13px; font-weight: 600; color: var(--rq-body); }
+.rq-stat .value { font-size: 30px; font-weight: 600; color: var(--rq-ink); font-variant-numeric: tabular-nums; line-height: 1.15;
+                  margin: 4px 0 2px; }
+.rq-stat .state, .rq-tile .state, .rq-equip .state { font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 6px; }
+.rq-stat .state i, .rq-tile .state i, .rq-equip .state i { width: 8px; height: 8px; border-radius: 50%%; display: inline-block; flex: none; }
+.rq-spark { position: absolute; left: 0; right: 0; bottom: 0; width: 100%%; height: 36px; display: block; }
+.rq-panel-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; padding: 2px 2px 6px; }
+.rq-panel-head .title { font-size: 15px; font-weight: 600; color: var(--rq-ink); }
+.rq-panel-head .unit { font-size: 13px; color: var(--rq-muted); }
+.rq-panel-head .take { margin-left: auto; font-size: 14px; font-weight: 600; text-align: right; }
+table.rq-legend { width: 100%%; border-collapse: collapse; margin-top: 6px; font-size: 14px; }
+table.rq-legend th { text-align: left; font-size: 13px; font-weight: 600; color: var(--rq-muted); padding: 4px 8px;
+                     border-bottom: 1px solid #d9d2c3; }
+table.rq-legend td { padding: 6px 8px; border-bottom: 1px solid #ece6d9; vertical-align: top; color: var(--rq-body); }
+table.rq-legend td.num, table.rq-legend th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+table.rq-legend svg { vertical-align: middle; margin-right: 6px; }
+table.rq-legend b { color: var(--rq-ink); }
+table.rq-legend .meaning { color: var(--rq-muted); }
+.rq-markers { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 14px; color: var(--rq-body); padding: 8px 2px 2px; }
+.rq-markers b { color: var(--rq-navy); font-size: 17px; }
+.rq-map { display: flex; flex-direction: column; gap: 8px; }
+.rq-map .head { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; font-size: 14px; color: var(--rq-body);
+                padding: 0 2px 2px; }
+.rq-map .row { display: grid; grid-template-columns: 104px repeat(var(--cols), minmax(0, 1fr)); gap: 8px; align-items: stretch; }
+.rq-map .rowlabel { padding: 10px 0 0 2px; min-width: 0; }
+.rq-map .rowlabel b { display: block; font-size: 14px; font-weight: 600; color: var(--rq-ink); }
+.rq-map .rowlabel span { font-size: 13px; color: var(--rq-muted); }
+.rq-tile { background: var(--rq-surface); border: 1px solid #d9d2c3; border-radius: 6px; padding: 10px 12px; text-align: left;
+           min-width: 0; }
+.rq-tile.attn, .rq-equip.attn { border-width: 2px; }
+.rq-tile .name { font-size: 14px; font-weight: 600; color: var(--rq-ink); }
+.rq-tile .mw { font-size: 22px; font-weight: 600; color: var(--rq-ink); font-variant-numeric: tabular-nums; line-height: 1.2; }
+.rq-tile .peers, .rq-tile .extra { font-size: 13px; color: var(--rq-body); }
+.rq-tile .state { margin-top: 4px; }
+.rq-tile .badge, .rq-map .rowlabel .badge { font-size: 13px; color: #6b3d00; margin-top: 2px; }
+.rq-equip { background: var(--rq-surface); border: 1px solid #d9d2c3; border-radius: 6px; padding: 10px 12px; margin-bottom: 8px; }
+.rq-equip .name { font-size: 14px; font-weight: 600; color: var(--rq-ink); display: flex; justify-content: space-between; gap: 8px;
+                  align-items: center; flex-wrap: wrap; }
+.rq-equip table { width: 100%%; border-collapse: collapse; margin-top: 6px; }
+.rq-equip td { font-size: 14px; padding: 3px 0; color: var(--rq-body); vertical-align: top; }
+.rq-equip td.v { text-align: right; font-weight: 600; color: var(--rq-ink); font-variant-numeric: tabular-nums; white-space: nowrap; padding-left: 8px; }
+@media (max-width: 820px) { .rq-map .row { grid-template-columns: 1fr 1fr; } .rq-map .rowlabel { grid-column: 1 / -1; } }
 </style>
 """ % {**TOKENS, "crit": SEMANTIC["critical"][0], "human": SEMANTIC["needs a human"][0],
        "ok": SEMANTIC["healthy"][0], "att": SEMANTIC["attention"][0]}
+
+
+def styled(fig: go.Figure) -> go.Figure:
+    """The designer's chart text and surface: dark 14 px labels, 13 px ticks and legend, white card background,
+    soft grid. Applied to every figure after its own layout."""
+    fig.update_layout(font={"family": "IBM Plex Sans, Source Sans 3, sans-serif", "size": 14, "color": TOKENS["body"]},
+                      paper_bgcolor=TOKENS["surface"], plot_bgcolor=TOKENS["surface"],
+                      legend_font={"size": 13, "color": TOKENS["ink"]}, hoverlabel={"font": {"size": 13}})
+    fig.update_xaxes(tickfont={"size": 13, "color": TOKENS["body"]}, gridcolor=CHART_GRID, linecolor=CHART_AXIS,
+                     title_font={"size": 14, "color": TOKENS["body"]})
+    fig.update_yaxes(tickfont={"size": 13, "color": TOKENS["body"]}, gridcolor=CHART_GRID, linecolor=CHART_AXIS,
+                     title_font={"size": 14, "color": TOKENS["body"]})
+    fig.update_annotations(font={"size": 13, "color": TOKENS["body"]})
+    return fig
+
+
+def card():
+    """A white bordered card for a chart (CONTRAST_FIX: charts sit on white, not on the sand page)."""
+    return st.container(border=True)
 
 
 def inline(text: object) -> str:
@@ -536,7 +619,7 @@ def playback(run: source.Run) -> None:
     stopped = run.finished or bool(run.waiting)
     runner = _runner(run)
     playing = st.session_state.playing or bool(runner and runner.state().running)
-    a, b, c = st.columns([1, 1, 1.4])
+    a, b, c = st.columns([1, 1.25, 1.3])
     a.button("Step", key="step", on_click=_step, width="stretch", disabled=stopped)
     b.button("To end", key="to_end", on_click=_to_end, width="stretch", disabled=stopped)
     c.button("Pause" if playing else "Play", key="play", on_click=_toggle_play, type="primary", width="stretch",
@@ -553,13 +636,13 @@ def header(run: source.Run) -> None:
     plant = load_plant()
     page = current_page()
     with st.container(key="header"):
-        title, runcol, play, right = st.columns([3.6, 2.0, 3.0, 1.9], vertical_alignment="top")
+        title, runcol, play, right = st.columns([3.3, 1.9, 3.4, 1.9], vertical_alignment="top")
         with title:
             st.markdown(f'<div class="rq-title"><small>Incident {html_text(run.incident.id)}, '
                         f'{local(run.incident.start):%d %B %Y}. {html_text(plant.site.name)} plant (synthetic)</small>'
                         f'<span>{html_text(page)}</span></div>', unsafe_allow_html=True)
-            st.caption(f"Mode: {md_escape(mode_words(run))}; model {md_escape(run.log.model or 'none')}. "
-                       f"Record: {md_escape(run.log.label)}.")
+            record = f" Recording: {md_escape(run.log.label)}." if isinstance(run, ReplayRun) else ""
+            st.caption(f"Mode: {md_escape(mode_words(run))}; model {md_escape(run.log.model or 'none')}.{record}")
         with runcol:
             st.markdown('<div class="rq-eyebrow">Run the agent</div>', unsafe_allow_html=True)
             run_panel(run)
@@ -633,86 +716,74 @@ def notification_strip(run: source.Run) -> None:
 # -- panels ----------------------------------------------------------------------------
 
 
-def headline(run: source.Run, power: pd.DataFrame, data: dict[str, pd.DataFrame]) -> None:
+def stat_row(run: source.Run, power: pd.DataFrame, data: dict[str, pd.DataFrame]) -> None:
+    """Four number panels: output now, energy below expected, alarms, waiting for approval (PLANT_TAB.md)."""
     plant = load_plant()
-    shown = power.dropna(subset=["actual_kw"])
-    a, b, c, d = st.columns(4)
-    if len(shown):
-        line = shown.iloc[-1]
-        daylight = line["expected_ref_kw"] > MIN_GAP_FRACTION * plant.rated_ac_kw
-        gap = line["actual_kw"] / line["expected_ref_kw"] - 1 if daylight else None
-        on_line = gap is not None and abs(gap) < ON_EXPECTED_FRACTION
-        a.metric("Plant output now", plain.kw(line["actual_kw"]),
-                 None if gap is None else "on expected" if on_line
-                 else f"{gap:+.0%} against expected", delta_color="off" if on_line else "normal")
-    else:
-        a.metric("Plant output now", "no reading yet")
-    events = data["events"]
-    recent = int((events["ts"] > run.now - timedelta(minutes=RECENT_ALARM_MIN)).sum()) if len(events) else 0
-    b.metric("Alarms so far", len(events), f"+{recent} in the last {RECENT_ALARM_MIN} min" if recent else None,
-             delta_color="inverse")
-    readings = data["inverter_readings"]
-    last = readings["ts"].max() if len(readings) else None
-    reporting = readings.loc[readings["ts"] == last, "inverter_id"].nunique() if last is not None else 0
-    c.metric("Inverters reporting", f"{reporting} of {plant.inverters.count}")
-    d.metric("Waiting for your approval", len(run.waiting))
+    st.markdown(plantpanels.stats_html(plantpanels.stats(run, power, data["events"], plant)), unsafe_allow_html=True)
 
 
-def plant_map(run: source.Run) -> None:
-    """Sky strip, the top-down map (blocks T1-T4, weather station, substation meter, grid point) and, for the
-    clicked tile, that inverter against its peers. Telemetry and the agent's record only (ui/plantmap.py)."""
-    plant = load_plant()
-    st.subheader("Plant map")
-    sky_chart(run, plant)
-    view = plantmap.map_view(run, plant)
-    st.plotly_chart(plantmap.map_figure(view, plant), key="plant_map", on_select=_map_clicked, selection_mode="points",
-                    config={"displayModeBar": False})
-    counts = pd.Series([tile.state for tile in view.inverters]).value_counts()
-    shown = f"Telemetry at {local_hhmm(view.at)}" if view.at is not None else "No telemetry yet"
-    st.caption(f"{shown}. " + ", ".join(f"{plantmap.ICON[s]} {s}: {counts[s]}" for s in plantmap.STATES
-                                       if counts.get(s, 0))
-               + f". Low output means stopped or at least {plantmap.PEER_SHORTFALL:.0%} below the others; capped means "
-               "the inverter reports a derate or a power limit; no data means no reading arrived (hatched, never "
-               "zero). The small marks under a tile are the agent's actions on it. Synthetic plant.")
-    inverter_detail(run, plant)
+def panel_axes(fig: go.Figure, run: source.Run, height: int) -> go.Figure:
+    """A PLANT_TAB.md time-series panel: unified hover with a crosshair and a dark hover box, horizontal grid
+    only, mono ticks every two hours on the incident window, no Plotly legend (a legend table follows the
+    chart) and the amber playback cursor at the simulated clock."""
+    styled(fig)
+    fig.update_layout(height=height, margin={"l": 0, "r": 0, "t": 12, "b": 0}, hovermode="x unified", showlegend=False,
+                      hoverlabel={"bgcolor": TOKENS["navy"], "bordercolor": TOKENS["navy"],
+                                  "font": {"color": "#ffffff", "size": 13}})
+    fig.update_xaxes(range=[local(run.incident.start), local(run.incident.end)], showgrid=False, showspikes=True,
+                     spikemode="across", spikethickness=1, spikecolor=TOKENS["ink"], spikedash="solid",
+                     spikesnap="cursor", dtick=2 * 3600 * 1000, tickformat="%H:%M", fixedrange=True,
+                     tickfont={"family": "IBM Plex Mono, ui-monospace, monospace", "size": 13, "color": TOKENS["body"]})
+    fig.update_yaxes(gridcolor=PANEL_GRID, zeroline=False, fixedrange=True)
+    fig.add_vline(x=local(run.now), line={"color": TOKENS["amber"], "width": 2})
+    return fig
 
 
-def _map_clicked() -> None:
-    event = st.session_state.get("plant_map")
-    points = (event or {}).get("selection", {}).get("points", []) if isinstance(event, dict) else \
-        getattr(getattr(event, "selection", None), "points", [])
-    ids = load_plant().inverters.ids
-    for point in points:
-        index = point.get("point_index", point.get("point_number"))
-        if index is not None and 0 <= int(index) < len(ids):
-            st.session_state.map_inverter = ids[int(index)]
+def _storm_bands(fig: go.Figure, sky: pd.DataFrame, label: bool) -> None:
+    """Shaded band while the wind is above the stow limit; the label only where asked (the sun and wind panel)."""
+    for a, b in plantmap.storm_bands(sky):
+        extra = {"annotation_text": "<b>Dust storm, trackers stowed</b>", "annotation_position": "top left",
+                 "annotation_font": {"size": 13, "color": STORM_INK}} if label else {}
+        fig.add_vrect(x0=local(a), x1=local(b), fillcolor=STORM_FILL, line_width=0, layer="below", **extra)
 
 
-def sky_chart(run: source.Run, plant) -> None:
+def _event_markers(fig: go.Figure, marks: list) -> None:
+    """A dotted navy line per applied action with its number in a navy badge near the bottom of the chart."""
+    for m in marks:
+        fig.add_vline(x=local(m.ts), line={"color": TOKENS["navy"], "width": 1.5, "dash": "dot"})
+        fig.add_annotation(x=local(m.ts), y=0.04, yref="paper", text=f"<b>{m.n}</b>", showarrow=False,
+                           font={"size": 13, "color": "#ffffff"}, bgcolor=TOKENS["navy"], bordercolor=TOKENS["navy"],
+                           borderpad=4, xanchor="center", yanchor="bottom")
+
+
+def sun_wind_panel(run: source.Run, plant) -> None:
     sky = plantmap.sky_strip(run, plant)
     x = sky.index.tz_convert(DISPLAY_TZ)
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=x, y=sky["sun_elevation_deg"].clip(lower=0), name="Sun height (degrees)", mode="lines",
-                             fill="tozeroy", line={"color": "#b58900", "width": 1}, fillcolor="rgba(230,190,60,0.25)",
-                             hovertemplate="sun %{y:.0f}°"))
-    fig.add_trace(go.Scatter(x=x, y=sky["wind_ms"], name="Wind on site (m/s)", mode="lines", yaxis="y2",
-                             line={"color": SERIES["actual"], "width": 2}, hovertemplate="wind %{y:.1f} m/s"))
+    fig.add_trace(go.Scatter(x=x, y=sky["sun_elevation_deg"].clip(lower=0), name="Sun height", mode="lines",
+                             fill="tozeroy", line={"color": SERIES["sun"], "width": 2}, fillcolor=SUN_FILL,
+                             hovertemplate="%{y:.0f}°"))
+    fig.add_trace(go.Scatter(x=x, y=sky["wind_ms"], name="Wind on site", mode="lines", yaxis="y2",
+                             line={"color": SERIES["actual"], "width": 2.5}, hovertemplate="%{y:.1f} m/s"))
+    panel_axes(fig, run, 260)
     stow = plant.tracker.stow_wind_ms
-    fig.add_hline(y=stow, yref="y2", line={"color": SERIES["actual"], "width": 1, "dash": "dot"},
-                  annotation_text=f"trackers stow above {stow:g} m/s", annotation_font_size=10)
-    for a, b in plantmap.storm_bands(sky):
-        fig.add_vrect(x0=local(a), x1=local(b), fillcolor="rgba(150,110,60,0.25)", line_width=0,
-                      annotation_text="dust storm: trackers stowed", annotation_position="top left",
-                      annotation_font_size=10)
-    fig.add_vline(x=local(run.now), line={"color": TOKENS["ink"], "width": 1})
-    fig.update_layout(height=150, margin={"l": 0, "r": 0, "t": 18, "b": 0}, hovermode="x unified",
-                      legend={"orientation": "h", "y": 1.35, "x": 0, "font": {"size": 11}},
-                      yaxis={"title": "sun (°)", "range": [0, 90], "fixedrange": True},
-                      yaxis2={"title": "wind (m/s)", "overlaying": "y", "side": "right", "fixedrange": True,
-                              "range": [0, max(25.0, float(sky["wind_ms"].max() or 0) * 1.1)]},
-                      xaxis={"range": [local(run.incident.start), local(run.incident.end)], "fixedrange": True},
-                      paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
-    st.plotly_chart(fig, key="sky_strip", config={"displayModeBar": False})
+    wmax = sky["wind_ms"].max()
+    top = 25.0 if pd.isna(wmax) else max(25.0, float(-(-wmax * 1.1 // 5) * 5))  # whole fives above the peak
+    fig.update_layout(yaxis={"title": "sun height (°)", "range": [0, 90], "dtick": 30},
+                      yaxis2={"title": "wind (m/s)", "overlaying": "y", "side": "right", "showgrid": False,
+                              "range": [0, top], "dtick": 5, "fixedrange": True,
+                              "tickfont": {"size": 13, "color": TOKENS["body"]},
+                              "title_font": {"size": 14, "color": TOKENS["body"]}})
+    _storm_bands(fig, sky, label=True)
+    fig.add_hline(y=stow, yref="y2", line={"color": THRESHOLD, "width": 1.5, "dash": "dash"},
+                  annotation_text=f"Stow limit {stow:g} m/s", annotation_position="top right",
+                  annotation_font={"size": 13, "color": THRESHOLD})
+    text, state = plantpanels.takeaway_sky(sky, plant, run.now)
+    with card():
+        st.markdown(plantpanels.panel_header("Sun and wind", "degrees and m/s", text, state), unsafe_allow_html=True)
+        st.plotly_chart(fig, key="sky_strip", config={"displayModeBar": False})
+        st.markdown(plantpanels.legend_html(plantpanels.legend_sky(sky, plant, SERIES["sun"], SERIES["actual"], run.now)),
+                    unsafe_allow_html=True)
 
 
 def inverter_detail(run: source.Run, plant) -> None:
@@ -735,9 +806,9 @@ def inverter_detail(run: source.Run, plant) -> None:
     fig.add_vline(x=local(run.now), line={"color": TOKENS["ink"], "width": 1})
     fig.update_layout(height=260, margin={"l": 0, "r": 0, "t": 10, "b": 0}, hovermode="x unified",
                       legend={"orientation": "h", "y": 1.15, "x": 0}, yaxis_title="Output (MW)",
-                      xaxis_range=[local(run.incident.start), local(run.incident.end)],
-                      paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
-    st.plotly_chart(fig, key="inverter_detail")
+                      xaxis_range=[local(run.incident.start), local(run.incident.end)])
+    with card():
+        st.plotly_chart(styled(fig), key="inverter_detail")
     gaps = int(hist["inverter_kw"].isna().sum() - hist["peer_median_kw"].isna().sum())
     st.caption(f"{plain.device(choice)} against the other {len(ids) - 1} inverters, up to the simulated clock."
                + (f" Gaps in the line are steps with no reading ({gaps} so far), not zero output." if gaps > 0 else ""))
@@ -775,55 +846,76 @@ def notes_panel(run: source.Run) -> None:
                  hide_index=True, key="notes_table")
 
 
-def recovery_figure(run: source.Run, power: pd.DataFrame, height: int = 380) -> go.Figure:
-    """Actual vs expected (reference) vs expected (sensor), with a line per applied action."""
+def output_panel(run: source.Run, power: pd.DataFrame) -> None:
+    """Actual against the two expected lines, the storm band, numbered action markers; a legend table with
+    now / min / max and the markers explained under it. The sensor line stops where the agent dropped the sensor."""
+    plant = load_plant()
     x = power.index.tz_convert(DISPLAY_TZ)
+    dropped = plantpanels.sensor_dropped_at(run)
+    sensor = power["expected_sensor_kw"].copy()
+    if dropped is not None:
+        sensor[sensor.index > dropped] = float("nan")
     fig = go.Figure()
-    for col, name, color, dash in (
-        ("actual_kw", "Actual output (meter)", SERIES["actual"], "solid"),
-        ("expected_ref_kw", "Expected from the weather reference", SERIES["reference"], "dash"),
-        ("expected_sensor_kw", "Expected from the on-site sun sensor", SERIES["sensor"], "dot"),
+    for y, name, color, dash, width in (
+        (power["expected_ref_kw"], "Expected, satellite weather", SERIES["reference"], "dash", 2.5),
+        (sensor, "Expected, plant sun sensor", SERIES["sensor"], "dot", 2.5),
+        (power["actual_kw"], "Actual", SERIES["actual"], "solid", 3),
     ):
-        fig.add_trace(go.Scatter(x=x, y=power[col] / 1000, name=name, mode="lines",
-                                 line={"color": color, "width": 2, "dash": dash}, hovertemplate="%{y:.1f} MW"))
-    for a in run.log.actions_until(run.now):
-        if a.status == ActionStatus.APPLIED:
-            fig.add_vline(x=local(a.decided_at), line={"color": MUTED, "width": 1})
-            fig.add_annotation(x=local(a.decided_at), y=1, yref="paper", text=plain.action(a.request.action),
-                               showarrow=False, textangle=-90, xanchor="right", yanchor="top",
-                               font={"size": 10, "color": MUTED})
-    fig.update_layout(height=height, hovermode="x unified", margin={"l": 0, "r": 0, "t": 10, "b": 0},
-                      legend={"orientation": "h", "y": 1.12, "x": 0},
-                      yaxis_title="Plant output (MW)", xaxis_title=f"Time ({DISPLAY_TZ})",
-                      xaxis_range=[local(run.incident.start), local(run.incident.end)],
-                      paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
-    return fig
-
-
-def recovery_chart(run: source.Run, power: pd.DataFrame) -> None:
-    st.subheader("Recovery")
-    x = power.index.tz_convert(DISPLAY_TZ)
-    st.plotly_chart(recovery_figure(run, power), key="recovery_chart")
+        fig.add_trace(go.Scatter(x=x, y=y / 1000, name=name, mode="lines", connectgaps=False,
+                                 line={"color": color, "width": width, "dash": dash}, hovertemplate="%{y:.1f} MW"))
+    panel_axes(fig, run, 320)
+    fig.update_yaxes(title_text="plant output (MW)")
+    _storm_bands(fig, plantmap.sky_strip(run, plant), label=False)
+    marks = plantpanels.markers(run)
+    _event_markers(fig, marks)
+    text, state = plantpanels.takeaway_output(power, plant)
+    with card():
+        st.markdown(plantpanels.panel_header("Plant output against expected", "megawatts", text, state),
+                    unsafe_allow_html=True)
+        st.plotly_chart(fig, key="recovery_chart", config={"displayModeBar": False})
+        st.markdown(plantpanels.legend_html(plantpanels.legend_output(power, dropped, SERIES)), unsafe_allow_html=True)
+        if marks:
+            st.markdown(plantpanels.markers_html(marks), unsafe_allow_html=True)
     st.caption("The expected lines are the fault-free plant on the weather each source reports. When the sun sensor is "
                "dusty, its line drops to meet a dusty plant and the loss looks normal (the dusty-sensor trap); the "
-               "reference line still shows it. Vertical lines mark actions applied to the plant.")
+               "satellite line still shows it. The shaded band is the dust storm; numbered lines are the agent's actions.")
+    with st.expander("Sunlight behind the expected lines"):
+        fig = go.Figure()
+        for col, name, color, dash in (
+            ("sensor_ghi_wm2", "On-site sun sensor", SERIES["sensor"], "dot"),
+            ("reference_ghi_wm2", "Satellite reference (NASA POWER)", SERIES["reference"], "solid"),
+            ("clearsky_ghi_wm2", "Clear-sky model (shape only)", MUTED, "solid"),
+        ):
+            fig.add_trace(go.Scatter(x=x, y=power[col], name=name, mode="lines",
+                                     line={"color": color, "width": 2 if color != MUTED else 1, "dash": dash},
+                                     hovertemplate="%{y:.0f} W/m²"))
+        fig.update_layout(height=240, hovermode="x unified", margin={"l": 0, "r": 0, "t": 10, "b": 0},
+                          legend={"orientation": "h", "y": 1.2, "x": 0}, yaxis_title="Sunlight (W/m²)",
+                          xaxis_range=[local(run.incident.start), local(run.incident.end)])
+        st.plotly_chart(styled(fig), key="irradiance_chart")
+        st.caption("The clear-sky model gives the shape of a cloudless day for comparison. It is not a ceiling: the "
+                   "reference itself can sit above it.")
 
-    fig = go.Figure()
-    for col, name, color, dash in (
-        ("sensor_ghi_wm2", "On-site sun sensor", SERIES["sensor"], "dot"),
-        ("reference_ghi_wm2", "Weather reference (NASA POWER)", SERIES["reference"], "solid"),
-        ("clearsky_ghi_wm2", "Clear-sky model (shape only)", MUTED, "solid"),
-    ):
-        fig.add_trace(go.Scatter(x=x, y=power[col], name=name, mode="lines",
-                                 line={"color": color, "width": 2 if color != MUTED else 1, "dash": dash},
-                                 hovertemplate="%{y:.0f} W/m²"))
-    fig.update_layout(height=260, hovermode="x unified", margin={"l": 0, "r": 0, "t": 10, "b": 0},
-                      legend={"orientation": "h", "y": 1.2, "x": 0}, yaxis_title="Sunlight (W/m²)",
-                      xaxis_range=[local(run.incident.start), local(run.incident.end)],
-                      paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
-    st.plotly_chart(fig, key="irradiance_chart")
-    st.caption("The clear-sky model gives the shape of a cloudless day for comparison. It is not a ceiling: the "
-               "reference itself can sit above it.")
+
+def map_panel(run: source.Run, plant) -> None:
+    """The inverter tiles by transformer row (HTML), the equipment cards beside them, a Review button for any
+    inverter waiting on your approval, and one inverter against its peers below."""
+    st.subheader("Plant map")
+    view = plantmap.map_view(run, plant)
+    left, right = st.columns([3, 1])
+    with left:
+        st.markdown(plantpanels.map_html(view, plant), unsafe_allow_html=True)
+        for inv in plantpanels.pending_inverters(view):
+            st.button(f"Review: {plain.device(inv)} needs your approval", key=f"map_review_{inv}",
+                      on_click=_go_approval, type="primary")
+    with right:
+        st.markdown(plantpanels.equipment_html(view, plant), unsafe_allow_html=True)
+    st.caption(f"Low output means stopped or at least {plantmap.PEER_SHORTFALL:.0%} below the other inverters; capped "
+               "means the inverter reports a derate or a power limit; no data means no reading arrived (never zero). "
+               "◆ marks the agent's actions on a device. Synthetic plant.")
+    with show_data("map"):
+        st.dataframe(pd.DataFrame(plantpanels.raw_rows(view)), hide_index=True, key="map_raw")
+    inverter_detail(run, plant)
 
 
 def approval_card(run: source.Run, a, key_prefix: str = "") -> None:
@@ -1455,8 +1547,8 @@ def timeline_figure(moments: list[summary.Moment], run: source.Run) -> go.Figure
                              "fixedrange": True},
                       xaxis={"range": [local(run.incident.start), local(run.incident.end)],
                              "title": f"Time ({DISPLAY_TZ})"},
-                      clickmode="event+select", dragmode=False, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
-    return fig
+                      clickmode="event+select", dragmode=False)
+    return styled(fig)
 
 
 def first_time_path(run: source.Run) -> None:
@@ -1499,23 +1591,27 @@ def summary_tab(run: source.Run, power: pd.DataFrame) -> None:
     a.metric("Agent steps", head.turn if head.turns_total is None else f"{head.turn} of {head.turns_total}")
     b.metric("Causes found", sum(len(v) for v in head.causes.values()),
              f"{len(head.causes[trace.RESOLVED])} fixed, {len(head.causes[trace.ESCALATED])} to a human",
-             delta_color="off")
+             delta_color="off", delta_arrow="off")
     c.metric("Energy below expected", f"{e.lost_mwh:.2f} MWh",
              f"{e.lost_before_mwh:.2f} before first fix, {e.lost_after_mwh:.2f} after"
-             if e.first_effective else "no fix in effect yet", delta_color="off")
-    d.metric("Shortfall, worst / last hour",
-             "none yet" if e.gap_worst_pct is None else f"{e.gap_worst_pct:.0f}% / "
-             + ("0%" if e.gap_last_pct is None else f"{e.gap_last_pct:.0f}%"))
+             if e.first_effective else "no fix in effect yet", delta_color="off", delta_arrow="off")
+    d.metric("Shortfall", "none yet" if e.gap_worst_pct is None
+             else f"{percent(e.gap_worst_pct)} → {percent(0 if e.gap_last_pct is None else e.gap_last_pct)}",
+             "worst hour → last hour" if e.gap_worst_pct is not None else None, delta_color="off", delta_arrow="off")
     f.metric("Model calls", head.llm_calls, f"{head.llm_s:.1f} s in the model" if head.llm_calls else "rules only",
-             delta_color="off")
-    st.caption("Energy below expected is the area between the expected-from-reference line and the meter, up to the "
-               "simulated clock: the shortfall, whatever its cause (the reference itself carries a few percent of "
-               "error). Recovery shows as the shortfall after the first fix took effect, and in the last hour's percentage.")
+             delta_color="off", delta_arrow="off")
+    with st.expander("How is energy below expected measured?"):
+        st.markdown("Energy below expected is the area between the expected-from-reference line and the meter, up to the "
+                    "simulated clock: the shortfall, whatever its cause (the reference itself carries a few percent of "
+                    "error). Recovery shows as the shortfall after the first fix took effect, and in the last hour's "
+                    "percentage. The shortfall reads worst hour first, then the last hour; a negative last hour means "
+                    "the plant is above the reference.")
 
     st.markdown("**Key moments.** Click a marker or a button to open that step in the Trace tab.")
     if moments:
-        st.plotly_chart(timeline_figure(moments, run), key="summary_timeline", on_select=_timeline_clicked,
-                        selection_mode="points", config={"displayModeBar": False})
+        with card():
+            st.plotly_chart(timeline_figure(moments, run), key="summary_timeline", on_select=_timeline_clicked,
+                            selection_mode="points", config={"displayModeBar": False})
         st.session_state.summary_moment_turns = [m.turn for m in moments]
         with st.container(height=min(60 + 52 * len(moments), 380)):
             for i, m in enumerate(moments):
@@ -1524,8 +1620,8 @@ def summary_tab(run: source.Run, power: pd.DataFrame) -> None:
                 mark = chip(m.outcome, state) if state else ""
                 text_col.markdown(f'<span class="rq-time">{local_hhmm(m.ts)}</span> {inline(m.said or m.text)} {mark}',
                                   unsafe_allow_html=True)
-                go_col.button(f"Turn {m.turn}", key=f"summary_moment_{i}", on_click=_jump_to_turn, args=(m.turn,),
-                              width="stretch")
+                go_col.button("Open step", key=f"summary_moment_{i}", on_click=_jump_to_turn, args=(m.turn,),
+                              width="stretch", help=f"Open turn {m.turn} in Trace")
         with show_data("moments"):
             st.dataframe(pd.DataFrame([{"Time": local_hhmm(m.ts), "Turn": m.turn, "What": m.kind,
                                         "Detail": m.text, "Outcome": m.outcome} for m in moments]),
@@ -1565,6 +1661,11 @@ def summary_tab(run: source.Run, power: pd.DataFrame) -> None:
     else:
         report_columns(report)
     st.session_state.pop(summary.SWITCH_KEY, None)  # the jump already switched the page
+
+
+def percent(value: float) -> str:
+    """A whole percentage with a space and a real minus sign: 17 → "17 %", -1 → "−1 %"."""
+    return f"{value:.0f} %".replace("-", "−")
 
 
 def _plain_actions(label: str, log, now) -> str:
@@ -1711,9 +1812,9 @@ def results_tab() -> None:
                                text=[f"{v:.1f}" for v in bars["mwh_recovered"]], textposition="outside",
                                hovertemplate="%{y}: %{x:.1f} MWh<extra></extra>"))
         fig.update_layout(height=60 + 45 * len(bars), margin={"l": 0, "r": 40, "t": 10, "b": 0},
-                          xaxis_title="Energy recovered compared with doing nothing (MWh)",
-                          paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
-        st.plotly_chart(fig, key="results_chart")
+                          xaxis_title="Energy recovered compared with doing nothing (MWh)")
+        with card():
+            st.plotly_chart(styled(fig), key="results_chart")
         lost = table["mwh_lost"].iloc[0] if "mwh_lost" in table.columns else None
         st.caption("Grey bars are reference bounds, not competitors (the oracle reads the answer key; the empty agent "
                    "does nothing)." + (f" Energy lost to the faults with no action: {lost:.1f} MWh." if lost is not None else ""))
@@ -1828,9 +1929,11 @@ def _page(run: source.Run) -> None:
     elif page == "Plant":
         st.subheader("Plant")
         intro("Plant")
-        headline(run, power, data)
-        plant_map(run)
-        recovery_chart(run, power)
+        plant = load_plant()
+        stat_row(run, power, data)
+        sun_wind_panel(run, plant)
+        output_panel(run, power)
+        map_panel(run, plant)
         alarm_feed(data)
         notes_panel(run)
     elif page == "Agent":

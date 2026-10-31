@@ -363,7 +363,7 @@ def test_every_page_renders_in_replay_and_live_mode():
         _go(at, page)
         assert not at.exception, page
         seen |= {s.value for s in at.subheader}
-    assert {"Plant map", "Alarm feed", "Recovery", "Technician and operator notes", "Agent timeline",
+    assert {"Plant map", "Alarm feed", "Technician and operator notes", "Agent timeline",
             "Model proposals", "Actions and verifications", "LLM calls and time", "Shift report", "Answer key",
             "Benchmark results"} <= seen
     assert [c.key for c in at.chat_input] == ["ask_input"]  # Ask Raqeeb floats on every page

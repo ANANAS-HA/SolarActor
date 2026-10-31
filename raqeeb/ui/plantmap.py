@@ -303,7 +303,7 @@ MAP_STYLE = {  # map state -> (fill, ink); every state also has a text label and
     CURTAILED: ("#d8e6fa", "#1e3a8a"), PENDING: ("#fff1c2", "#713f12"),
     RECOVERED: ("#cfeeed", "#134e4a"), FLAGGED: ("#fbdcc0", "#7c2d12"),
 }
-MUTED = "#898781"
+MUTED = "#4a4d52"  # secondary text, never lighter (docs/design/CONTRAST_FIX.md)
 TILE_W, TILE_H, GAP = 1.5, 1.4, 0.1
 BLOCK_PITCH, BLOCK_TOP, HEADER_H, LEFT = 2.05, -0.75, 0.42, 1.0
 SIDE_X0, SIDE_X1 = 7.95, 10.45
@@ -339,7 +339,7 @@ def _tile(fig: go.Figure, x0, x1, y0, y1, state: str, title: str, lines: list[st
     shown = badges[:max_badges] + ([f"+{len(badges) - max_badges} more"] if len(badges) > max_badges else [])
     text = f"<b>{_esc(title)}</b><br>{ICON.get(state, '')} {_esc(state)}"
     text += "".join(f"<br>{_esc(line)}" for line in [x for x in lines if x != state][:max_lines])
-    text += "".join(f"<br><span style='font-size:{size - 2}px;color:{BADGE}'>◆ {_esc(b)}</span>" for b in shown)
+    text += "".join(f"<br><span style='color:{BADGE}'>◆ {_esc(b)}</span>" for b in shown)
     fig.add_annotation(x=(x0 + x1) / 2, y=(y0 + y1) / 2, text=text, showarrow=False,
                        font={"size": size, "color": ink}, bgcolor="rgba(255,255,255,0.75)"
                        if state == NO_DATA else None)
@@ -348,7 +348,7 @@ def _tile(fig: go.Figure, x0, x1, y0, y1, state: str, title: str, lines: list[st
 def map_figure(view: MapView, plant, compact: bool = False) -> go.Figure:
     """The map. `compact` (for a half-width column): smaller text, one value line and one badge per tile."""
     fig = go.Figure()
-    size, lines, badges_shown = (10, 1, 1) if compact else (12, 9, 2)
+    size, lines, badges_shown = (12, 1, 1) if compact else (13, 8, 2)  # 13 px tile text on the full map
     cols = plant.inverters.layout_cols
     groups = plant.layout.groups
     mids: list[float] = []
@@ -365,7 +365,7 @@ def map_figure(view: MapView, plant, compact: bool = False) -> go.Figure:
         fig.add_annotation(x=0.55, y=(top + bottom) / 2, text=f"<b>{_esc(transformer)}</b><br>group {_esc(groups.get(transformer, ''))}",
                            showarrow=False, font={"size": size, "color": "#3d3a35"})
         badges = view.blocks.get(transformer, [])
-        fig.add_annotation(x=LEFT, y=top - 0.2, xanchor="left", showarrow=False, font={"size": size - 1, "color": BADGE},
+        fig.add_annotation(x=LEFT, y=top - 0.2, xanchor="left", showarrow=False, font={"size": size, "color": BADGE},
                            text=("block: " + " · ".join(f"◆ {_esc(x)}" for x in badges)) if badges else "")
         # feeder from the block's transformer to the site bus
         fig.add_shape(type="line", x0=LEFT + cols * (TILE_W + GAP) + 0.05, x1=BUS_X, y0=(top + bottom) / 2,
@@ -383,7 +383,7 @@ def map_figure(view: MapView, plant, compact: bool = False) -> go.Figure:
         x = LEFT + col * (TILE_W + GAP) + TILE_W / 2
         badges = view.edges.get(edge, [])
         fig.add_annotation(x=x, y=bottom, text=f"{_esc(edge)} (fence)" + "".join(f"<br>◆ {_esc(b)}" for b in badges),
-                           showarrow=False, yanchor="top", font={"size": size - 1, "color": BADGE if badges else MUTED})
+                           showarrow=False, yanchor="top", font={"size": size, "color": BADGE if badges else MUTED})
     # Site devices on the right: grid connection point, substation meter, weather station
     for tile, (y0, y1), title in ((view.grid, (-0.75, -2.35), "Grid connection point"),
                                   (view.meter, (-2.75, -4.35), f"Substation meter {view.meter.id}"),
@@ -406,7 +406,8 @@ def map_figure(view: MapView, plant, compact: bool = False) -> go.Figure:
     fig.update_xaxes(visible=False, range=[0, SIDE_X1 + 0.1], fixedrange=True)
     fig.update_yaxes(visible=False, range=[bottom - 0.75, 0], fixedrange=True)
     fig.update_layout(height=520 if compact else 700, margin={"l": 0, "r": 0, "t": 0, "b": 0}, dragmode=False,
-                      plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", clickmode="event+select")
+                      plot_bgcolor="#ffffff", paper_bgcolor="#ffffff", clickmode="event+select",
+                      font={"family": "IBM Plex Sans, Source Sans 3, sans-serif"})
     return fig
 
 
