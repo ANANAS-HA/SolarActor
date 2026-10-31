@@ -1752,6 +1752,7 @@ def main() -> None:
         st.session_state.run = initial_run()
         st.session_state.mode_choice = REPLAY if isinstance(st.session_state.run, ReplayRun) else LIVE_RULES
     run: source.Run = st.session_state.run
+    st.session_state.render_at = time.time()
 
     st.markdown(CSS, unsafe_allow_html=True)
     with run_lock(run):  # a background runner (live Trace) polls under the same lock
@@ -1791,10 +1792,33 @@ def alerts_banner(run: source.Run) -> None:
             st.info(f"**Alert being emailed** to {md_escape(who)}: {what}.")
 
 
+def live_tick(run: source.Run) -> None:
+    """While the background runner advances a live run, re-render the whole page about once a second so the
+    clock, the strip and the page follow it on every page (the Trace page has its own fragment for its cards).
+    The fragment's timer, not its first render, triggers the rerun; one more rerun when the runner stops."""
+    runner = _runner(run)
+    active = runner is not None and runner.state().running
+    if active or st.session_state.get("tick_active"):
+        st.fragment(run_every=TRACE_REFRESH_S if active else None)(_tick)()
+
+
+def _tick() -> None:
+    runner = _runner()
+    active = runner is not None and runner.state().running
+    was = st.session_state.get("tick_active", False)
+    st.session_state.tick_active = active
+    if time.time() - st.session_state.get("render_at", 0.0) < 0.5:
+        return  # the page is being rendered now: nothing to refresh yet
+    if active or was:
+        st.rerun()
+
+
 def _page(run: source.Run) -> None:
     data = source.tables(run)
     power = lines(run)
     page = current_page()
+    if page != "Trace":
+        live_tick(run)
     notification_strip(run)
     alerts_banner(run)
     if page == "Summary":
