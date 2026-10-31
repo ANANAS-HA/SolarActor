@@ -331,8 +331,8 @@ def notes_panel(run: source.Run) -> None:
                  hide_index=True, key="notes_table")
 
 
-def recovery_chart(run: source.Run, power: pd.DataFrame) -> None:
-    st.subheader("Recovery")
+def recovery_figure(run: source.Run, power: pd.DataFrame, height: int = 380) -> go.Figure:
+    """Actual vs expected (reference) vs expected (sensor), with a line per applied action."""
     x = power.index.tz_convert(DISPLAY_TZ)
     fig = go.Figure()
     for col, name, color, dash in (
@@ -348,11 +348,17 @@ def recovery_chart(run: source.Run, power: pd.DataFrame) -> None:
             fig.add_annotation(x=local(a.decided_at), y=1, yref="paper", text=a.request.action.value,
                                showarrow=False, textangle=-90, xanchor="right", yanchor="top",
                                font={"size": 10, "color": MUTED})
-    fig.update_layout(height=380, hovermode="x unified", margin={"l": 0, "r": 0, "t": 10, "b": 0},
+    fig.update_layout(height=height, hovermode="x unified", margin={"l": 0, "r": 0, "t": 10, "b": 0},
                       legend={"orientation": "h", "y": 1.12, "x": 0},
                       yaxis_title="Plant AC (MW)", xaxis_title=f"Time ({DISPLAY_TZ})",
                       xaxis_range=[local(run.incident.start), local(run.incident.end)])
-    st.plotly_chart(fig, key="recovery_chart")
+    return fig
+
+
+def recovery_chart(run: source.Run, power: pd.DataFrame) -> None:
+    st.subheader("Recovery")
+    x = power.index.tz_convert(DISPLAY_TZ)
+    st.plotly_chart(recovery_figure(run, power), key="recovery_chart")
     st.caption("Expected lines are the fault-free plant run on the weather each source reports. When the sensor is "
                "dusty, the sensor line drops to meet a dusty plant and the loss looks normal (the dusty-sensor "
                "trap); the reference line still shows it. Vertical lines mark actions applied to the plant.")
@@ -694,8 +700,17 @@ def trace_tab(run: source.Run, power: pd.DataFrame) -> None:
                "verifications and escalations. Quiet turns are folded into one line. Free text is quoted data, "
                "collapsed by default.")
     trace_header(trace.header(run.log, run.now, live=isinstance(run, LiveRun)))
-    st.toggle("Follow the newest turn", value=True, key="trace_follow")
-    trace_stream(run, run.now)
+    left, right = st.columns([5, 6], gap="medium")
+    with left:  # the plant as the agent reasons: same map and chart as the Operations view, compact
+        plant = load_plant()
+        st.plotly_chart(plantmap.map_figure(plantmap.map_view(run, plant), plant, compact=True), key="trace_map",
+                        config={"displayModeBar": False})
+        st.plotly_chart(recovery_figure(run, power, height=300), key="trace_recovery")
+        st.caption("Map: telemetry and the agent's record at the sim clock. Chart: meter vs expected from the "
+                   "reference and from the on-site sensor; vertical lines are applied actions.")
+    with right:
+        st.toggle("Follow the newest turn", value=True, key="trace_follow")
+        trace_stream(run, run.now)
 
 
 

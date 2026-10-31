@@ -321,7 +321,7 @@ def _esc(text: str) -> str:
 
 
 def _tile(fig: go.Figure, x0, x1, y0, y1, state: str, title: str, lines: list[str], badges: list[str],
-          size: int = 12) -> None:
+          size: int = 12, max_lines: int = 9, max_badges: int = 2) -> None:
     fill, ink = MAP_STYLE[state]
     pending = state == PENDING
     fig.add_shape(type="rect", x0=x0, x1=x1, y0=y0, y1=y1, fillcolor=fill, layer="below",
@@ -334,24 +334,26 @@ def _tile(fig: go.Figure, x0, x1, y0, y1, state: str, title: str, lines: list[st
             ax, ay = x0 + max(0.0, d - (y0 - y1)), y0 - min(d, y0 - y1)
             bx, by = x0 + min(d, x1 - x0), y0 - max(0.0, d - (x1 - x0))
             fig.add_shape(type="line", x0=ax, y0=ay, x1=bx, y1=by, line={"color": "#c9c6bf", "width": 1}, layer="below")
-    shown = badges[:2] + ([f"+{len(badges) - 2} more"] if len(badges) > 2 else [])
+    shown = badges[:max_badges] + ([f"+{len(badges) - max_badges} more"] if len(badges) > max_badges else [])
     text = f"<b>{_esc(title)}</b><br>{ICON.get(state, '')} {_esc(state)}"
-    text += "".join(f"<br>{_esc(line)}" for line in lines if line != state)
+    text += "".join(f"<br>{_esc(line)}" for line in [x for x in lines if x != state][:max_lines])
     text += "".join(f"<br><span style='font-size:{size - 2}px;color:{BADGE}'>◆ {_esc(b)}</span>" for b in shown)
     fig.add_annotation(x=(x0 + x1) / 2, y=(y0 + y1) / 2, text=text, showarrow=False,
                        font={"size": size, "color": ink}, bgcolor="rgba(255,255,255,0.75)"
                        if state == NO_DATA else None)
 
 
-def map_figure(view: MapView, plant) -> go.Figure:
+def map_figure(view: MapView, plant, compact: bool = False) -> go.Figure:
+    """The map. `compact` (for a half-width column): smaller text, one value line and one badge per tile."""
     fig = go.Figure()
+    size, lines, badges_shown = (10, 1, 1) if compact else (12, 9, 2)
     cols = plant.inverters.layout_cols
     groups = plant.layout.groups
     mids: list[float] = []
     # Plant-wide badges
     plant_text = "Plant-wide: " + (" · ".join(_esc(b) for b in view.plant) if view.plant else "no plant-wide action")
     fig.add_annotation(x=0.05, y=-0.3, xanchor="left", text=plant_text, showarrow=False,
-                       font={"size": 12, "color": BADGE if view.plant else MUTED})
+                       font={"size": size, "color": BADGE if view.plant else MUTED})
     # Blocks (one transformer each) with their tiles
     for b, (transformer, members) in enumerate(plant.layout.transformers.items()):
         top = BLOCK_TOP - b * BLOCK_PITCH + 0.05
@@ -359,9 +361,9 @@ def map_figure(view: MapView, plant) -> go.Figure:
         fig.add_shape(type="rect", x0=0.1, x1=LEFT + cols * (TILE_W + GAP) + 0.05, y0=top, y1=bottom,
                       line={"color": "#8f8c84", "width": 1}, fillcolor="rgba(0,0,0,0)", layer="below")
         fig.add_annotation(x=0.55, y=(top + bottom) / 2, text=f"<b>{_esc(transformer)}</b><br>group {_esc(groups.get(transformer, ''))}",
-                           showarrow=False, font={"size": 12, "color": "#3d3a35"})
+                           showarrow=False, font={"size": size, "color": "#3d3a35"})
         badges = view.blocks.get(transformer, [])
-        fig.add_annotation(x=LEFT, y=top - 0.2, xanchor="left", showarrow=False, font={"size": 11, "color": BADGE},
+        fig.add_annotation(x=LEFT, y=top - 0.2, xanchor="left", showarrow=False, font={"size": size - 1, "color": BADGE},
                            text=("block: " + " · ".join(f"◆ {_esc(x)}" for x in badges)) if badges else "")
         # feeder from the block's transformer to the site bus
         fig.add_shape(type="line", x0=LEFT + cols * (TILE_W + GAP) + 0.05, x1=BUS_X, y0=(top + bottom) / 2,
@@ -371,7 +373,7 @@ def map_figure(view: MapView, plant) -> go.Figure:
     fig.add_shape(type="line", x0=BUS_X, x1=SIDE_X0, y0=METER_Y, y1=METER_Y, line={"color": "#8f8c84", "width": 2})
     for k, tile in enumerate(view.inverters):
         x0, x1, y0, y1 = _tile_xy(k, cols)
-        _tile(fig, x0, x1, y0, y1, tile.state, tile.id, tile.lines, tile.badges)
+        _tile(fig, x0, x1, y0, y1, tile.state, tile.id, tile.lines, tile.badges, size, lines, badges_shown)
     # Field edges (map columns along the fences)
     bottom = BLOCK_TOP - len(plant.layout.transformers) * BLOCK_PITCH - 0.05
     for edge, members in plant.layout.edges.items():
@@ -379,12 +381,13 @@ def map_figure(view: MapView, plant) -> go.Figure:
         x = LEFT + col * (TILE_W + GAP) + TILE_W / 2
         badges = view.edges.get(edge, [])
         fig.add_annotation(x=x, y=bottom, text=f"{_esc(edge)} (fence)" + "".join(f"<br>◆ {_esc(b)}" for b in badges),
-                           showarrow=False, yanchor="top", font={"size": 11, "color": BADGE if badges else MUTED})
+                           showarrow=False, yanchor="top", font={"size": size - 1, "color": BADGE if badges else MUTED})
     # Site devices on the right: grid connection point, substation meter, weather station
     for tile, (y0, y1), title in ((view.grid, (-0.75, -2.35), "Grid connection point"),
                                   (view.meter, (-2.75, -4.35), f"Substation meter {view.meter.id}"),
                                   (view.station, (-4.75, -7.1), f"Weather station {view.station.id}")):
-        _tile(fig, SIDE_X0, SIDE_X1, y0, y1, tile.state, title, tile.lines, tile.badges, size=12)
+        _tile(fig, SIDE_X0, SIDE_X1, y0, y1, tile.state, title, tile.lines, tile.badges, size,
+              3 if compact else 9, badges_shown)
     fig.add_shape(type="line", x0=(SIDE_X0 + SIDE_X1) / 2, x1=(SIDE_X0 + SIDE_X1) / 2, y0=-2.35, y1=-2.75,
                   line={"color": "#8f8c84", "width": 2})
     # Click targets: one invisible marker per inverter tile (point index = inverter order)
@@ -400,7 +403,7 @@ def map_figure(view: MapView, plant) -> go.Figure:
                              selected={"marker": {"opacity": 0.01}}, unselected={"marker": {"opacity": 0.01}}))
     fig.update_xaxes(visible=False, range=[0, SIDE_X1 + 0.1], fixedrange=True)
     fig.update_yaxes(visible=False, range=[bottom - 0.75, 0], fixedrange=True)
-    fig.update_layout(height=700, margin={"l": 0, "r": 0, "t": 0, "b": 0}, dragmode=False,
+    fig.update_layout(height=520 if compact else 700, margin={"l": 0, "r": 0, "t": 0, "b": 0}, dragmode=False,
                       plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", clickmode="event+select")
     return fig
 
