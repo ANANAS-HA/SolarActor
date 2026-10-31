@@ -26,7 +26,7 @@ import streamlit as st
 
 from raqeeb.config import REPO_ROOT, load_plant
 from raqeeb.contracts import DISPLAY_TZ, ActionStatus, IncidentReport
-from raqeeb.ui import plantmap, source
+from raqeeb.ui import plantmap, source, trace
 from raqeeb.ui.live import LiveRun, ReplayRun, local_model_status
 from raqeeb.ui.proposals import effect
 from raqeeb.ui.runlog import MODE_LABEL, Mode
@@ -515,6 +515,190 @@ def llm_panel(run: source.Run) -> None:
         st.caption("No model calls: the rules explained everything so far (or this run is rules only).")
 
 
+# -- Trace tab ---------------------------------------------------------------------------------------------
+
+KIND_STYLE = {trace.FINDING: ("FINDING", "#fbdcc0"), trace.OK: ("OK", "#dcefe2"),
+              trace.INCONCLUSIVE: ("INCONCLUSIVE", "#ecebe7")}  # word + colour: never colour alone
+STATUS_BADGE = {trace.OPEN: "blue", trace.ACTING: "orange", trace.RESOLVED: "green", trace.ESCALATED: "red",
+                trace.EXPECTED: "gray", trace.FLAGGED: "violet"}
+DECISION_BADGE = {"accepted": ":green-background[ACCEPTED]", "rejected": ":red-background[REJECTED]",
+                  "dropped": ":orange-background[DROPPED]"}
+
+
+def trace_header(head: trace.Header) -> None:
+    a, b, c, d, e = st.columns([1, 1, 3, 1, 1])
+    a.metric("Sim time", f"{local(head.ts):%H:%M}", DISPLAY_TZ, delta_color="off")
+    b.metric("Turn", f"{head.turn}" + (f" / {head.turns_total}" if head.turns_total else ""))
+    with c:
+        st.markdown("**Causes by status**")
+        named = [(s, labels) for s, labels in head.causes.items() if labels]
+        st.markdown(" ".join(f":{STATUS_BADGE[s]}-background[{md_escape(s)}: {len(labels)}]" for s, labels in named)
+                    if named else "none named yet")
+        if named:
+            st.caption(" · ".join(f"{s}: {', '.join(labels)}" for s, labels in named))
+    d.metric("Model calls", head.llm_calls)
+    e.metric("Model time", f"{head.llm_s:.1f} s")
+
+
+def _styled_checks(rows: list[trace.CheckRow]):
+    frame = pd.DataFrame([{"Verdict": f"{KIND_STYLE[r.kind][0]}: {r.verdict}", "Tool": r.tool, "Devices": r.devices,
+                           "Numbers": r.numbers, "Threshold": r.threshold} for r in rows])
+    colours = [f"background-color: {KIND_STYLE[r.kind][1]}" for r in rows]
+    return frame.style.apply(lambda _: colours, subset=["Verdict"])
+
+
+def trace_card(card: trace.TurnCard, run: source.Run) -> None:
+    with st.container(border=True):
+        st.markdown(f"**Turn {card.index}** · {local_hhmm(card.ts)} {DISPLAY_TZ}" + (" · final poll" if card.final else ""))
+        if card.outcomes:
+            st.caption("Told by the plant: " + "; ".join(md_escape(o) for o in card.outcomes))
+        if card.symptoms:
+            st.markdown("New symptoms: " + " ".join(f":orange-background[{md_escape(s)}]" for s in card.symptoms))
+        if card.checks is not None:
+            if card.checks:
+                st.dataframe(_styled_checks(card.checks), hide_index=True, key=f"trace_checks_{card.index}")
+            else:
+                st.caption("Tool checks: no finding.")
+        if card.candidates is not None:
+            top = max([c.score for c in card.candidates] + [1.0])
+            st.dataframe(pd.DataFrame([{"Cause": c.label, "Score": c.score,
+                                        "Selected": "✓ selected" if c.selected else "not selected",
+                                        "Explains": c.explains} for c in card.candidates]),
+                         hide_index=True, key=f"trace_candidates_{card.index}",
+                         column_config={"Score": st.column_config.ProgressColumn("Score", min_value=0.0,
+                                                                                 max_value=top, format="%.2f")})
+            if card.unexplained:
+                st.caption("Unexplained: " + ", ".join(md_escape(s) for s in card.unexplained))
+        if card.llm_calls or card.proposals:
+            trace_model(card)
+        if card.actions:
+            trace_actions(card, run)
+        if card.verifications:
+            st.dataframe(pd.DataFrame([{"Verified": f"{'✓ recovered' if v.recovered else '✗ not recovered'}",
+                                        "Action": v.action_id, "Before kW": round(v.before_kw),
+                                        "After kW": round(v.after_kw), "Expected kW": round(v.expected_kw)}
+                                       for v in card.verifications]),
+                         hide_index=True, key=f"trace_verify_{card.index}")
+        if card.escalations:
+            st.dataframe(pd.DataFrame([{"Escalated to a human": e.subject, "Devices": ", ".join(e.devices),
+                                        "Reason": e.reason} for e in card.escalations]),
+                         hide_index=True, key=f"trace_escalations_{card.index}")
+        if card.notes:
+            with st.expander(f"Notes ({len(card.notes)}): quoted, untrusted", expanded=False):
+                st.dataframe(pd.DataFrame([{"Time": local_hhmm(n.ts), "Source": n.source, "Author": n.author,
+                                            "About": n.about, "Text (quoted)": n.text} for n in card.notes]),
+                             hide_index=True, key=f"trace_notes_{card.index}")
+        if card.steps:
+            with st.expander(f"Agent steps ({len(card.steps)})", expanded=False):
+                st.dataframe(pd.DataFrame([{"Step": s.node, "What": s.summary} for s in card.steps]),
+                             hide_index=True, key=f"trace_steps_{card.index}")
+
+
+def trace_model(card: trace.TurnCard) -> None:
+    seconds = sum(c.latency_s for c in card.llm_calls)
+    decided = " · ".join(f"{sum(p.decision == d for p in card.proposals)} {d}"
+                         for d in ("accepted", "rejected", "dropped") if any(p.decision == d for p in card.proposals))
+    st.markdown(f"Model: {len(card.llm_calls)} call(s), {seconds:.2f} s" + (f" · proposals: {decided}" if decided else ""))
+    for p in card.proposals:
+        st.markdown(f"{DECISION_BADGE[p.decision]} **{md_escape(p.label)}**"
+                    + (f": {md_escape(p.reason)}" if p.reason and p.decision != "accepted" else "")
+                    + (" (changed nothing)" if p.decision == "rejected" else ""))
+    with st.expander("Model calls: data sent and replies", expanded=False):
+        if card.llm_calls:
+            st.dataframe(pd.DataFrame([{"Purpose": c.purpose, "Model": c.model, "Role": c.role.value,
+                                        "Latency (s)": round(c.latency_s, 2), "Tokens in": c.prompt_tokens,
+                                        "Tokens out": c.completion_tokens, "Valid reply": "yes" if c.ok else "no"}
+                                       for c in card.llm_calls]), hide_index=True, key=f"trace_calls_{card.index}")
+        for k, p in enumerate(card.proposals):
+            st.dataframe(pd.DataFrame([{"Check": c.check, "Result": c.result,
+                                        "Pass": {True: "pass", False: "FAIL", None: "context"}[c.passed]}
+                                       for c in p.checks]), hide_index=True, key=f"trace_pchecks_{card.index}_{k}")
+            if p.model_evidence:
+                st.dataframe(pd.DataFrame({f"{p.label}: the model's words (quoted)": p.model_evidence}),
+                             hide_index=True, key=f"trace_pwords_{card.index}_{k}")
+        if card.transcripts:
+            for k, tr in enumerate(card.transcripts):
+                st.caption(f"Call {k + 1}: data sent")
+                st.code(str(tr.get("sent", "")), language=None, wrap_lines=True)
+                st.caption(f"Call {k + 1}: reply")
+                st.code(str(tr.get("reply", "")), language=None, wrap_lines=True)
+        else:
+            st.caption("Data sent and replies are not recorded in this file (only call metadata).")
+
+
+def trace_actions(card: trace.TurnCard, run: source.Run) -> None:
+    rows = []
+    for a in card.actions:
+        needs, decision = trace.gate(a)
+        rows.append({"Action": a.request.action.value, "Target": a.request.target, "For cause": a.cause,
+                     "Gate": needs, "Decision": decision, "Note (quoted)": a.note})
+    st.dataframe(pd.DataFrame(rows), hide_index=True, key=f"trace_actions_{card.index}")
+    for a in card.actions:
+        if a.status is None and isinstance(run, LiveRun) and any(w.request.id == a.request.id for w in run.waiting):
+            req = a.request
+            with st.container(border=True):
+                st.markdown(f"**Approve {md_escape(req.action.value)} on {md_escape(req.target)}?**  \n"
+                            f"*Rationale:* {md_escape(req.rationale)}")
+                st.text_input("Operator note", key=f"trace_note_{req.id}", placeholder="Optional reason")
+                ok, no = st.columns(2)
+                ok.button("Approve", key=f"trace_approve_{req.id}", on_click=_trace_decide, args=(req.id, True),
+                          type="primary", width="stretch")
+                no.button("Reject", key=f"trace_reject_{req.id}", on_click=_trace_decide, args=(req.id, False),
+                          width="stretch")
+
+
+def _trace_decide(action_id: str, approve: bool) -> None:
+    note = st.session_state.get(f"trace_note_{action_id}", "").strip()
+    st.session_state.run.decide(action_id, approve, note)
+
+
+def trace_stream(run: source.Run, now) -> None:
+    cards = trace.turn_cards(run.log, now)
+    box = st.container(height=900, key="trace_stream")
+    with box:
+        if not cards:
+            st.info("No turns yet: press Step or Play.")
+        quiet: list[trace.TurnCard] = []
+
+        def flush() -> None:
+            if quiet:
+                span = f"Turn {quiet[0].index}" if len(quiet) == 1 else f"Turns {quiet[0].index}-{quiet[-1].index}"
+                st.caption(f"{span} ({local_hhmm(quiet[0].ts)}-{local_hhmm(quiet[-1].ts)}): nothing new.")
+                quiet.clear()
+
+        for card in cards:
+            if card.quiet:
+                quiet.append(card)
+                continue
+            flush()
+            trace_card(card, run)
+        flush()
+    if st.session_state.get("trace_follow", True) and cards:
+        _scroll_to_bottom("trace_stream", len(cards))
+
+
+def _scroll_to_bottom(key: str, marker: int) -> None:
+    """Scroll the trace container to its newest card (newest at the bottom). Fixed script, no user text."""
+    st.html(f"""<script>
+      // turn {marker}
+      for (const el of document.querySelectorAll('.st-key-{key}, .st-key-{key} *')) {{
+        if (el.scrollHeight > el.clientHeight + 4) {{ el.scrollTop = el.scrollHeight; }}
+      }}
+    </script>""", unsafe_allow_javascript=True)
+
+
+def trace_tab(run: source.Run, power: pd.DataFrame) -> None:
+    st.subheader("Trace")
+    st.caption("One card per agent turn, newest at the bottom: the checks it ran, the symptoms it saw, the causes it "
+               "ranked, model calls and how each proposal was tested, actions and the gate's decision, "
+               "verifications and escalations. Quiet turns are folded into one line. Free text is quoted data, "
+               "collapsed by default.")
+    trace_header(trace.header(run.log, run.now, live=isinstance(run, LiveRun)))
+    st.toggle("Follow the newest turn", value=True, key="trace_follow")
+    trace_stream(run, run.now)
+
+
+
 def report_markdown(run: source.Run, report: IncidentReport) -> str:
     statuses = {a.request.id: a.status for a in run.log.actions_until(run.now)}
     verified = {v.action_id: v for v in report.verifications}
@@ -656,7 +840,10 @@ def main() -> None:
         approvals(run)
     headline(run, power, data)
 
-    ops, agent, report, key, results = st.tabs(["Operations", "Agent", "Report", "Answer key", "Results"])
+    ops, trace_page, agent, report, key, results = st.tabs(
+        ["Operations", "Trace", "Agent", "Report", "Answer key", "Results"])
+    with trace_page:
+        trace_tab(run, power)
     with ops:
         alarm_feed(data)
         recovery_chart(run, power)

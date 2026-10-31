@@ -9,8 +9,9 @@ reads into proposals.csv):
     dropped model-proposed <LABEL>: <reason>          (a later re-test failed; nothing had been done)
 
 Each becomes a ProposalRecord with the test as the first check, then the tool results that cover the
-proposal's target at that poll, and the time of that poll's hypothesis calls. The rejected proposal's
-own evidence and cited symptoms are not exposed by the agent (only its label and the reason).
+proposal's target at that poll, and the time of that poll's hypothesis calls. Newer agent logs also
+carry structured details (decision, label, reason, hypothesis, numbers): the test's values become a
+check row and a rejected proposal's own evidence is shown. Older files have only the label and reason.
 """
 
 from __future__ import annotations
@@ -67,8 +68,15 @@ def proposals_from_poll(ts: datetime, timeline: Iterable[TimelineItem], llm_call
             first = ProposalCheck(check=test, result=f"failed: {match['reason']}", passed=False)
         else:
             first = ProposalCheck(check=f"{test}, re-run", result=f"failed: {match['reason']}", passed=False)
-        checks = [first, *_tool_checks(target, results, layout)]
+        checks = [first]
+        details = item.details or {}
+        if details.get("numbers"):  # the test's own values, when the agent logged them (structured consult logs)
+            checks.append(ProposalCheck(check="Test values", result=", ".join(
+                f"{k} {v:g}" if isinstance(v, float) else f"{k} {v}" for k, v in details["numbers"].items())))
+        checks += _tool_checks(target, results, layout)
         words = [e for e in (evidence or {}).get(label, []) if e != AGENT_EVIDENCE] if decision == "accepted" else []
+        if not words and isinstance(details.get("hypothesis"), dict):  # rejected ones: the proposal as the model sent it
+            words = [str(e) for e in details["hypothesis"].get("evidence", [])]
         out.append(ProposalRecord(ts=ts, label=label, fault_type=fault.value, target=target, decision=decision,
                                   reason=match.groupdict().get("reason") or "", explains=explains, checks=checks,
                                   model_evidence=words, model=model,
