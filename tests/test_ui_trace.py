@@ -320,3 +320,35 @@ def test_a_new_run_stops_the_old_runner():
     at.button(key="start_live").click().run()  # replace the run
     assert _wait(lambda: not (runner._thread and runner._thread.is_alive()), timeout=15)
     assert "runner" not in at.session_state or at.session_state.runner is not runner
+
+
+# -- the showcase: local-model runs replayed from the frozen final set ---------------------------------
+
+SHOWCASE = ("fin_0029", "fin_0024", "fin_0038", "fin_0053")
+
+
+def test_showcase_replays_are_the_console_default():
+    files = source.showcase_files()
+    assert [f.name.split("__")[0] for f in files] == list(SHOWCASE)  # the default (fin_0029) first
+    assert source.console_replays()[: len(files)] == files and source.console_replays()[len(files):] == source.replay_files()
+    for path in files:
+        log = RunLog.load(path)
+        assert log.version == 3 and log.finished and log.label == source.SHOWCASE_LABEL
+        assert log.mode == live.Mode.BENCH and log.llm_calls_until(log.polls[-1].ts)  # the local model ran
+        assert all(c.model == "openai/Qwen3.8-27B-ATX-4-XS.gguf" for c in log.llm_calls_until(log.polls[-1].ts))
+        assert "/home/" not in log.to_json()  # the model server's folder is not published
+        roots = {lbl for p in log.polls if p.diagnosis for h in p.diagnosis.root_causes for lbl in h.labels}
+        assert roots or log.escalations_until(log.polls[-1].ts)
+
+
+def test_showcase_replays_render_in_the_trace_tab():
+    at = AppTest.from_file(str(APP), default_timeout=300)
+    at.run()  # the console opens on the default showcase replay
+    assert at.session_state.run.log.incident.id == "fin_0029" and "Hidden while the run is in progress" in _page(at)
+    for path in source.showcase_files():
+        at = _app(source.start_replay(path))
+        at.run()
+        at.button(key="to_end").click().run()
+        assert not at.exception, path.name
+        page = _page(at)
+        assert "Turn 48" in page and source.md_escape(source.SHOWCASE_LABEL) in page

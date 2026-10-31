@@ -45,6 +45,8 @@ from raqeeb.ui.runlog import (
 OPEN, ACTING, RESOLVED, ESCALATED, EXPECTED, FLAGGED = "open", "acting", "resolved", "escalated", "expected", "flagged"
 CAUSE_STATUSES = (OPEN, ACTING, RESOLVED, ESCALATED, EXPECTED, FLAGGED)
 FINDING, OK, INCONCLUSIVE = "finding", "ok", "inconclusive"
+DECIDED_BY = {"operator": "by the operator", "auto": "automatically", "console": "by the console",
+              "human:simulated": "by the bench's simulated operator"}  # ActionEntry.decided_by -> words
 
 
 @dataclass
@@ -259,8 +261,7 @@ def gate(a: ActionEntry) -> tuple[str, str]:
     if a.status is None:
         return needs, "waiting for a decision"
     word = {ActionStatus.APPLIED: "applied", ActionStatus.REJECTED: "rejected", ActionStatus.FAILED: "failed"}[a.status]
-    who = {"operator": "by the operator", "auto": "automatically", "console": "by the console"}.get(a.decided_by,
-                                                                                                    a.decided_by)
+    who = DECIDED_BY.get(a.decided_by, a.decided_by)
     return needs, f"{word} {who}"
 
 

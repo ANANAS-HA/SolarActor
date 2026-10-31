@@ -23,6 +23,10 @@ bench/**
 **/results.csv
 **/proposals.csv
 
+# Replays: the public image ships only the local-model showcase (raqeeb/ui/replays/final/*.json.gz);
+# the test-model recordings (a scripted stand-in) stay in the repository
+raqeeb/ui/replays/*.json
+
 # Not needed to run the console
 tests
 handoffs

@@ -76,9 +76,15 @@ The NASA POWER weather file is in `data/weather/`. Modes:
   Actions that need a human pause the run for Approve / Reject.
 - **Live: rules + local model.** Enabled only when `.env` names a reachable OpenAI-compatible local model
   server (`LOCAL_LLM_BASE_URL`, `LOCAL_LLM_MODEL`; copy `.env.example` to `.env`).
-- **Replay.** A recorded run, from `raqeeb/ui/replays/` or an uploaded file. The shipped replays are
-  labelled "recorded with test model": a scripted stand-in, not a language model, whose proposals come
-  from a fixed rule. They show how the agent tests a proposal, not what a model would propose.
+- **Replay.** A recorded run, or any trajectory file the bench writes (Trace tab, upload or path). The
+  console opens on four runs of the agent with the local model, replayed from the frozen final set (tag
+  `final-trace`, agent unchanged; `raqeeb/ui/replays/final/`): fin_0029 (dust storm, dusty sensor and a
+  derate that needs approval), fin_0024 (a grid-operator notice in Arabic, confirmed), fin_0038 (a quiet
+  transformer trip named through a model proposal the agent tested) and fin_0053 (a held-out sensor drift,
+  escalated as unexplained). They keep the model's prompts and replies. The model name keeps only the
+  model file's name.
+  The repository also keeps four older recordings labelled "recorded with test model": a scripted
+  stand-in, not a language model, whose proposals come from a fixed rule (not shipped in the Docker image).
 
 The planted faults (the answer key) are shown only after a run has ended.
 
@@ -169,7 +175,8 @@ funded through the NASA Earth Science/Applied Science Program.
 - **Unknown faults get no fix.** A model-proposed cause that passes the tool test is ticketed or
   escalated; the agent does not invent new actions.
 - **The local model is small.** Its proposals and reports can be wrong or empty; the agent then falls back
-  to its rules and templates. The shipped replays use a scripted test model, not a language model.
+  to its rules and templates. Four showcase replays are not a sample of its behaviour: the final
+  results are.
 - **The threshold baseline is simple** by design (one ticket per alarm). A tuned commercial alarm system
   would do better than it.
 
