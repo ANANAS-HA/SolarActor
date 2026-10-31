@@ -107,7 +107,7 @@ def test_badges_follow_the_agent_record():
 
     unknown = _replay("pru_0001_test.json")
     view = plantmap.map_view(unknown)
-    assert view.blocks["T3"] == ["TRANSFORMER_TRIP proposed → accepted → escalated"]
+    assert view.blocks["T3"] == ["transformer trip proposed → accepted → escalated"]
     assert not view.blocks["T1"]  # the rejected proposal changed nothing, so no badge
     assert {_states(view)[i] for i in PLANT.layout.transformers["T3"]} == {plantmap.LOW}
     before = plantmap.map_view(_replay("pru_0001_test.json", 5 * 60 + 45))  # 08:45, before the proposal
