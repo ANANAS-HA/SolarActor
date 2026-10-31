@@ -105,7 +105,7 @@ CSS = """
         --rq-accent: %(accent)s; --rq-navy: %(navy)s; --rq-amber: %(amber)s; --rq-line: %(line)s; --rq-row: %(row)s;
         --rq-subtle: %(subtle)s; --rq-tint: %(tint)s; --rq-approval: %(approval)s;
         --rq-sans: 'IBM Plex Sans', 'Source Sans 3', system-ui, sans-serif; --rq-mono: 'IBM Plex Mono', ui-monospace, monospace; }
-.stApp, .stApp * { font-family: var(--rq-sans); }
+.stApp, .stApp :not([data-testid="stIconMaterial"]):not(.material-symbols-rounded) { font-family: var(--rq-sans); }
 .stApp { background: var(--rq-page); color: var(--rq-ink); }
 .stApp code, .stApp pre, .rq-mono { font-family: var(--rq-mono) !important; }
 [data-testid="stSidebar"] { background-color: %(sidebar)s; border-right: 1px solid var(--rq-line);
@@ -134,6 +134,8 @@ CSS = """
 .st-key-header { position: sticky; top: 0; z-index: 5; background: rgba(246,242,234,.94); backdrop-filter: blur(8px);
                  border-bottom: 2px solid var(--rq-amber); padding: 0.3rem 0 0.4rem; margin-bottom: 0.4rem; }
 .rq-title small { font-size: 12px; color: var(--rq-muted); display: block; }
+.st-key-header [data-testid="stCaptionContainer"] p { font-size: 12px; line-height: 1.35; }
+.st-key-header [data-testid="stPopover"] > button p { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .rq-title span { font-size: 17px; font-weight: 600; display: block; }
 .rq-eyebrow { font-size: 11px; font-weight: 600; color: var(--rq-muted); text-transform: uppercase; letter-spacing: 0.06em; }
 .rq-clock { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--rq-muted); padding-top: 0.35rem; }
@@ -463,8 +465,8 @@ def sidebar(run: source.Run) -> None:
 
 def run_label(run: source.Run) -> str:
     if isinstance(run, ReplayRun):
-        return f"Replay: {run.incident.id}"
-    return "Live: rules + local model" if run.log.model else "Live: rules only"
+        return "Replay"
+    return "Live, with model" if run.log.model else "Live, rules only"
 
 
 def run_panel(run: source.Run) -> None:
@@ -551,13 +553,13 @@ def header(run: source.Run) -> None:
     plant = load_plant()
     page = current_page()
     with st.container(key="header"):
-        title, runcol, play, right = st.columns([2.6, 2.2, 3.2, 2.0], vertical_alignment="top")
+        title, runcol, play, right = st.columns([3.6, 2.0, 3.0, 1.9], vertical_alignment="top")
         with title:
             st.markdown(f'<div class="rq-title"><small>Incident {html_text(run.incident.id)}, '
                         f'{local(run.incident.start):%d %B %Y}. {html_text(plant.site.name)} plant (synthetic)</small>'
                         f'<span>{html_text(page)}</span></div>', unsafe_allow_html=True)
-            st.caption(f"Mode: {md_escape(mode_words(run))}. Model: {md_escape(run.log.model or 'none (rules only)')}. "
-                       f"{md_escape(run.log.label)}.")
+            st.caption(f"Mode: {md_escape(mode_words(run))}; model {md_escape(run.log.model or 'none')}. "
+                       f"{md_escape(run.log.label[:1].upper() + run.log.label[1:])}.")
         with runcol:
             st.markdown('<div class="rq-eyebrow">Run the agent</div>', unsafe_allow_html=True)
             run_panel(run)
