@@ -9,11 +9,17 @@
 Every call, failed ones included, is logged as a contracts.LlmCall in `gateway.calls` and to the
 `raqeeb.llm` logger. A server that cannot be reached (or a role that is not configured) raises
 LlmUnavailable, so the router can fall back. The gateway never logs prompts, replies or keys.
+
+Transcripts (opt-in, off by default): `Gateway(keep_transcripts=True)` or RAQEEB_KEEP_TRANSCRIPTS=1 keeps
+the prompt and reply text of every call in `gateway.transcripts` (one dict {purpose, prompt, reply} per
+entry of `calls`, same order), in memory only: never in the logger, never on the LlmCall contract. The
+bench harness copies them into its trajectory files.
 """
 
 from __future__ import annotations
 
 import logging
+import os
 import time
 from collections.abc import Callable
 from typing import Any
@@ -25,6 +31,7 @@ from raqeeb.contracts import LlmCall, LlmRole
 
 log = logging.getLogger("raqeeb.llm")
 
+TRANSCRIPTS_ENV = "RAQEEB_KEEP_TRANSCRIPTS"  # "1" keeps prompt and reply text per call (see keep_transcripts)
 TIMEOUT_S = {LlmRole.LOCAL: 120.0, LlmRole.API: 90.0}
 MAX_TOKENS = 2048
 # The local model is a reasoning model: thinking is turned off per call (llama.cpp chat template flag)
@@ -56,11 +63,18 @@ class LlmUnavailable(LlmError):
 
 
 class Gateway:
-    def __init__(self, settings: Settings | None = None, completion: Callable[..., Any] | None = None):
-        """`completion` replaces litellm.completion (tests pass a fake model)."""
+    def __init__(self, settings: Settings | None = None, completion: Callable[..., Any] | None = None, *,
+                 keep_transcripts: bool | None = None):
+        """`completion` replaces litellm.completion (tests pass a fake model). `keep_transcripts` keeps the
+        prompt and reply text of every call in `transcripts` (default: the RAQEEB_KEEP_TRANSCRIPTS=1
+        environment switch, else off)."""
         self.settings = settings or load_settings()
         self._completion = completion or litellm.completion
         self.calls: list[LlmCall] = []
+        if keep_transcripts is None:
+            keep_transcripts = os.environ.get(TRANSCRIPTS_ENV, "").strip() == "1"
+        self.keep_transcripts = bool(keep_transcripts)
+        self.transcripts: list[dict[str, str]] = []  # {purpose, prompt, reply} per call, only when kept
 
     def configured(self, role: LlmRole) -> bool:
         if role == LlmRole.LOCAL:
@@ -108,6 +122,7 @@ class Gateway:
         except Exception as exc:
             self._record(LlmCall(role=role, model=model, purpose=purpose, latency_s=time.perf_counter() - started,
                                  ok=False, escalation=escalation))
+            self._keep(purpose, messages, "")
             error = LlmUnavailable if isinstance(exc, _UNAVAILABLE) else LlmError
             raise error(role, type(exc).__name__) from None  # no request details (keys) in the chain
         latency = time.perf_counter() - started
@@ -121,7 +136,13 @@ class Gateway:
                        cost_usd=cost_usd(role, model, prompt_tokens, completion_tokens),
                        ok=bool(text), escalation=escalation)
         self._record(call)
+        self._keep(purpose, messages, text)
         return text, call
+
+    def _keep(self, purpose: str, messages: list[dict[str, str]], reply: str) -> None:
+        """One transcript per recorded call (so `transcripts` lines up with `calls`), when kept."""
+        if self.keep_transcripts:
+            self.transcripts.append({"purpose": purpose, "prompt": prompt_text(messages), "reply": reply})
 
     def _record(self, call: LlmCall) -> None:
         self.calls.append(call)
@@ -131,6 +152,11 @@ class Gateway:
 
     def total_cost(self) -> float:
         return sum(c.cost_usd for c in self.calls)
+
+
+def prompt_text(messages: list[dict[str, str]]) -> str:
+    """The messages as one readable text, a "[role]" line before each."""
+    return "\n\n".join(f"[{m.get('role', '?')}]\n{m.get('content', '')}" for m in messages)
 
 
 def cost_usd(role: LlmRole, model: str, prompt_tokens: int, completion_tokens: int) -> float:
