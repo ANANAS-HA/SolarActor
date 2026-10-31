@@ -121,6 +121,30 @@ def _load_upload() -> None:
         st.session_state.load_error = f"Could not load that file: {str(exc).splitlines()[0]}"
 
 
+def _open_trajectory() -> None:
+    path = st.session_state.get("trace_pick") or st.session_state.get("trace_path", "").strip()
+    try:
+        _set_run(source.start_replay(Path(path)))
+        st.session_state.mode_choice = REPLAY
+    except (OSError, ValueError) as exc:
+        st.session_state.trace_error = f"Could not open {Path(path).name or 'that path'}: {str(exc).splitlines()[0]}"
+    else:
+        st.session_state.trace_error = ""
+
+
+def _open_trajectory_upload() -> None:
+    upload = st.session_state.get("trace_upload")
+    if upload is None:
+        return
+    try:
+        _set_run(source.start_replay(upload.getvalue()))
+        st.session_state.mode_choice = REPLAY
+    except (OSError, ValueError) as exc:
+        st.session_state.trace_error = f"Could not open that file: {str(exc).splitlines()[0]}"
+    else:
+        st.session_state.trace_error = ""
+
+
 def _toggle_play() -> None:
     st.session_state.playing = not st.session_state.playing
 
@@ -577,7 +601,7 @@ def trace_card(card: trace.TurnCard, run: source.Run) -> None:
                 st.caption("Unexplained: " + ", ".join(md_escape(s) for s in card.unexplained))
         if card.llm_calls or card.proposals:
             trace_model(card)
-        if card.actions:
+        if card.gate:
             trace_actions(card, run)
         if card.verifications:
             st.dataframe(pd.DataFrame([{"Verified": f"{'✓ recovered' if v.recovered else '✗ not recovered'}",
@@ -623,22 +647,19 @@ def trace_model(card: trace.TurnCard) -> None:
                 st.dataframe(pd.DataFrame({f"{p.label}: the model's words (quoted)": p.model_evidence}),
                              hide_index=True, key=f"trace_pwords_{card.index}_{k}")
         if card.transcripts:
-            for k, tr in enumerate(card.transcripts):
-                st.caption(f"Call {k + 1}: data sent")
-                st.code(str(tr.get("sent", "")), language=None, wrap_lines=True)
-                st.caption(f"Call {k + 1}: reply")
-                st.code(str(tr.get("reply", "")), language=None, wrap_lines=True)
+            for k, tr in enumerate(card.transcripts):  # st.code shows the text as is: never rendered
+                st.caption(f"Call {k + 1} ({md_escape(tr.purpose)}): data sent")
+                st.code(tr.prompt, language=None, wrap_lines=True)
+                st.caption(f"Call {k + 1}: reply" + ("" if tr.reply else " (none: the call failed)"))
+                st.code(tr.reply, language=None, wrap_lines=True)
         else:
             st.caption("Data sent and replies are not recorded in this file (only call metadata).")
 
 
 def trace_actions(card: trace.TurnCard, run: source.Run) -> None:
-    rows = []
-    for a in card.actions:
-        needs, decision = trace.gate(a)
-        rows.append({"Action": a.request.action.value, "Target": a.request.target, "For cause": a.cause,
-                     "Gate": needs, "Decision": decision, "Note (quoted)": a.note})
-    st.dataframe(pd.DataFrame(rows), hide_index=True, key=f"trace_actions_{card.index}")
+    st.dataframe(pd.DataFrame([{"Action": g.action, "Target": g.target, "For cause": g.cause, "Gate": g.gate,
+                                "Decision": g.decision, "Note (quoted)": g.entry.note if g.entry else ""}
+                               for g in card.gate]), hide_index=True, key=f"trace_actions_{card.index}")
     for a in card.actions:
         if a.status is None and isinstance(run, LiveRun) and any(w.request.id == a.request.id for w in run.waiting):
             req = a.request
@@ -693,12 +714,33 @@ def _scroll_to_bottom(key: str, marker: int) -> None:
     </script>""", unsafe_allow_javascript=True)
 
 
+def trace_loader() -> None:
+    """Open a bench trajectory file (bench/<set>/trajectories/<scenario>__<agent>.json[.gz]) or any replay."""
+    with st.expander("Open a trajectory or replay file", expanded=False):
+        st.caption("A bench trajectory (written by `raqeeb.bench.run`, plain or .json.gz) or a console replay, any "
+                   "version. Older files show the fields they have. The answer key stays hidden until the end.")
+        st.text_input("File or folder", key="trace_path", placeholder="bench/final/trajectories")
+        files = source.trajectory_files(st.session_state.get("trace_path", "").strip()) \
+            if st.session_state.get("trace_path", "").strip() else []
+        if len(files) > 1 or (files and files[0] != Path(st.session_state.trace_path.strip())):
+            st.selectbox(f"{len(files)} files in that folder", [str(f) for f in files], key="trace_pick",
+                         format_func=lambda f: Path(f).name)
+        else:
+            st.session_state.pop("trace_pick", None)
+        st.button("Open", key="trace_open", on_click=_open_trajectory, disabled=not files)
+        st.file_uploader("Or upload one (.json or .json.gz)", type=["json", "gz"], key="trace_upload")
+        st.button("Open uploaded file", key="trace_open_upload", on_click=_open_trajectory_upload)
+        if st.session_state.get("trace_error"):
+            st.error(md_escape(st.session_state.trace_error))
+
+
 def trace_tab(run: source.Run, power: pd.DataFrame) -> None:
     st.subheader("Trace")
     st.caption("One card per agent turn, newest at the bottom: the checks it ran, the symptoms it saw, the causes it "
                "ranked, model calls and how each proposal was tested, actions and the gate's decision, "
                "verifications and escalations. Quiet turns are folded into one line. Free text is quoted data, "
                "collapsed by default.")
+    trace_loader()
     trace_header(trace.header(run.log, run.now, live=isinstance(run, LiveRun)))
     left, right = st.columns([5, 6], gap="medium")
     with left:  # the plant as the agent reasons: same map and chart as the Operations view, compact

@@ -7,8 +7,11 @@ The same RunLog feeds live runs and replays, so a card is the same whether the t
 was recorded. Each card holds what the agent did in that turn, as recorded: tool checks (numbers,
 thresholds, verdict), new symptoms, the candidate causes it selected with their scores, model calls with
 the proposals they led to, actions with the gate's decision, verifications, escalations, notes and the
-agent's own step lines. Fields an older file does not have stay empty (v1/v2 replays record only the
-tool results with a finding, only the selected candidates, and no model transcripts).
+agent's own step lines. Version 3 files (live runs now, and bench trajectory files) add every check,
+the active symptoms, all candidates (selected or not), the safety gate's decision per planned request
+and, when kept, model transcripts. Older files show what they have (v1/v2: the tool results with a
+finding, the selected candidates, no gate records, no transcripts). The bench's own truth section
+(RunLog.bench) is never shown here.
 Free text (notes, alarm and log messages, model data and replies) is data: the tab shows it escaped.
 """
 
@@ -27,7 +30,16 @@ from raqeeb.contracts import (
     LlmCall,
     Verification,
 )
-from raqeeb.ui.runlog import ActionEntry, NoteRecord, PollRecord, ProposalRecord, RunLog, TimelineItem
+from raqeeb.ui.runlog import (
+    ActionEntry,
+    GateDecision,
+    NoteRecord,
+    PollRecord,
+    ProposalRecord,
+    RunLog,
+    TimelineItem,
+    Transcript,
+)
 
 # Cause statuses shown in the header (derived from the record, oldest to newest)
 OPEN, ACTING, RESOLVED, ESCALATED, EXPECTED, FLAGGED = "open", "acting", "resolved", "escalated", "expected", "flagged"
@@ -54,6 +66,16 @@ class Candidate:
 
 
 @dataclass
+class GateRow:
+    action: str
+    target: str
+    cause: str
+    gate: str  # the agent's safety gate: "auto", "needs approval", "held back: <reason>"
+    decision: str  # what happened after: applied / rejected / waiting (from the environment's record)
+    entry: ActionEntry | None  # None when the gate held it back (never sent)
+
+
+@dataclass
 class TurnCard:
     index: int  # 1-based turn number
     ts: datetime
@@ -64,8 +86,9 @@ class TurnCard:
     candidates: list[Candidate] | None  # None = same candidates and scores as the last turn
     llm_calls: list[LlmCall]
     proposals: list[ProposalRecord]
-    transcripts: list[dict[str, Any]]  # model data sent and replies, when the file records them
+    transcripts: list[Transcript]  # model data sent and replies, when the file records them
     actions: list[ActionEntry]
+    gate: list[GateRow]  # planned requests with the gate's decision (v3; v1/v2: built from the actions)
     verifications: list[Verification]
     escalations: list[Escalation]
     notes: list[NoteRecord]
@@ -77,8 +100,8 @@ class TurnCard:
         """Nothing new: no checks change, symptom, diagnosis change, model call, action, verification,
         escalation or note."""
         return not (self.checks is not None or self.symptoms or self.candidates is not None or self.llm_calls
-                    or self.proposals or self.actions or self.verifications or self.escalations or self.notes
-                    or self.outcomes or self.final)
+                    or self.proposals or self.actions or self.gate or self.verifications or self.escalations
+                    or self.notes or self.outcomes or self.final)
 
 
 @dataclass
@@ -109,7 +132,7 @@ def _fmt(value: Any) -> str:
 
 
 def _checks(poll: PollRecord) -> list[CheckRow] | None:
-    results = getattr(poll, "checks", None) or poll.findings  # v3 may record every check; v2 the findings
+    results = poll.checks or poll.findings  # v3 records every check of the poll; v1/v2 the findings
     if results is None:
         return None
     return [CheckRow(tool=r.tool, devices=", ".join(r.devices),
@@ -119,17 +142,19 @@ def _checks(poll: PollRecord) -> list[CheckRow] | None:
 
 
 def _candidates(poll: PollRecord) -> list[Candidate] | None:
-    recorded = getattr(poll, "candidates", None)  # v3: every candidate with its score
-    if recorded:
-        return [Candidate(label=c.labels[0], score=c.score, selected=bool(getattr(c, "selected", False)),
-                          explains=len(c.explains)) for c in recorded]
+    if poll.candidates:  # v3: the ranker's selection and the alternatives it left out
+        return [Candidate(label=c.label, score=c.score, selected=c.selected, explains=len(c.explains))
+                for c in poll.candidates]
     if poll.diagnosis is None:
         return None
     return [Candidate(label=h.labels[0], score=h.score, selected=True, explains=len(h.explains))
             for h in poll.diagnosis.root_causes]
 
 
-def _symptoms(poll: PollRecord) -> list[str]:
+def _symptoms(poll: PollRecord, previous: PollRecord | None) -> list[str]:
+    if poll.symptoms:  # v3: active symptoms; the chips are the ones new since the last turn
+        before = {s.id for s in previous.symptoms} if previous is not None else set()
+        return [s.summary or s.id for s in poll.symptoms if s.id not in before]
     out = []
     for item in poll.timeline:
         if item.node == "investigate" and ": " in item.summary and "new symptom" in item.summary:
@@ -139,6 +164,23 @@ def _symptoms(poll: PollRecord) -> list[str]:
 
 def _outcomes(poll: PollRecord) -> list[str]:
     return [f"{o.action_id}: {o.status.value.lower()}" + (f" ({o.note})" if o.note else "") for o in poll.outcomes]
+
+
+def _gate_rows(poll: PollRecord, entries: list[ActionEntry]) -> list[GateRow]:
+    by_id = {a.request.id: a for a in entries}
+    if not poll.gate:  # v1/v2: only the requests that were sent
+        return [GateRow(a.request.action.value, a.request.target, a.cause, *gate(a), entry=a) for a in entries]
+    rows = []
+    for g in poll.gate:
+        entry = by_id.get(g.request.id)
+        if g.decision == GateDecision.REJECTED:
+            rows.append(GateRow(g.request.action.value, g.request.target, g.cause, f"held back: {g.reason}",
+                                "never sent", None))
+            continue
+        word = "needs approval" if g.decision == GateDecision.NEEDS_APPROVAL else "auto (allowlisted)"
+        rows.append(GateRow(g.request.action.value, g.request.target, g.cause or (entry.cause if entry else ""),
+                            word, gate(entry)[1] if entry else "not received", entry))
+    return rows
 
 
 def turn_cards(log: RunLog, now: datetime) -> list[TurnCard]:
@@ -159,11 +201,14 @@ def turn_cards(log: RunLog, now: datetime) -> list[TurnCard]:
             candidates = None
         last_candidates = key if key is not None else last_candidates
         cards.append(TurnCard(
-            index=k + 1, ts=poll.ts, final=poll.final, checks=checks, symptoms=_symptoms(poll),
+            index=k + 1, ts=poll.ts, final=poll.final, checks=checks,
+            symptoms=_symptoms(poll, polls[k - 1] if k else None),
             unexplained=list(poll.diagnosis.unexplained) if poll.diagnosis and candidates is not None else [],
             candidates=candidates, llm_calls=list(poll.llm_calls), proposals=list(poll.proposals),
-            transcripts=list(getattr(poll, "transcripts", None) or []),
-            actions=[a for a in actions if a.requested_at == poll.ts or (previous and previous < a.requested_at <= poll.ts)],
+            transcripts=list(poll.transcripts),
+            actions=(sent := [a for a in actions
+                              if a.requested_at == poll.ts or (previous and previous < a.requested_at <= poll.ts)]),
+            gate=_gate_rows(poll, sent),
             verifications=list(poll.verifications), escalations=list(poll.escalations), notes=list(poll.notes),
             steps=[t for t in poll.timeline], outcomes=_outcomes(poll)))
     return cards
