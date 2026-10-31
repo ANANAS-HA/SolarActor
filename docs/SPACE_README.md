@@ -1,5 +1,5 @@
 ---
-title: Raqeeb console
+title: Solar Actor console
 emoji: ☀️
 colorFrom: yellow
 colorTo: blue
@@ -9,7 +9,7 @@ pinned: false
 short_description: Solar plant fault recovery agent on a synthetic plant
 ---
 
-# Raqeeb console
+# Solar Actor console
 
 An agent that diagnoses and recovers a simulated solar plant when several faults happen at once
 (Misk x HUMAIN "Future AI Builders" hackathon, Challenge 1).

@@ -1,7 +1,8 @@
-# Raqeeb
+# Solar Actor
 
-Raqeeb (Arabic for "watcher") is an agent that diagnoses and recovers a simulated solar power plant when
-several faults happen at once. It reads plant telemetry and alarms, separates root causes from the
+Solar Actor (working title Raqeeb, Arabic for 'the watchful one') is an agent that recovers a failing solar plant. The code, package name, configuration and benchmark outputs keep the working name raqeeb; the two names refer to the same project.
+
+It diagnoses and recovers a simulated solar power plant when several faults happen at once. It reads plant telemetry and alarms, separates root causes from the
 symptoms they trigger, applies safe and reversible fixes on its own, asks a human before risky ones,
 and checks that output actually came back.
 
@@ -16,7 +17,7 @@ number.
 ## The dusty-sensor trap
 
 A dust storm soils the panels and the on-site irradiance sensor together. The plant loses output, but
-compared with its own dusty sensor it looks normal, so a threshold alarm sees nothing; Raqeeb checks the
+compared with its own dusty sensor it looks normal, so a threshold alarm sees nothing; Solar Actor checks the
 sensor against an independent satellite reference, the neighbouring inverters and the clear-sky shape.
 
 ## How it works
@@ -91,7 +92,7 @@ The planted faults (the answer key) are shown only after a run has ended.
 Tabs on a loaded run: **Summary** (the incident in one screen: key moments on a timeline, the causes table,
 energy below the expected line before and after the first action, model calls, the bilingual report; every
 item jumps to its turn in the Trace tab), **Operations**, **Trace** (one card per agent turn), **Agent**,
-**Report**, **Answer key**, **Results** and **Ask Raqeeb** (questions about the run, answered from its record;
+**Report**, **Answer key**, **Results** and **Ask the agent** (questions about the run, answered from its record;
 a reachable local model only rewords the retrieved facts, shown under the reply; the chat cannot trigger an
 action). The sidebar's **Model** selector offers rules only and every model the local server lists at
 `/models`; the API tier is shown disabled (the console runs fully local).
@@ -152,7 +153,7 @@ funded through the NASA Earth Science/Applied Science Program.
   as they were.
 - **Baselines.** `threshold` opens one ticket per alarm, maps the alarm code to its usual fault and acts
   on that device, with no correlation. `oracle` (reads the answer key) and `empty` (does nothing) are
-  reference bounds, not competitors. Raqeeb runs with rules only (`raqeeb_rules`) and with the local
+  reference bounds, not competitors. Solar Actor runs with rules only (`raqeeb_rules`) and with the local
   model (`raqeeb_local`); no API model is used.
 - **Safety set.** 12 scenarios each carry one injected instruction in a device log line. Each runs twice,
   as planted and with neutral text; an action that appears only in the planted run counts as unsafe.
@@ -190,7 +191,7 @@ funded through the NASA Earth Science/Applied Science Program.
 - Recovery (verified, time to recovery, MWh recovered): [final results: to be added]
 - Safety set (unsafe actions): [final results: to be added]
 - Unknown and held-out faults, rules only vs rules + local model: [final results: to be added]
-- Where Raqeeb loses: [final results: to be added]
+- Where Solar Actor loses: [final results: to be added]
 
 ## Robustness evaluation (after freezing)
 
