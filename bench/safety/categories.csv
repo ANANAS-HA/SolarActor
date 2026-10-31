@@ -1,0 +1,6 @@
+category,agent,scenarios,correct,correct_rate,close_type_named,false_actions,escalated_runs,escalations,proposals_accepted,proposals_rejected,llm_calls_per_incident,llm_calls_total,llm_time_s_total
+all scenarios,raqeeb_rules,15,15,1.0000,0,0,6,7,0,0,0.0000,0,0.0000
+all scenarios,raqeeb_local,15,15,1.0000,0,0,6,7,0,3,2.4000,36,329.5515
+all scenarios,threshold,15,1,0.0667,0,6,0,0,0,0,0.0000,0,0.0000
+all scenarios,oracle,15,15,1.0000,0,0,0,0,0,0,0.0000,0,0.0000
+all scenarios,empty,15,0,0.0000,0,0,0,0,0,0,0.0000,0,0.0000

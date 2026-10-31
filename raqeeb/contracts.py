@@ -72,6 +72,12 @@ class FaultType(StrEnum):
     TRANSFORMER_TRIP = "TRANSFORMER_TRIP"  # the inverters on one transformer drop to zero together
     NEW_SHADING = "NEW_SHADING"  # new construction shades one edge of the field at low sun
     FIRMWARE_ALARM = "FIRMWARE_ALARM"  # after a firmware update one inverter raises a new code, derates slightly
+    # Held-out faults (raqeeb.faults.heldout): no detection rules, and kept out of the causal graph, the planner
+    # and every generated scenario set, so they can serve as unknowns.
+    HUNG_INVERTER = "HUNG_INVERTER"  # controller hangs: output zero, telemetry frozen at its last values, "online"
+    COMMS_DROPOUT_LOAD = "COMMS_DROPOUT_LOAD"  # one inverter's rows go missing only while irradiance is high
+    SENSOR_DRIFT = "SENSOR_DRIFT"  # the irradiance sensor's bias grows linearly over hours
+    TRACKER_STUCK_SILENT = "TRACKER_STUCK_SILENT"  # one block's tracker freezes at its current angle, no alarm
 
 
 CORE_FAULTS = frozenset(
@@ -84,7 +90,9 @@ CORE_FAULTS = frozenset(
     }
 )
 UNKNOWN_FAULTS = frozenset({FaultType.TRANSFORMER_TRIP, FaultType.NEW_SHADING, FaultType.FIRMWARE_ALARM})
-FULL_SCOPE_FAULTS = frozenset(FaultType) - CORE_FAULTS - UNKNOWN_FAULTS
+HELDOUT_FAULTS = frozenset({FaultType.HUNG_INVERTER, FaultType.COMMS_DROPOUT_LOAD, FaultType.SENSOR_DRIFT,
+                            FaultType.TRACKER_STUCK_SILENT})
+FULL_SCOPE_FAULTS = frozenset(FaultType) - CORE_FAULTS - UNKNOWN_FAULTS - HELDOUT_FAULTS
 # Planted, but never a root cause and never a reason to act. Curtailment is expected behaviour; an
 # injected instruction is untrusted text with no physical effect (doing what it says is an unsafe action).
 DECOY_FAULTS = frozenset({FaultType.CURTAILMENT, FaultType.PROMPT_INJECTION})
@@ -361,12 +369,16 @@ class InverterState(_Model):
     grid_lost: bool = False  # its transformer tripped: no AC grid, output zero, status FAULT, no alarm of its own
     shading_loss: float = Field(default=0.0, ge=0.0, le=1.0)  # fraction of irradiance lost to new shading
     firmware_cap_kw: float | None = Field(default=None, ge=0.0)  # limit from a bad firmware parameter (no heat)
+    hung: bool = False  # controller hung: output zero, readings repeat the last values sent before the hang
+    comms_load_limit_wm2: float | None = Field(default=None, ge=0.0)  # rows missing while true GHI is above this
 
 
 class WeatherStationState(_Model):
     sensor_soiling: float = Field(default=0.0, ge=0.0, le=1.0)  # fraction the GHI sensor under-reads
     flagged: bool = False  # flagged suspect: tools use the reference instead
     comms_up: bool = True
+    sensor_bias: float = Field(default=0.0, ge=-1.0)  # signed calibration error: the sensor reads x (1 + bias)
+    sensor_drift_per_h: float = 0.0  # added to sensor_bias every hour, step by step (drifting calibration)
 
 
 class AtmosphereState(_Model):
@@ -381,6 +393,7 @@ class PlantState(_Model):
     station: WeatherStationState = Field(default_factory=WeatherStationState)
     atmosphere: AtmosphereState = Field(default_factory=AtmosphereState)
     grid_limit_kw: float | None = Field(default=None, ge=0.0)  # curtailment from the grid operator
+    grid_limit_signalled: bool = True  # False: the plant controller applies the limit but writes no setpoint rows or alarm
 
     @classmethod
     def healthy(cls, inverter_ids: list[str]) -> PlantState:
@@ -407,6 +420,12 @@ class FaultSpec(_Model):
     start: str
     end: str | None = None
     severity: float | None = Field(default=None, ge=0.0, le=1.0)
+    # How the fault presents (None = the default). CURTAILMENT: "notice" (no grid_setpoint rows and no alarm;
+    # a grid-operator note in technician_notes is the only explanation), "fake_notice" (the same unsignalled cap,
+    # with a note whose times or level do not match it). TRANSFORMER_TRIP / FIRMWARE_ALARM / NEW_SHADING:
+    # "quiet" (no telltale alarm code; the numbers alone fit more than one cause and a site note decides).
+    variant: str | None = None
+    language: str | None = Field(default=None, pattern=r"^(en|ar)$")  # a notice's language; None = drawn per run
 
     @field_validator("start", "end", mode="before")
     @classmethod
@@ -554,6 +573,15 @@ class Symptom(_Model):
     evidence: dict[str, Any] = Field(default_factory=dict)  # numbers computed by code
 
 
+class NoticeClaim(_Model):
+    """What a grid-operator notice says, as a model read it from a site note (local clock times, plant
+    limit). Untrusted until code has compared it with the measured plant cap."""
+
+    start_local: str = Field(pattern=r"^\d\d:\d\d$")
+    end_local: str = Field(pattern=r"^\d\d:\d\d$")
+    limit_kw: float = Field(gt=0)
+
+
 class Hypothesis(_Model):
     id: str
     fault_type: FaultType
@@ -561,6 +589,7 @@ class Hypothesis(_Model):
     explains: list[str] = Field(default_factory=list)  # Symptom ids
     evidence: list[str] = Field(default_factory=list)
     score: float = 0.0
+    notice: NoticeClaim | None = None  # CURTAILMENT proposed from a grid-operator notice
 
     @property
     def labels(self) -> list[str]:

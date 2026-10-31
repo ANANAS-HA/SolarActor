@@ -1,0 +1,6 @@
+ts,step,actor,payload
+2025-01-02 05:15:00+00:00,request,agent:threshold,"{'id': 'threshold-1', 'action': 'resume_tracking', 'target': 'INV-05', 'params': {}, 'needs_approval': False, 'rationale': 'ticket T1: TRACKER_FAULT on INV-05: [A-4120] Tracker position fault: angle held at 0 deg, not following command'}"
+2025-01-02 05:15:00+00:00,execute,system,"{'id': 'threshold-1', 'status': 'APPLIED', 'note': ''}"
+2025-01-02 06:45:00+00:00,request,agent:threshold,"{'id': 'threshold-2', 'action': 'isolate_device', 'target': 'INV-02', 'params': {}, 'needs_approval': True, 'rationale': 'ticket T2: REMOTE_STOP on INV-02: [I-1101] Inverter stopped by remote command: inverter stopped by network command'}"
+2025-01-02 06:45:00+00:00,approval,human:simulated,"{'id': 'threshold-2', 'approved': True}"
+2025-01-02 06:45:00+00:00,execute,system,"{'id': 'threshold-2', 'status': 'APPLIED', 'note': ''}"

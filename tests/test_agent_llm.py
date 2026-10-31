@@ -235,3 +235,54 @@ def test_live_llm_tests_are_skipped_while_a_bench_run_holds_the_lock(pytester=No
     finally:
         BENCH_LOCK.unlink()
     assert live.markers and not other.markers
+
+
+# -- re-rank after an accepted proposal ------------------------------------------------------------------
+
+
+def test_an_accepted_cause_makes_a_redundant_rule_guess_drop_out_and_takes_its_ticket():
+    """Stuck-tracker rules switched off: the rules call the unit an open string and send a technician. The
+    (fake) model proposes the stuck tracker citing all the unit's symptoms; after testing, the ranker runs
+    again with it pinned and drops the open-string guess, whose ticket moves to the accepted cause."""
+    s = scenario({"type": "TRACKER_STUCK", "target": "INV-03", "start": "05:00"})
+
+    class CitingRouter(FakeRouter):
+        def propose_hypotheses(self, results, symptoms=(), ranked=(), unexplained=(), **kw):
+            on_unit = [x.id for x in symptoms if x.device_id == "INV-03"]
+            hyps = [Hypothesis(id="llm-1", fault_type=FaultType.TRACKER_STUCK, targets=["INV-03"], explains=on_unit,
+                               evidence=["fake"])]
+            return hyps, [call("hypotheses")]
+
+    rules = run_scenario(s, RaqeebAgent(name="r", disabled=frozenset({FaultType.TRACKER_STUCK})))
+    agent = RaqeebAgent(router=CitingRouter([]), name="l", disabled=frozenset({FaultType.TRACKER_STUCK}))
+    record = run_scenario(s, agent)
+    assert "STRING_OPEN@INV-03" in rules.predicted  # the rule guess without the model
+    assert record.predicted == ["TRACKER_STUCK@INV-03"]
+    assert any(e.summary.startswith(("diagnosis revised: STRING_OPEN@INV-03", "dropped STRING_OPEN@INV-03"))
+               for e in agent.memory.timeline)
+
+
+def test_a_cause_outside_the_rules_is_not_stacked_on_a_unit_a_rule_cause_explains():
+    """practice2 pr2_0008: the model proposed FIRMWARE_ALARM on a unit the rules had right as a stuck tracker."""
+    s = scenario({"type": "TRACKER_STUCK", "target": "INV-03", "start": "05:00"},
+                 {"type": "TRANSFORMER_TRIP", "target": "T3", "start": "06:00"})
+    record, agent, _ = run(s, FakeRouter([("FIRMWARE_ALARM", "INV-03"), ("TRANSFORMER_TRIP", "T3")]))
+    assert "FIRMWARE_ALARM@INV-03" not in record.predicted
+    assert {"TRACKER_STUCK@INV-03", "TRANSFORMER_TRIP@T3"} <= set(record.predicted)
+
+
+def test_every_accept_reject_and_drop_line_carries_structured_details():
+    """Text unchanged; details hold decision, label, reason, the hypothesis and the numbers the test used."""
+    s = scenario(TRIP)
+    router = FakeRouter([("TRANSFORMER_TRIP", "T2"), ("TRANSFORMER_TRIP", "T3"), ("SOILING", "ALL")])
+    record, agent, _ = run(s, router)
+    lines = [e for e in agent.memory.timeline if e.summary.startswith(("accepted model proposal", "rejected model proposal",
+                                                                      "dropped", "diagnosis revised"))]
+    assert {e.details["decision"] for e in lines} >= {"accepted", "rejected"}
+    for e in lines:
+        assert e.details["label"] in e.summary and e.details["reason"]
+        if e.details["decision"] in ("accepted", "rejected") and e.node == "consult":
+            assert e.details["hypothesis"]["fault_type"] and isinstance(e.details["numbers"], dict)
+    wrong_area = next(e for e in lines if e.details["label"] == "TRANSFORMER_TRIP@T3")
+    assert wrong_area.details["numbers"]["path"] == "footprint" and wrong_area.details["numbers"]["weak_inside"] == 0
+    assert record.predicted == ["TRANSFORMER_TRIP@T2"]  # behaviour unchanged by the logging

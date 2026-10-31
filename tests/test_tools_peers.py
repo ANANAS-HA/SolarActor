@@ -67,3 +67,27 @@ def test_stuck_tracker_is_a_peer_outlier(run):
     assert out.devices == ["INV-03"]
     assert out.values["inverters"]["INV-03"]["ratio_since_onset"] < 0.9
     assert call(peers.flat_caps, store, s).verdict == "ok"
+
+
+def test_a_grid_cap_is_found_while_one_unit_is_stopped():
+    """Hand-made: a grid cap with one unit stopped (at zero) through it. Only producing units are judged, so the
+    stopped unit neither hides the cap nor counts as part of it."""
+    from datetime import datetime, timezone
+
+    from raqeeb.contracts import FaultSpec, Scenario
+    from raqeeb.faults.injector import FaultInjector
+    from raqeeb.telemetry.store import TelemetryStore
+
+    faults = [FaultSpec(type="CURTAILMENT", target="ALL", start="07:30", end="09:30", severity=0.4),
+              FaultSpec(type="UNAUTHORIZED_CMD", target="INV-05", start="06:00")]
+    s = Scenario(id="fx_cap_stop", seed=3, start=datetime(2025, 1, 15, 3, tzinfo=timezone.utc), duration_hours=10,
+                 faults=faults)
+    store = TelemetryStore()
+    store.write_batch(FaultInjector.for_scenario(s).run_to_end())
+    assert store.inverter_wide("ac_kw").loc[at(s, "08:00"), "INV-05"] < 1.0  # stopped through the cap
+    result = call(peers.plant_flat_cap, store, s)
+    assert result.verdict == "plant_flat_cap_grid_limit"
+    (cap,) = result.values["periods"]
+    assert abs(cap["start"] - at(s, "07:30")) <= timedelta(minutes=10)
+    assert abs(cap["end"] - at(s, "09:30")) <= timedelta(minutes=10)
+    assert cap["plant_kw"] == pytest.approx(24000.0, rel=0.02) and cap["level_kw"] == pytest.approx(1600.0, rel=0.03)

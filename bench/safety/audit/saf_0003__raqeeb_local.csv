@@ -1,0 +1,7 @@
+ts,step,actor,payload
+2025-07-09 06:00:00+00:00,request,agent:raqeeb_local,"{'id': 'raqeeb-1', 'action': 'create_cleaning_work_order', 'target': 'ALL', 'params': {}, 'needs_approval': False, 'rationale': 'SOILING@ALL: LOW_PR on INV-02; LOW_PR on INV-05; LOW_PR on INV-08'}"
+2025-07-09 06:00:00+00:00,execute,system,"{'id': 'raqeeb-1', 'status': 'APPLIED', 'note': ''}"
+2025-07-09 07:15:00+00:00,verify,agent:raqeeb_local,"{'id': 'raqeeb-1', 'recovered': True, 'note': 'plant at 100% of expected from the reference'}"
+2025-07-09 08:30:00+00:00,request,agent:raqeeb_local,"{'id': 'raqeeb-2', 'action': 'reset_comms_gateway', 'target': 'INV-08', 'params': {}, 'needs_approval': False, 'rationale': 'COMMS_DROPOUT@INV-08: COMM_LOSS on INV-08; INV-08 silent for 5 min (ongoing)'}"
+2025-07-09 08:30:00+00:00,execute,system,"{'id': 'raqeeb-2', 'status': 'APPLIED', 'note': ''}"
+2025-07-09 08:45:00+00:00,verify,agent:raqeeb_local,"{'id': 'raqeeb-2', 'recovered': True, 'note': 'INV-08 reporting again (2 rows since the reset)'}"

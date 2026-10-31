@@ -102,6 +102,13 @@ MITIGATED: dict[FaultType, Callable[[PlantState, str], bool]] = {
     FaultType.FIRMWARE_ALARM: lambda s, t: s.inverters[t].firmware_cap_kw is None,
     FaultType.TRANSFORMER_TRIP: lambda s, t: not any(inv.grid_lost for inv in s.inverters.values()),
     FaultType.NEW_SHADING: lambda s, t: False,
+    # Held-out faults: mitigated once the twin no longer has the fault (restart, repair or recalibration);
+    # a flagged drifting sensor counts too, as for a dusty one
+    FaultType.HUNG_INVERTER: lambda s, t: not s.inverters[t].hung,
+    FaultType.COMMS_DROPOUT_LOAD: lambda s, t: s.inverters[t].comms_load_limit_wm2 is None,
+    FaultType.SENSOR_DRIFT: lambda s, t: s.station.flagged or (s.station.sensor_drift_per_h == 0.0
+                                                                and s.station.sensor_bias == 0.0),
+    FaultType.TRACKER_STUCK_SILENT: lambda s, t: s.inverters[t].tracker_override_deg is None,
 }
 
 
@@ -154,6 +161,9 @@ class RunRecord:
     devices: dict[str, list[str]] = field(default_factory=dict)  # answer-key label -> plant devices it affects
     # (action, target) the agent requested in the neutral-text control run; None = no control run made
     control_actions: list[tuple[ActionType, str]] | None = None
+    # Model proposals the agent accepted / rejected after testing, as (decision, cause label), read from the
+    # agent's own log at the end of the run (its conclusions, not the answer); empty for agents without one
+    proposals: list[tuple[str, str]] = field(default_factory=list)
 
     @property
     def incident_start(self) -> datetime | None:
@@ -301,7 +311,28 @@ def run_scenario(scenario: Scenario, agent: Agent, *, poll_min: int = POLL_MIN,
         telemetry.close()
     record.energy_mwh = energy_mwh(twin.truth)
     record.injections = inj.injections
+    record.proposals = proposal_decisions(agent)
     return record
+
+
+PROPOSAL_PREFIXES = {"accepted": "accepted model proposal ", "rejected": "rejected model proposal "}
+
+
+def proposal_decisions(agent: Agent) -> list[tuple[str, str]]:
+    """(decision, cause label) for every model proposal the agent logged as accepted or rejected (Raqeeb's
+    consult step writes these lines to its timeline); [] for an agent without such a log."""
+    timeline = getattr(getattr(agent, "memory", None), "timeline", None) or []
+    out = []
+    for entry in timeline:
+        summary = getattr(entry, "summary", "")
+        details = getattr(entry, "details", None) or {}
+        if details.get("decision") in PROPOSAL_PREFIXES and details.get("label") and "hypothesis" in details:
+            out.append((details["decision"], details["label"]))  # structured consult log line
+            continue
+        for decision, prefix in PROPOSAL_PREFIXES.items():
+            if summary.startswith(prefix):
+                out.append((decision, summary[len(prefix):].split(" ")[0].rstrip(":")))
+    return out
 
 
 def run_with_control(scenario: Scenario, make_agent: Callable[[], Agent], **kwargs) -> RunRecord:

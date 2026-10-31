@@ -26,6 +26,7 @@ FLAT_BELOW_PEERS = 0.95  # a device cap sits below the peer median by at least 5
 NOT_CLIPPING = 0.97  # flat below this share of the AC rating (flat at the rating = clipping)
 PLANT_FLAT_SHARE = 0.75  # share of reporting inverters flat together = plant-wide cap
 PLANT_FLAT_SPREAD = 0.03  # their levels within 3% of each other
+PLANT_PRODUCING_MIN = 0.5  # the producing units judged for a plant cap must be at least this share of the reporting ones
 HOT_EXCESS_C = 8.0  # internal temperature this far above the peer median = hot
 
 FLAT_THRESHOLDS = {"flat_steps": FLAT_STEPS, "flat_tol": FLAT_TOL, "peer_move": FLAT_PEER_MOVE,
@@ -157,22 +158,27 @@ def flat_caps(store: TelemetryStore, start: datetime | None = None, end: datetim
 def plant_flat_cap(store: TelemetryStore, start: datetime | None = None, end: datetime | None = None,
                    plant: PlantConfig | None = None) -> ToolResult:
     """Periods when most inverters are flat together at the same level below their rating.
+    Only producing units are judged: a unit at zero (stopped, tripped) or with no data neither breaks nor
+    makes a cap, so a grid cap is still found while one unit is stopped.
 
     Verdicts: "plant_flat_cap_grid_limit" (a grid limit was present: curtailment, expected
     behaviour), "plant_flat_cap" (no grid limit: unexplained), ok. devices = ALL when found.
     """
     plant = get_plant(plant)
     start, end = window(store, start, end)
-    thresholds = FLAT_THRESHOLDS | {"plant_flat_share": PLANT_FLAT_SHARE, "plant_flat_spread": PLANT_FLAT_SPREAD}
+    thresholds = FLAT_THRESHOLDS | {"plant_flat_share": PLANT_FLAT_SHARE, "plant_flat_spread": PLANT_FLAT_SPREAD,
+                                    "plant_producing_min": PLANT_PRODUCING_MIN}
     ac = store.inverter_wide("ac_kw", start, end).astype(float)
     periods = []
     if not ac.empty:
         window_mean = ac.rolling(FLAT_STEPS).mean()
-        flat = (_rel_range(ac) <= FLAT_TOL) & (window_mean < NOT_CLIPPING * plant.inverters.ac_kw) & (
-            window_mean > DAYLIGHT_FRACTION * plant.inverters.ac_kw)
-        reporting = ac.notna().sum(axis=1)
-        level_spread = (window_mean.max(axis=1) - window_mean.min(axis=1)) / window_mean.median(axis=1)
-        together = (flat.sum(axis=1) >= PLANT_FLAT_SHARE * reporting) & (level_spread <= PLANT_FLAT_SPREAD)
+        producing = window_mean > DAYLIGHT_FRACTION * plant.inverters.ac_kw
+        flat = (_rel_range(ac) <= FLAT_TOL) & (window_mean < NOT_CLIPPING * plant.inverters.ac_kw) & producing
+        n_producing = producing.sum(axis=1)
+        levels = window_mean.where(producing)
+        level_spread = (levels.max(axis=1) - levels.min(axis=1)) / levels.median(axis=1)
+        together = ((flat.sum(axis=1) >= PLANT_FLAT_SHARE * n_producing) & (level_spread <= PLANT_FLAT_SPREAD)
+                    & (n_producing > 0) & (n_producing >= PLANT_PRODUCING_MIN * ac.notna().sum(axis=1)))
         limits = store.grid_setpoint(start, end)["limit_kw"]
         status = store.inverter_wide("status", start, end)
         for c_start, c_end, steps in runs(_expand(together)):
@@ -182,7 +188,7 @@ def plant_flat_cap(store: TelemetryStore, start: datetime | None = None, end: da
                 "start": c_start.to_pydatetime(),
                 "end": c_end.to_pydatetime(),
                 "steps": steps,
-                "level_kw": round(float(ac.loc[part].median(axis=1).median()), 1),
+                "level_kw": round(float(ac.loc[part].where(producing.loc[part]).median(axis=1).median()), 1),
                 "plant_kw": round(float(ac.loc[part].sum(axis=1).median()), 1),
                 "grid_limit_steps": len(in_limit),
                 "grid_limit_kw": float(in_limit.iloc[0]) if len(in_limit) else None,
@@ -196,7 +202,7 @@ def plant_flat_cap(store: TelemetryStore, start: datetime | None = None, end: da
     else:
         verdict = "plant_flat_cap"
     evidence = "; ".join(
-        f"all inverters flat together at {p['level_kw']:.0f} kW (plant {p['plant_kw'] / 1000:.1f} MW) from "
+        f"producing inverters flat together at {p['level_kw']:.0f} kW (plant {p['plant_kw'] / 1000:.1f} MW) from "
         f"{local_time(p['start'])} to {local_time(p['end'])}, "
         + (f"grid limit {p['grid_limit_kw'] / 1000:.1f} MW active" if p["grid_limit_kw"] is not None else "no grid limit")
         for p in periods) if periods else "no plant-wide flat cap"

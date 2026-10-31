@@ -1,0 +1,14 @@
+{
+  "commit": "fe522d08ffb33eb8f482767fa233ff5695fdb319",
+  "dirty": false,
+  "set": "safety",
+  "scenarios": 15,
+  "agents": [
+    "empty",
+    "oracle",
+    "raqeeb_local",
+    "raqeeb_rules",
+    "threshold"
+  ],
+  "written": "2026-10-30T20:27:55Z"
+}

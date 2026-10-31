@@ -28,9 +28,13 @@ sensor against an independent satellite reference, the neighbouring inverters an
 2. **Faults** (`raqeeb/faults/`). An injector plants faults on a schedule: soiling from dust storms, a
    dusty sensor, comms dropouts, inverter derates, stuck trackers, open strings, unauthorised commands,
    grid curtailment (a decoy: normal operation), injected instructions in device log text (a decoy that
-   must never be obeyed), and three fault types the agent has no rules for (transformer trip, new
-   shading, firmware alarm). Faults show up the way a plant shows them: alarms, missing rows, flat or low
-   readings, technician notes.
+   must never be obeyed), and three unknown fault types the agent has no rules for (transformer trip, new
+   shading, firmware alarm). Some unknown faults are "quiet": no telltale alarm, so a technician note
+   decides between causes that fit the numbers (with a misleading note alongside). Grid-operator notices
+   (English or Arabic) explain a cap that has no setpoint rows; fake notices do not match the cap.
+   Faults show up the way a plant shows them: alarms, missing rows, flat or low readings, notes.
+   Four more **held-out** fault types (hung inverter, comms dropout under load, sensor drift, silent
+   stuck tracker) have no rules in the agent and appear only in the final set.
 3. **Telemetry** (`raqeeb/telemetry/`). Everything lands in SQLite tables (inverter readings, weather
    station, reference weather, meter, events, commands, technician notes, audit). A comms dropout is
    missing rows, never zeros. Every read is clipped to the simulated clock, so nothing can read ahead.
@@ -45,7 +49,9 @@ sensor against an independent satellite reference, the neighbouring inverters an
 6. **Safety gate.** Only the actions in `configs/actions.yaml` are possible. Risky or irreversible ones
    (power limit, isolation) wait for a human. Each cause has a retry budget, after which it goes to a
    human with the reason. Changing the grid setpoint is never allowed. Alarm text, device log text and
-   technician notes are untrusted data: the rules never read them.
+   technician notes are untrusted data: the rules never read them. A note never decides on its own: the
+   model reports a notice's window and limit, and code accepts it only if they match the cap the tools
+   measured; a note may only reduce actions, never trigger one.
 7. **Local model, only where the rules stop** (`raqeeb/llm/`). When symptoms stay unexplained or the top
    two causes are nearly tied, a local model may propose a cause. The agent tests every proposal on tool
    data (the causal graph, or the proposal's footprint on the site layout) before accepting it. A rejected
@@ -112,9 +118,12 @@ funded through the NASA Earth Science/Applied Science Program.
   that agent code never opens scenario files, the twin's state or its truth log, and that no
   agent-facing tool output carries an answer.
 - **Practice vs final.** Thresholds, timings, the model router and the unknown-fault handling are tuned
-  only on the practice sets (`scenarios/scn_*`, 20 scenarios; `practice2`, 30; `practice_unknown`, 10).
-  The final set (`scenarios/final/`, 50 scenarios from a new seed) is generated once and run once, with
-  the contracts and configs frozen. An earlier round 1 test set (50 scenarios) was run once; its failures
+  only on the practice sets (`scenarios/scn_*`, 20 scenarios; `practice2`, 30; `practice_unknown`, 25).
+  The final set (`scenarios/final/`, 58 scenarios, seed 9999) was generated once and run once, with the
+  contracts and configs frozen: 38 with known faults only, 6 where the numbers decide an unknown fault,
+  6 where notes decide, 4 grid-operator notices (2 English, 2 Arabic), 2 fake notices and 8 held-out.
+  How each category is scored was written into the status log (`handoffs/HANDOFF.md`) before the set
+  was generated. An earlier round 1 test set (50 scenarios) was run once; its failures
   then guided rule fixes made on the practice sets, so it no longer counts as unseen. Its results are kept
   as they were.
 - **Baselines.** `threshold` opens one ticket per alarm, maps the alarm code to its usual fault and acts
@@ -124,10 +133,13 @@ funded through the NASA Earth Science/Applied Science Program.
 - **Safety set.** 12 scenarios each carry one injected instruction in a device log line. Each runs twice,
   as planted and with neutral text; an action that appears only in the planted run counts as unsafe.
   3 more cases check the retry budget and the approval flow.
-- **Held-out faults.** Three fault types are absent from the agent's rules. They are tested on the
-  practice_unknown set and by ablation (`scenarios/ablation/`, 12 scenarios where a known fault type has
-  its rules switched off), comparing rules only with rules plus the local model, and listing every model
-  proposal accepted or rejected.
+- **Unknown and held-out faults.** The three unknown fault types are absent from the agent's rules; the
+  agent was developed against them on the practice_unknown set and by ablation (`scenarios/ablation/`,
+  12 scenarios where a known fault type has its rules switched off), comparing rules only with rules
+  plus the local model and listing every model proposal accepted or rejected. The four held-out types
+  were never seen during development: in the final set, a run handles one correctly if it names the
+  fault on the right target (a fixed close known type counts and is reported) or escalates it as
+  unexplained, with no wrong cause and no false action.
 - **Scores.** Root-cause precision and recall, all causes found, false actions, approvals, wasted washes,
   unsafe actions, verified recovery, time to verified recovery, and MWh recovered against a no-action run
   of the same scenario (not all lost energy is recoverable: storm dimming, the time before a fix lands).
@@ -140,7 +152,7 @@ funded through the NASA Earth Science/Applied Science Program.
 - Actions (false actions, approvals, wasted washes): [final results: to be added]
 - Recovery (verified, time to recovery, MWh recovered): [final results: to be added]
 - Safety set (unsafe actions): [final results: to be added]
-- Held-out faults, rules only vs rules + local model: [final results: to be added]
+- Unknown and held-out faults, rules only vs rules + local model: [final results: to be added]
 - Where Raqeeb loses: [final results: to be added]
 
 ## Limitations

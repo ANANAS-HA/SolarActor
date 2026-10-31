@@ -220,3 +220,82 @@ def test_two_units_weak_together_are_held_until_a_third_joins_or_the_hold_ends(m
     mark_common_onset(memory, two, later)
     assert not any(memory.symptoms[sid].evidence.get("onset_hold") for sid in two)
     assert len(rank_causes([memory.symptoms[sid] for sid in two], load_plant())[0]) == 2
+
+
+def test_an_open_string_never_explains_a_unit_at_zero_output():
+    """Physics: an open string leaves the other strings producing. A unit flagged only by the reference-ratio
+    tool (whole-window ratio still well above zero) but at zero output now must not get an open-string guess."""
+    plant = load_plant()
+    weak = sym(SymptomKind.DEVICE_UNDERPERFORMANCE, "INV-04", ratio_vs_reference=0.6)
+    assert [h.labels[0] for h in rank_causes([weak], plant)[0]] == ["STRING_OPEN@INV-04"]
+    stopped = sym(SymptomKind.DEVICE_UNDERPERFORMANCE, "INV-04", ratio_vs_reference=0.6, zero_output=True)
+    assert rank_causes([stopped], plant)[0] == []
+
+    # End to end: a stopped unit with the unauthorized-command rules switched off is left unexplained
+    from raqeeb.agent import RaqeebAgent
+    from raqeeb.bench.harness import run_scenario
+    from raqeeb.contracts import FaultType
+
+    s = scenario({"type": "UNAUTHORIZED_CMD", "target": "INV-04", "start": "05:00"})
+    agent = RaqeebAgent(name="raqeeb_rules", disabled=frozenset({FaultType.UNAUTHORIZED_CMD}))
+    record = run_scenario(s, agent)
+    assert "STRING_OPEN@INV-04" not in record.predicted and record.actions == []
+    assert record.escalations
+
+
+def test_a_unit_stopped_until_dusk_is_still_not_an_open_string():
+    """Zero output is judged at the latest step where peers produce: at dusk (peers below the daylight floor)
+    the earlier verdict stands, so the stopped unit never gets an open-string guess or a ticket. (Hand-made,
+    like ablation abl_0011's fault, which is not used here: the ablation set is never tuned on.)"""
+    from raqeeb.agent import RaqeebAgent
+    from raqeeb.bench.harness import run_scenario
+    from raqeeb.contracts import FaultType
+
+    s = scenario({"type": "UNAUTHORIZED_CMD", "target": "INV-04", "start": "06:35"}, hours=12, seed=11)
+    agent = RaqeebAgent(name="raqeeb_rules", disabled=frozenset({FaultType.UNAUTHORIZED_CMD}))
+    record = run_scenario(s, agent)
+    assert "STRING_OPEN@INV-04" not in record.predicted and record.actions == []
+    assert record.escalations
+
+
+# -- zero output: never left unreported -----------------------------------------------------------------
+
+
+@pytest.mark.parametrize("evidence", [{"ratio_to_peers": 0.0, "zero_output": True},  # peer tool: exactly zero
+                                      {"ratio_vs_reference": 0.4, "zero_output": True}])  # no peer ratio at all
+def test_soiling_never_explains_a_unit_at_zero_output(evidence):
+    """Soiling scales output; it never stops a unit. Units at zero while their peers produce stay unexplained
+    (and go to a human) unless a cause that can stop a unit covers them."""
+    units = ["INV-01", "INV-02", "INV-03", "INV-04"]
+    storm = [sym(SymptomKind.PLANT_UNDERPERFORMANCE, PLANT_TARGET, vs_reference=0.8),
+             sym(SymptomKind.HIGH_WIND, "WS-01", stow=True),
+             sym(SymptomKind.ALARM, PLANT_TARGET, code="LOW_PR")]
+    zero = [sym(SymptomKind.DEVICE_UNDERPERFORMANCE, u, common_onset=units, **evidence) for u in units]
+    hypotheses, unexplained, _, _ = rank_detail(storm + zero, load_plant())
+    assert "SOILING@ALL" in {h.labels[0] for h in hypotheses}
+    assert sorted(unexplained) == sorted(s.id for s in zero)
+    assert not any(s.id in h.explains for h in hypotheses for s in zero)
+
+
+def test_a_remote_stop_still_explains_its_unit_at_zero_output():
+    stopped = sym(SymptomKind.DEVICE_UNDERPERFORMANCE, "INV-05", ratio_to_peers=0.0, zero_output=True)
+    hypotheses, unexplained, _, _ = rank_detail([stopped, sym(SymptomKind.UNEXPECTED_COMMAND, "INV-05")], load_plant())
+    assert [h.labels[0] for h in hypotheses] == ["UNAUTHORIZED_CMD@INV-05"] and unexplained == []
+    assert stopped.id in hypotheses[0].explains
+
+
+def test_units_at_zero_during_a_dust_storm_are_escalated_not_put_down_to_soiling():
+    """End to end, hand-made: a dust storm, then a quiet trip of transformer T1 (no alarm of its own). Rules-only
+    Raqeeb must name the soiling and escalate the four units at zero, not let the soiling explain them."""
+    from raqeeb.bench.harness import run_scenario
+
+    s = scenario({"type": "SOILING", "target": "ALL", "start": "04:30", "end": "05:40", "severity": 0.2},
+                 {"type": "TRANSFORMER_TRIP", "target": "T1", "start": "06:30", "variant": "quiet"}, seed=7)
+    agent = RaqeebAgent(name="raqeeb_rules")
+    record = run_scenario(s, agent)
+    t1 = set(agent.memory.plant.layout.area_of("T1"))
+    assert record.predicted == ["SOILING@ALL"] and record.actions and all(
+        a.request.action == ActionType.CREATE_CLEANING_WORK_ORDER for a in record.actions)
+    assert any(e.subject == "unexplained" and t1 <= set(e.devices) for e in record.escalations)
+    soiling = agent.memory.causes["SOILING@ALL"].hypothesis
+    assert not any(agent.memory.symptoms[sid].device_id in t1 for sid in soiling.explains)

@@ -1,0 +1,18 @@
+# SYNTHETIC scenario from raqeeb.faults.generator. Fault times are UTC on the start date.
+# Faults and answer_key are for the injector and bench only; the agent gets Scenario.agent_view().
+id: fin_0004
+seed: 9999004
+start: '2025-02-09T03:00:00Z'
+duration_hours: 12.0
+faults:
+- type: UNAUTHORIZED_CMD
+  target: INV-16
+  start: '05:10'
+- type: CURTAILMENT
+  target: ALL
+  start: '08:40'
+  end: '10:00'
+  severity: 0.39
+answer_key:
+  root_causes:
+  - UNAUTHORIZED_CMD@INV-16

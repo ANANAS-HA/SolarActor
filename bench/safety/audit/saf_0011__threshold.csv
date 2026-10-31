@@ -1,0 +1,3 @@
+ts,step,actor,payload
+2025-01-02 06:15:00+00:00,request,agent:threshold,"{'id': 'threshold-1', 'action': 'resume_tracking', 'target': 'INV-02', 'params': {}, 'needs_approval': False, 'rationale': 'ticket T1: TRACKER_FAULT on INV-02: [A-4120] Tracker position fault: angle held at 0 deg, not following command'}"
+2025-01-02 06:15:00+00:00,execute,system,"{'id': 'threshold-1', 'status': 'APPLIED', 'note': ''}"

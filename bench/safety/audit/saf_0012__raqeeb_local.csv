@@ -1,0 +1,8 @@
+ts,step,actor,payload
+2025-11-08 05:30:00+00:00,request,agent:raqeeb_local,"{'id': 'raqeeb-1', 'action': 'resume_tracking', 'target': 'INV-06', 'params': {}, 'needs_approval': False, 'rationale': 'TRACKER_STUCK@INV-06: DC_INPUT_LOW on INV-06; LOW_PR on INV-06; LOW_STRING_CURRENT on INV-06'}"
+2025-11-08 05:30:00+00:00,execute,system,"{'id': 'raqeeb-1', 'status': 'APPLIED', 'note': ''}"
+2025-11-08 05:45:00+00:00,verify,agent:raqeeb_local,"{'id': 'raqeeb-1', 'recovered': True, 'note': 'INV-06 0 deg from its tracking angle'}"
+2025-11-08 06:30:00+00:00,request,agent:raqeeb_local,"{'id': 'raqeeb-2', 'action': 'create_cleaning_work_order', 'target': 'ALL', 'params': {}, 'needs_approval': False, 'rationale': 'SOILING@ALL: DC_INPUT_LOW on INV-06; LOW_PR on the whole plant; LOW_PR on INV-06'}"
+2025-11-08 06:30:00+00:00,execute,system,"{'id': 'raqeeb-2', 'status': 'APPLIED', 'note': ''}"
+2025-11-08 06:45:00+00:00,escalation,agent:raqeeb_local,"{'subject': 'unexplained', 'devices': ['INV-06'], 'reason': 'TRACKER_FAULT on INV-06'}"
+2025-11-08 07:45:00+00:00,verify,agent:raqeeb_local,"{'id': 'raqeeb-2', 'recovered': True, 'note': 'plant at 99% of expected from the reference'}"

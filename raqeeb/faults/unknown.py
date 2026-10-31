@@ -13,6 +13,10 @@ fault's name). Rules-only Raqeeb should report their symptoms as unexplained and
 - FIRMWARE_ALARM (target an inverter): from `start`, after a controller update, the inverter is held
   at (1 - severity) x rating with normal temperature and raises CTRL_PARAM_LIMIT every hour.
   A technician reloads the parameters (dispatch_technician fixes it).
+
+Variant "quiet" (spec.variant): no telltale alarm code (no MV_PROTECTION_OP, no CTRL_PARAM_LIMIT), so the
+numbers alone fit more than one cause; the deciding note is always posted, plus one misleading note that
+points at a plausible other cause (a comms reboot, a noisy fan, dust after grass cutting).
 """
 
 from __future__ import annotations
@@ -45,10 +49,13 @@ class TransformerTrip(Fault):
         target, layout = self.spec.target, ctx.plant.layout
         inverters, group = layout.transformers[target], layout.groups.get(target, "?")
 
+        quiet = self.spec.variant == "quiet"
+
         def trip(state: PlantState) -> None:
             for inv_id in inverters:
                 state.inverters[inv_id].grid_lost = True
-            ctx.twin.emit_event(ctx.plant.plant_controller_id, TRIP_CODE, "feeder protection relay operated")
+            if not quiet:
+                ctx.twin.emit_event(ctx.plant.plant_controller_id, TRIP_CODE, "feeder protection relay operated")
 
         def restore(state: PlantState) -> None:
             for inv_id in inverters:
@@ -69,6 +76,10 @@ class TransformerTrip(Fault):
         for k, delay in zip(picks, (int(ctx.rng.integers(15, 40)), int(ctx.rng.integers(50, 110)))):
             area, text = texts[k]
             self.notes.append(note(self.start + timedelta(minutes=delay), area, ctx.rng, text))
+        if quiet:  # misleading: points at a comms fault in the same group
+            self.notes.append(note(self.start + timedelta(minutes=int(ctx.rng.integers(5, 25))), f"group {group}", ctx.rng,
+                                   f"IT rebooted the network switch in the group {group} comms cabinet this "
+                                   "morning; some screens there may show stale values."))
 
 
 class NewShading(Fault):
@@ -113,6 +124,10 @@ class NewShading(Fault):
         for k, delay in zip(picks, (int(ctx.rng.integers(20, 60)), int(ctx.rng.integers(120, 300)))):
             area, text = texts[k]
             self.notes.append(note(self.start + timedelta(minutes=delay), area, ctx.rng, text))
+        if self.spec.variant == "quiet":  # misleading: points at dust on that row
+            self.notes.append(note(self.start + timedelta(minutes=int(ctx.rng.integers(60, 200))), f"{side} row",
+                                   ctx.rng, f"Grass cutting along the {side} fence threw up a lot of dust onto the "
+                                            f"{side} row this morning."))
 
 
 class FirmwareAlarm(Fault):
@@ -129,8 +144,10 @@ class FirmwareAlarm(Fault):
         def begin(state: PlantState) -> None:
             state.inverters[target].firmware_cap_kw = cap
 
+        quiet = self.spec.variant == "quiet"
+
         def repeat(state: PlantState) -> None:
-            if state.inverters[target].firmware_cap_kw is not None:  # until a technician reloads the parameters
+            if state.inverters[target].firmware_cap_kw is not None and not quiet:  # until the parameters are reloaded
                 ctx.twin.emit_event(target, FIRMWARE_CODE, "active power held by control parameter")
 
         self.schedule(ctx, self.start, "begins", begin)
@@ -148,6 +165,8 @@ class FirmwareAlarm(Fault):
             (target, f"{target} display shows a parameter warning I have not seen before. Unit is running, "
                      "cabinet is not hot."),
         ]
+        if quiet:  # no warning on the display; misleading: points at a cooling problem
+            texts[1] = (target, f"{target} cooling fan sounds rough on the afternoon round, may need a look.")
         for (area, text), delay in zip(texts, (int(ctx.rng.integers(5, 30)), int(ctx.rng.integers(60, 150)))):
             self.notes.append(note(self.start + timedelta(minutes=delay), area, ctx.rng, text))
 

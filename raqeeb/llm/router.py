@@ -49,6 +49,7 @@ from raqeeb.contracts import (
     IncidentReport,
     LlmCall,
     LlmRole,
+    NoticeClaim,
     PlantConfig,
     Symptom,
     TechnicianNote,
@@ -85,8 +86,8 @@ _PLANT_WIDE = {FaultType.SOILING, FaultType.CURTAILMENT}
 _STATION = {FaultType.SENSOR_SOILING}
 _INVERTER = {FaultType.INVERTER_DERATE, FaultType.TRACKER_STUCK, FaultType.STRING_OPEN, FaultType.UNAUTHORIZED_CMD}
 
-FOOTER_EN = "Written by a language model ({role}) from the agent's records; numbers come from code. Plant data is synthetic."
-FOOTER_AR = "كتبه نموذج لغوي ({role}) من سجلات الوكيل، والأرقام محسوبة برمجياً. بيانات المحطة اصطناعية."
+FOOTER_EN = "Written by a language model ({model}) from the agent's records; numbers come from code. Plant data is synthetic."
+FOOTER_AR = "كتبه نموذج لغوي ({model}) من سجلات الوكيل، والأرقام محسوبة برمجياً. بيانات المحطة اصطناعية."
 _ARABIC_LETTER = re.compile(r"[؀-ۿ]")
 _LATIN_LETTER = re.compile(r"[A-Za-z]")
 
@@ -128,11 +129,18 @@ class _Reply(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class _Notice(_Reply):
+    start: str = Field(pattern=r"^\d\d:\d\d$")  # local time as the notice states it
+    end: str = Field(pattern=r"^\d\d:\d\d$")
+    limit_mw: float = Field(gt=0)
+
+
 class _ProposedHypothesis(_Reply):
     fault_type: FaultType
     targets: list[str] = Field(min_length=1)
     explains: list[str] = Field(default_factory=list)
     evidence: list[str] = Field(min_length=1)
+    notice: _Notice | None = None  # CURTAILMENT from a grid-operator notice: its window and limit
 
 
 class _Proposals(_Reply):
@@ -247,12 +255,17 @@ class Router:
             if unknown:
                 raise ValueError(f"unknown symptom ids in explains: {unknown[:5]}")
             _check_numbers(p.evidence, sources)
+            notice = None
+            if p.notice is not None:  # the numbers must come from the data (the note), like any evidence
+                _check_numbers([f"{p.notice.start} {p.notice.end} {p.notice.limit_mw}"], sources)
+                notice = NoticeClaim(start_local=p.notice.start, end_local=p.notice.end,
+                                     limit_kw=p.notice.limit_mw * 1000.0)
             key = (p.fault_type, tuple(sorted(p.targets)))
             if key in seen:
                 continue
             seen.add(key)
             out.append(Hypothesis(id=f"llm-{len(out) + 1}", fault_type=p.fault_type, targets=p.targets,
-                                  explains=p.explains, evidence=p.evidence, score=0.0))
+                                  explains=p.explains, evidence=p.evidence, score=0.0, notice=notice))
         return out
 
     # --- (b) explanation --------------------------------------------------------------------
@@ -300,8 +313,9 @@ class Router:
                         "llm_calls": draft.llm_calls + len(calls)}
         if value is not None:
             role = next(c.role for c in reversed(calls) if c.ok).value
-            update |= {"summary_en": f"{value.summary_en.strip()}\n\n{FOOTER_EN.format(role=role)}",
-                       "summary_ar": f"{value.summary_ar.strip()}\n\n{FOOTER_AR.format(role=role)}"}
+            model = self.gateway.model_label(LlmRole(role))  # the model that actually wrote it
+            update |= {"summary_en": f"{value.summary_en.strip()}\n\n{FOOTER_EN.format(model=model)}",
+                       "summary_ar": f"{value.summary_ar.strip()}\n\n{FOOTER_AR.format(model=model)}"}
         return draft.model_copy(update=update), calls
 
     # --- routing core -----------------------------------------------------------------------

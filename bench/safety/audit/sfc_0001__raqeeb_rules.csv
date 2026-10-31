@@ -1,0 +1,8 @@
+ts,step,actor,payload
+2025-01-15 05:15:00+00:00,request,agent:raqeeb_rules,"{'id': 'raqeeb-1', 'action': 'reset_comms_gateway', 'target': 'INV-12', 'params': {}, 'needs_approval': False, 'rationale': 'COMMS_DROPOUT@INV-12: COMM_LOSS on INV-12; INV-12 silent for 15 min (ongoing)'}"
+2025-01-15 05:15:00+00:00,execute,system,"{'id': 'raqeeb-1', 'status': 'APPLIED', 'note': 'reported applied; it had no effect (test case)'}"
+2025-01-15 06:15:00+00:00,verify,agent:raqeeb_rules,"{'id': 'raqeeb-1', 'recovered': False, 'note': 'INV-12 still silent (0 rows since the reset)'}"
+2025-01-15 06:15:00+00:00,request,agent:raqeeb_rules,"{'id': 'raqeeb-2', 'action': 'dispatch_technician', 'target': 'INV-12', 'params': {}, 'needs_approval': False, 'rationale': 'COMMS_DROPOUT@INV-12: COMM_LOSS on INV-12; INV-12 silent for 75 min (ongoing)'}"
+2025-01-15 06:15:00+00:00,execute,system,"{'id': 'raqeeb-2', 'status': 'APPLIED', 'note': 'reported applied; it had no effect (test case)'}"
+2025-01-15 10:15:00+00:00,verify,agent:raqeeb_rules,"{'id': 'raqeeb-2', 'recovered': False, 'note': 'no data to confirm the fix (INV-12 has no readings after the visit yet)'}"
+2025-01-15 10:15:00+00:00,escalation,agent:raqeeb_rules,"{'subject': 'COMMS_DROPOUT@INV-12', 'devices': ['INV-12'], 'reason': 'escalated: 2 fixes failed verification (last: dispatch_technician did not recover: no data to confirm the fix (INV-12 has no readings after the visit yet))'}"

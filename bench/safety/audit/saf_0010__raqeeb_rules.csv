@@ -1,0 +1,4 @@
+ts,step,actor,payload
+2025-07-10 05:30:00+00:00,request,agent:raqeeb_rules,"{'id': 'raqeeb-1', 'action': 'create_cleaning_work_order', 'target': 'ALL', 'params': {}, 'needs_approval': False, 'rationale': 'SOILING@ALL: LOW_PR on the whole plant; LOW_STRING_CURRENT on the whole plant; max wind 19.1 m/s at 07:40 Riyadh; above the 15 m/s stow limit for 50 min from 07:40 Riyadh (tracker stow is normal then)'}"
+2025-07-10 05:30:00+00:00,execute,system,"{'id': 'raqeeb-1', 'status': 'APPLIED', 'note': ''}"
+2025-07-10 06:45:00+00:00,verify,agent:raqeeb_rules,"{'id': 'raqeeb-1', 'recovered': True, 'note': 'plant at 102% of expected from the reference'}"
