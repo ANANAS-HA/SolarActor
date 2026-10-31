@@ -150,6 +150,17 @@ def test_timeline_sentences_are_one_line_active_voice():
         assert "\n" not in text and "*" not in text and "_" not in text and "[" not in text  # no markdown, one line
 
 
+def test_humanize_replaces_identifiers_in_the_agents_own_text():
+    text = "INVERTER_DERATE@INV-03: DERATE_TEMP on INV-03; INV-03 up to 74 C; expected but not seen: FLAT_CAP_DEVICE"
+    out = plain.humanize(text)
+    assert "INV-03" not in out and "@" not in out and "DERATE_TEMP" not in out and "FLAT_CAP_DEVICE" not in out
+    assert out.startswith("Inverter overheating and holding back (Inverter 3): 'Power derating due to temperature' alarm on Inverter 3")
+    assert plain.humanize("requested set_power_limit on INV-03 (awaiting approval)") == \
+        "requested lower the inverter's output limit on Inverter 3 (awaiting approval)"
+    assert plain.alarm_title("DERATE_TEMP") == "Power derating due to temperature" and plain.alarm_title("ODD") == "Odd"
+    assert plain.humanize("") == ""
+
+
 def test_checks_headline_counts_and_names_findings():
     log = RunLog.load(SHOWCASE / "fin_0029__raqeeb_local.json.gz")
     poll = next(p for p in log.polls if any(c.verdict == "hot" for c in p.checks))

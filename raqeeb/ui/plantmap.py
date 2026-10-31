@@ -104,7 +104,9 @@ def _badges(run, plant: PlantConfig) -> dict[str, list[str]]:
         _add(out, a.request.target, badge)
     proposed = {p.label: p for p in log.proposals_until(now) if p.decision in ("accepted", "dropped")}
     for label, p in proposed.items():
-        chain = [f"{p.fault_type} proposed", "accepted" if p.decision == "accepted" else "dropped"]
+        from raqeeb.ui import plain
+
+        chain = [f"{plain.fault_name(p.fault_type).lower()} proposed", "accepted" if p.decision == "accepted" else "dropped"]
         chain += [ACTION_BADGE.get(a.request.action, a.request.action.value) for a in actions if a.cause == label]
         if label in escalated:
             chain.append("escalated")

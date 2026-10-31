@@ -603,6 +603,48 @@ def model_purpose(purpose: str) -> str:
     return MODEL_PURPOSES.get(purpose, f"asked the model: {_words(purpose).lower()}")
 
 
+# -- alarm codes and the agent's own text ------------------------------------------------------------------
+
+_ALARM_TITLES: dict[str, str] | None = None
+
+
+def alarm_title(code: str) -> str:
+    """The alarm's title from configs/alarm_codes.yaml ("Power derating due to temperature"), else the code in words."""
+    global _ALARM_TITLES
+    if _ALARM_TITLES is None:
+        try:
+            from raqeeb.config import load_alarm_codes
+
+            _ALARM_TITLES = {k: v.title for k, v in load_alarm_codes().items()}
+        except Exception:  # noqa: BLE001 - titles are a convenience
+            _ALARM_TITLES = {}
+    return _ALARM_TITLES.get(str(code), _words(code))
+
+
+_LABEL_RE = re.compile(r"\b([A-Z][A-Z_]+)@([A-Z0-9-]+)\b")
+_DEVICE_RE = re.compile(r"\b(INV-\d{2}|WS-\d{2}|METER-\d{2}|PPC-\d{2}|EDGE-[EWNS]|T[1-4])\b")
+_ACTION_RE = re.compile(r"\b(" + "|".join(a.value for a in ActionType) + r")\b")
+_SYMPTOM_RE = re.compile(r"\b(" + "|".join(k.value for k in SymptomKind) + r")\b")
+_FAULT_RE = re.compile(r"\b(" + "|".join(f.value for f in FaultType) + r")\b")
+
+
+def humanize(text: str, plant=None) -> str:
+    """The agent's own code-built text (a rationale, an expected effect, a reason) with its identifiers replaced
+    by words: cause labels, device ids, action names, symptom kinds, alarm codes and fault types. Free text from
+    the plant (notes, alarm messages, model replies) is never passed through here: it is shown quoted."""
+    if not text:
+        return ""
+    out = _LABEL_RE.sub(lambda m: cause(m.group(0), plant), text)
+    out = _DEVICE_RE.sub(lambda m: device(m.group(1), plant), out)
+    out = _ACTION_RE.sub(lambda m: action(m.group(1)).lower(), out)
+    out = _SYMPTOM_RE.sub(lambda m: SYMPTOMS.get(m.group(1), _words(m.group(1))).lower(), out)
+    out = _FAULT_RE.sub(lambda m: fault(m.group(1)).name.lower(), out)
+    titles = _ALARM_TITLES if _ALARM_TITLES is not None else (alarm_title("x") and _ALARM_TITLES) or {}
+    for code, title in titles.items():
+        out = re.sub(rf"\b{re.escape(code)}\b", f"'{title}' alarm", out)
+    return out
+
+
 # -- timeline sentences ------------------------------------------------------------------------------------
 
 

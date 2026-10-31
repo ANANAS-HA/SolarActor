@@ -437,10 +437,11 @@ def header(run: source.Run) -> None:
     st.markdown(
         f'<div class="rq-header"><div class="rq-brand">Raqeeb<small>plant recovery console</small></div>'
         f'<div class="rq-facts"><span><b>Plant</b>{html_text(plant.site.name)} (synthetic)</span>'
-        f'<span><b>Mode</b>Mode: {html_text(mode_words(run))}</span>'
+        f'<span><b>Mode</b>{html_text(mode_words(run))}</span>'
         f'<span><b>Simulated clock</b>{local(run.now):%H:%M} {DISPLAY_TZ}, {local(run.incident.start):%Y-%m-%d}</span>'
         f'<span><b>Model</b>{html_text(model)}</span></div></div>', unsafe_allow_html=True)
-    st.caption(f"{kind} run of incident {md_escape(run.incident.id)}: {md_escape(run.log.label)}. {source.FOOTER}")
+    st.caption(f"Mode: {md_escape(mode_words(run))}. {kind} run of incident {md_escape(run.incident.id)}: "
+               f"{md_escape(run.log.label)}. {source.FOOTER}")
 
 
 def alert_status(run: source.Run) -> tuple[str, str]:
@@ -621,7 +622,7 @@ def alarm_feed(data: dict[str, pd.DataFrame]) -> None:
                + ". Message text is quoted device data (untrusted): the agent's rules never read it.")
     table = pd.DataFrame({
         "Time": events["ts"].map(local_hhmm), "Device": events["device_id"].map(plain.device),
-        "Alarm": events["code"].map(lambda c: plain._words(c)), "Severity": events["severity"].astype(str).str.capitalize(),
+        "Alarm": events["code"].map(plain.alarm_title), "Severity": events["severity"].astype(str).str.capitalize(),
         "Message (quoted)": events["message"],
     })
     st.dataframe(table, hide_index=True, height=380, key="alarm_table")
@@ -697,7 +698,8 @@ def approval_card(run: source.Run, a, key_prefix: str = "") -> None:
     req = a.request
     with st.container(border=True):
         st.markdown(f"**{md_escape(plain.approval_needed(req.action, req.target, req.params))}**")
-        st.markdown(f"Why: {md_escape(req.rationale)}  \nWhat to expect: {md_escape(req.expected_effect)}  \n"
+        st.markdown(f"Why: {md_escape(plain.humanize(req.rationale))}  \n"
+                    f"What to expect: {md_escape(plain.humanize(req.expected_effect))}  \n"
                     f"Asked at {local_hhmm(a.requested_at)}. Reversible: {'yes' if req.reversible else 'no'}.")
         if a.status is not None:
             recorded = "Recorded decision: " if isinstance(run, ReplayRun) else ""
@@ -740,7 +742,7 @@ def agent_timeline(run: source.Run) -> None:
                "needed, plans, passes the safety gate, acts, checks the result and reports. Every number is computed "
                "by code.")
     st.dataframe(pd.DataFrame([{"Time": local_hhmm(t.ts), "Step": NODE_WORDS.get(t.node, plain._words(t.node)),
-                                "What (quoted)": t.summary} for t in reversed(items)]),
+                                "What": plain.humanize(t.summary)} for t in reversed(items)]),
                  hide_index=True, height=420, key="timeline_table")
     findings = run.log.findings_until(run.now)
     st.markdown("**What the checks find now**")
@@ -841,7 +843,7 @@ def actions_panel(run: source.Run) -> None:
     if escalations:
         st.markdown("**Handed to a human**")
         for e in escalations:
-            st.markdown(f"- {local_hhmm(e.ts)}: {md_escape(plain.escalated(e.subject, e.devices, e.reason))}")
+            st.markdown(f"- {local_hhmm(e.ts)}: {md_escape(plain.escalated(e.subject, e.devices, plain.humanize(e.reason)))}")
         with show_data("escalations"):
             st.dataframe(pd.DataFrame([{"Time": local_hhmm(e.ts), "Subject": e.subject, "Devices": ", ".join(e.devices),
                                         "Reason": e.reason} for e in escalations]), hide_index=True,
@@ -963,7 +965,7 @@ def trace_card(card: trace.TurnCard, run: source.Run) -> None:
                     if a else f"Verified {v.action_id}: {'recovered' if v.recovered else 'not recovered'}.")
             st.markdown(f"- {md_escape(text)}")
         for e in card.escalations:
-            st.markdown(f"- {md_escape(plain.escalated(e.subject, e.devices, e.reason))}")
+            st.markdown(f"- {md_escape(plain.escalated(e.subject, e.devices, plain.humanize(e.reason)))}")
         alarms = _turn_alarms(run, card)
         if len(alarms):
             with st.expander(f"Alarms this turn ({len(alarms)}): messages quoted, untrusted", expanded=False):
@@ -1224,7 +1226,7 @@ def _trace_body() -> None:
             st.session_state.trace_active = False
             st.rerun()
         view: source.Run | source.RunAt = run
-        polls = run.log.polls
+        polls = run.log.polls_until(run.now)  # a replay mid-way offers only the turns played so far
         if polls and not active:
             # The clock: the newest turn, unless a Summary item asked for an earlier one; a live run that moved
             # on since the clock was last set goes back to following the newest turn
@@ -1375,14 +1377,14 @@ def summary_tab(run: source.Run, power: pd.DataFrame) -> None:
     a, b, c, d, f = st.columns(5)
     a.metric("Agent steps", head.turn if head.turns_total is None else f"{head.turn} of {head.turns_total}")
     b.metric("Causes found", sum(len(v) for v in head.causes.values()),
-             f"{len(head.causes[trace.RESOLVED])} fixed and verified, {len(head.causes[trace.ESCALATED])} handed to a human",
+             f"{len(head.causes[trace.RESOLVED])} fixed, {len(head.causes[trace.ESCALATED])} to a human",
              delta_color="off")
     c.metric("Energy below expected", f"{e.lost_mwh:.2f} MWh",
-             f"{e.lost_before_mwh:.2f} before the first fix took effect, {e.lost_after_mwh:.2f} after"
-             if e.first_effective else "no fix has taken effect yet", delta_color="off")
-    d.metric("Shortfall, worst hour then last hour",
-             "none yet" if e.gap_worst_pct is None else f"{e.gap_worst_pct:.0f}% then "
-             + ("none" if e.gap_last_pct is None else f"{e.gap_last_pct:.0f}%"))
+             f"{e.lost_before_mwh:.2f} before first fix, {e.lost_after_mwh:.2f} after"
+             if e.first_effective else "no fix in effect yet", delta_color="off")
+    d.metric("Shortfall (worst hour / last hour)",
+             "none yet" if e.gap_worst_pct is None else f"{e.gap_worst_pct:.0f}% / "
+             + ("0%" if e.gap_last_pct is None else f"{e.gap_last_pct:.0f}%"))
     f.metric("Model calls", head.llm_calls, f"{head.llm_s:.1f} s in the model" if head.llm_calls else "rules only",
              delta_color="off")
     st.caption("Energy below expected is the area between the expected-from-reference line and the meter, up to the "
@@ -1486,14 +1488,14 @@ def ask_tab(run: source.Run, power: pd.DataFrame) -> None:
         with st.chat_message("user"):
             st.markdown(md_escape(a.question))
         with st.chat_message("assistant"):
-            st.markdown(md_escape(a.text))
+            st.markdown(md_escape(a.text if a.phrased_by else plain.humanize(a.text)))
             if a.phrased_by:
                 st.caption(f"Worded by {md_escape(a.phrased_by)} in {a.llm_s:.1f} s from the facts below, nothing else.")
             else:
                 st.caption("No model reachable" + (f" ({md_escape(a.note)})" if a.note else "") + ": the facts are "
                            "shown as retrieved.")
             with st.expander("Based on:", expanded=bool(a.phrased_by)):
-                st.markdown("\n".join(f"- {md_escape(f)}" for f in a.facts))
+                st.markdown("\n".join(f"- {md_escape(plain.humanize(f))}" for f in a.facts))
 
 
 def report_tab(run: source.Run) -> None:
