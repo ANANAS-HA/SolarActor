@@ -86,7 +86,7 @@ def test_summary_tab_renders_a_replay_and_jumps_to_a_turn():
     at.session_state.mode_choice = "Replay"
     at.run()
     at.button(key="to_end").click().run()
-    assert at.tabs[0].label == "Summary"
+    assert at.session_state.nav == "Summary"
     text = _text(at)
     assert "Incident summary" in text and "Key moments" in text and "Shift report" in text
     labels = [m.label for m in at.metric]

@@ -122,7 +122,7 @@ def test_ask_panel_renders_and_answers_without_a_model():
     at.session_state.mode_choice = "Replay"
     at.run()
     at.button(key="to_end").click().run()
-    assert "Ask Raqeeb" in [t.label for t in at.tabs]
+    assert [c.key for c in at.chat_input] == ["ask_input"]  # the floating Ask Raqeeb popup
     at.chat_input(key="ask_input").set_value("how much energy was lost").run()
     msgs = at.chat_message
     assert len(msgs) >= 2 and not at.exception

@@ -32,6 +32,15 @@ def _app(run) -> AppTest:
     at = AppTest.from_file(str(APP), default_timeout=300)
     at.session_state.run = run
     at.session_state.mode_choice = "Replay"
+    _trace(at)
+    return at
+
+
+def _trace(at: AppTest) -> AppTest:
+    """Open the Trace page (session state the navigation radios read on the next run)."""
+    at.session_state.nav = "Trace"
+    at.session_state.nav_main = "Trace"
+    at.session_state.nav_judge = None
     return at
 
 
@@ -73,7 +82,7 @@ def test_trace_tab_renders_a_replay_with_words_and_colours():
     assert "No turns yet" in _page(at)
     at.button(key="to_end").click().run()
     assert not at.exception
-    assert [t.label for t in at.tabs][:3] == ["Summary", "Trace", "Plant"]
+    assert at.session_state.nav == "Trace"
     page = _page(at)
     assert "Turn 48" in page and "Accepted" in page and "Rejected" in page and "Nothing changed" in page
     checks = [d.value for d in at.dataframe if "Verdict" in getattr(d.value, "columns", [])]
@@ -130,14 +139,16 @@ FIXTURE = REPO_ROOT / "tests" / "fixtures" / "trajectory_v3_example.json"
 
 
 def test_trace_tab_renders_the_v3_fixture_end_to_end():
-    at = AppTest.from_file(str(APP), default_timeout=300)
+    at = _trace(AppTest.from_file(str(APP), default_timeout=300))
     at.run()
     at.text_input(key="trace_path").input(str(FIXTURE)).run()
     at.button(key="trace_open").click().run()
     assert not at.exception
     run = at.session_state.run
     assert isinstance(run, live.ReplayRun) and run.log.version == 3
+    at.radio(key="nav_judge").set_value("Answer key").run()
     assert "Hidden while the run is in progress" in _page(at)  # the file has the key: still hidden
+    at.radio(key="nav_main").set_value("Trace").run()
     at.button(key="to_end").click().run()
     assert not at.exception
     page = _page(at)
@@ -248,7 +259,7 @@ def test_live_run_in_the_background_completes_with_inline_approvals():
     on its card; reruns never restart the run."""
     import time
 
-    at = AppTest.from_file(str(APP), default_timeout=300)
+    at = _trace(AppTest.from_file(str(APP), default_timeout=300))
     at.run()
     at.radio(key="mode_choice").set_value(live.MODE_LABEL[live.Mode.RULES]).run()
     at.selectbox(key="scenario_id").set_value("scn_0007").run()
@@ -344,7 +355,9 @@ def test_showcase_replays_are_the_console_default():
 def test_showcase_replays_render_in_the_trace_tab():
     at = AppTest.from_file(str(APP), default_timeout=300)
     at.run()  # the console opens on the default showcase replay
-    assert at.session_state.run.log.incident.id == "fin_0029" and "Hidden while the run is in progress" in _page(at)
+    assert at.session_state.run.log.incident.id == "fin_0029"
+    at.radio(key="nav_judge").set_value("Answer key").run()
+    assert "Hidden while the run is in progress" in _page(at)
     for path in source.showcase_files():
         at = _app(source.start_replay(path))
         at.run()

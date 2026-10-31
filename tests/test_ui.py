@@ -228,16 +228,20 @@ def test_app_shows_notes_and_proposals_as_data():
     at.session_state.run = ReplayRun(log)
     at.session_state.mode_choice = "Replay"
     at.run()
+    _go(at, "Agent")
     assert "No proposals so far" in _page(at)
     at.button(key="to_end").click().run()
     assert not at.exception
     page = _page(at)
-    assert {"Technician and operator notes", "Model proposals"} <= {s.value for s in at.subheader}
+    assert "Model proposals" in {s.value for s in at.subheader}
     assert "Accepted" in page and "Rejected" in page and source.md_escape(NOTHING_CHANGED) in page
     assert HOSTILE not in page and "Ignore rules" not in page
-    assert HOSTILE in list(_table(at, "Text (quoted)")["Text (quoted)"])
     checks = [t.value for t in at.dataframe if "Check" in t.value.columns]
     assert {"pass", "FAIL"} <= {v for c in checks for v in c["Pass"]}
+    _go(at, "Plant")
+    assert "Technician and operator notes" in {s.value for s in at.subheader}
+    assert HOSTILE not in _page(at)
+    assert HOSTILE in list(_table(at, "Text (quoted)")["Text (quoted)"])
 
 
 def test_replay_rejects_other_files():
@@ -279,9 +283,17 @@ def _table(at: AppTest, column: str):
     return next((t.value for t in at.dataframe if column in t.value.columns), None)
 
 
+def _go(at: AppTest, page: str) -> AppTest:
+    """Open a page through the sidebar navigation."""
+    key = "nav_judge" if page in ("Answer key", "Results") else "nav_main"
+    at.radio(key=key).set_value(page).run()
+    return at
+
+
 def test_app_reveals_the_answer_key_only_after_the_end():
     at = AppTest.from_file(str(APP), default_timeout=120)
     at.run()
+    _go(at, "Answer key")
     replay = at.session_state.run
     labels = [f.label for f in replay.log.answer_key.faults]
     assert "Hidden while the run is in progress" in _page(at)
@@ -319,7 +331,9 @@ def test_alarm_text_is_shown_as_quoted_data(monkeypatch):
     at.session_state.mode_choice = "Replay"
     at.run()
     assert not at.exception
-    assert HOSTILE not in _page(at) and "Ignore rules" not in _page(at)  # never rendered as markdown
+    for page in ("Summary", "Trace", "Plant", "Agent"):
+        _go(at, page)
+        assert HOSTILE not in _page(at) and "Ignore rules" not in _page(at), page  # never rendered as markdown
     assert any(HOSTILE in m for m in _table(at, "Message (quoted)")["Message (quoted)"])
 
 
@@ -342,12 +356,17 @@ def test_every_page_renders_in_replay_and_live_mode():
     assert not at.exception
     page = _page(at)
     assert source.FOOTER in page and "Mode: Replay" in page and source.md_escape(source.SHOWCASE_LABEL) in page
-    assert at.tabs[0].label == "Summary"  # the console opens on the Summary tab
-    assert [t.label for t in at.tabs] == ["Summary", "Trace", "Plant", "Agent", "Report", "Answer key", "Results",
-                                          "Ask Raqeeb"]
-    assert {"Plant map", "Alarm feed", "Recovery", "Technician and operator notes", "Agent timeline", "Approvals",
+    assert at.session_state.nav == "Summary"  # the console opens on the Summary page
+    assert [r.key for r in at.sidebar.radio] == ["nav_main", "nav_judge"]
+    seen = set()
+    for page in ("Plant", "Agent", "Report", "Answer key", "Results", "Summary"):
+        _go(at, page)
+        assert not at.exception, page
+        seen |= {s.value for s in at.subheader}
+    assert {"Plant map", "Alarm feed", "Recovery", "Technician and operator notes", "Agent timeline",
             "Model proposals", "Actions and verifications", "LLM calls and time", "Shift report", "Answer key",
-            "Benchmark results"} <= {s.value for s in at.subheader}
+            "Benchmark results"} <= seen
+    assert [c.key for c in at.chat_input] == ["ask_input"]  # Ask Raqeeb floats on every page
 
     at.radio(key="mode_choice").set_value(live.MODE_LABEL[Mode.RULES]).run()
     at.selectbox(key="scenario_id").set_value("scn_0002").run()
@@ -370,7 +389,7 @@ def test_every_page_renders_in_replay_and_live_mode():
             break
         at.button(key=f"approve_{run.waiting[0].request.id}").click().run()
     assert run.finished and not at.exception
-    assert any(b.key == "save_recording" for b in at.sidebar.get("download_button"))
+    assert any(b.key == "save_recording" for b in at.get("download_button"))
     assert source.FOOTER in _page(at)
 
 
@@ -384,6 +403,7 @@ def test_results_page_reads_the_bench_output(tmp_path):
     at = AppTest.from_file(str(APP), default_timeout=120)
     at.session_state.results_path = str(tmp_path / "missing")
     at.run()
+    _go(at, "Results")
     assert "Results not available yet" in _page(at)
     at.text_input(key="results_path").input(str(BENCH_DIR / "practice")).run()
     assert not at.exception

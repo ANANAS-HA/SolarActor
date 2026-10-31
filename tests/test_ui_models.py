@@ -99,13 +99,13 @@ def test_sidebar_selector_offline_shows_rules_only_and_a_disabled_api_tier(_fres
     at = AppTest.from_file(str(APP), default_timeout=120)
     at.run()
     at.radio(key="mode_choice").set_value(live.MODE_LABEL[Mode.RULES]).run()
-    box = at.sidebar.selectbox(key="model_choice")
+    box = at.selectbox(key="model_choice")
     assert box.options == ["Rules only"] and box.value == "Rules only"
-    api = at.sidebar.button(key="api_tier")
+    api = at.button(key="api_tier")
     assert api.label == "API tier (not configured)" and api.disabled
     assert "not configured" in (api.help or "")
     at.radio(key="mode_choice").set_value("Replay").run()
-    assert not [b for b in at.sidebar.selectbox if b.key == "model_choice"]  # not shown for replays
+    assert not [b for b in at.selectbox if b.key == "model_choice"]  # not shown for replays
     assert not at.exception
 
 
@@ -114,10 +114,10 @@ def test_sidebar_selector_lists_the_servers_models(monkeypatch, _fresh_cache):
     at = AppTest.from_file(str(APP), default_timeout=120)
     at.run()
     at.radio(key="mode_choice").set_value(live.MODE_LABEL[Mode.LOCAL]).run()
-    box = at.sidebar.selectbox(key="model_choice")
+    box = at.selectbox(key="model_choice")
     assert box.options == ["Rules only", "qwen-a", "other-b"] and box.value == "qwen-a"
     box.set_value("other-b").run()
     assert at.session_state.model_choice == "other-b" and at.session_state.mode_choice == live.MODE_LABEL[Mode.LOCAL]
-    at.sidebar.selectbox(key="model_choice").set_value("Rules only").run()
+    at.selectbox(key="model_choice").set_value("Rules only").run()
     assert at.session_state.mode_choice == live.MODE_LABEL[Mode.RULES]  # the two controls agree
     assert not at.exception

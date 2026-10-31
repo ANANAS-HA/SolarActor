@@ -45,17 +45,18 @@ SPEEDS = [15, 30, 60, 120, 240]  # sim minutes per tick
 TICK_S = 0.4  # wall-clock pause between ticks while playing
 TRACE_REFRESH_S = 1.0  # the Trace tab re-renders this often while the background runner advances a live run
 
-# -- design tokens (docs/CONSOLE_DESIGN.md): a light control-room look; every colour has a word beside it ---
+# -- design tokens ("desert noon", docs/design/REDESIGN_HANDOFF.md): every colour has a word beside it ----
 TOKENS = {
-    "page": "#f2f5f9", "surface": "#ffffff", "ink": "#13293f", "muted": "#51657a", "accent": "#1d5fb4",
-    "line": "#d6dee8",
+    "page": "#f6f2ea", "surface": "#ffffff", "ink": "#1d1f22", "body": "#3d3f43", "muted": "#5d5f63",
+    "accent": "#8a4b00", "navy": "#1b2f4a", "amber": "#e8a33d", "line": "#dedad2", "row": "#ece9e3",
+    "sidebar": "#efe9dc", "subtle": "#faf9f6", "tint": "#fdf1de", "approval": "#c9822a",
 }
 # semantic states: (text/ink, background); each pair is at least 4.5:1
 SEMANTIC = {
-    "healthy": ("#116b3f", "#def3e6"), "attention": ("#8a4b00", "#fff0cc"), "critical": ("#a8251c", "#fde2df"),
-    "no data": ("#4a5563", "#e9edf2"), "needs a human": ("#5b3aa6", "#ece5fa"), "info": ("#1d5fb4", "#dfe9f8"),
+    "healthy": ("#1f6b3a", "#e4f2e8"), "attention": ("#7a4300", "#fdf1de"), "critical": ("#9a2420", "#fbe7e5"),
+    "no data": ("#5d5f63", "#f1efea"), "needs a human": ("#7a4300", "#fdf1de"), "info": ("#1b2f4a", "#e9eef5"),
 }
-SERIES = {"actual": "#1d5fb4", "reference": "#c2571a", "sensor": "#117a65"}  # chart series, fixed order
+SERIES = {"actual": "#1b2f4a", "reference": "#1f6b3a", "sensor": "#c9822a"}  # actual navy, satellite green, sensor amber
 MUTED = TOKENS["muted"]
 RECENT_ALARM_MIN = 30
 MIN_GAP_FRACTION = 0.05  # of the plant rating: below this (dawn, dusk) no "vs expected" delta
@@ -75,59 +76,101 @@ NODE_WORDS = {"start": "Started watching", "triage": "Looked at the new alarms",
               "rank": "Weighed the causes", "consult": "Asked the model", "plan": "Planned the fix",
               "safety": "Safety gate", "execute": "Requested an action", "verify": "Checked the result",
               "report": "Wrote the report", "approval": "Operator decision"}
+PAGES_MAIN = ["Summary", "Trace", "Plant", "Agent", "Report"]
+PAGES_JUDGE = ["Answer key", "Results"]
+HINTS = {"Summary": "What happened", "Trace": "How it was solved", "Plant": "Map and inverters",
+         "Agent": "What Raqeeb did", "Report": "Shift report", "Answer key": "The faults we injected",
+         "Results": "How well it did"}
 INTRO = {
     "Summary": "The whole incident on one screen: what went wrong, what Raqeeb did about it and what it cost. "
-               "Click a moment to open that step in the Trace tab.",
+               "Click a moment to open that step in Trace.",
     "Trace": "This is the agent's log. Each card is one 15-minute step: what it checked, what it found, what it "
              "decided, and what happened next.",
-    "Plant": "The plant as the agent sees it at the simulated clock: the map, the alarms, the output against what "
-             "the weather says it should be, and the notes from site staff.",
-    "Agent": "The agent's record in tables: every step, decision, model proposal and action, with the raw values.",
-    "Report": "The shift report the agent wrote at the end of the run, in English and Arabic.",
-    "Answer key": "The faults that were planted in the synthetic plant. The agent never sees this; it appears only "
-                  "after the run ends.",
-    "Results": "Benchmark results over many scenarios: Raqeeb against a simple alarm-threshold baseline and two "
+    "Plant": "Every inverter and sensor at the simulated clock, with its state in words; the alarms, the output "
+             "against what the weather allows, and the notes from site staff.",
+    "Agent": "Each action Raqeeb took and whether it needed your approval, with the raw values behind it.",
+    "Report": "The report a plant manager reads at the end of the shift, in English and Arabic.",
+    "Answer key": "The faults we hid in the simulation, for checking Raqeeb against. The agent never sees this; it "
+                  "appears only after the run ends.",
+    "Results": "How well Raqeeb did over many scenarios, against a simple alarm-threshold baseline and two "
                "reference bounds.",
-    "Ask Raqeeb": "Ask about this run in your own words. Answers are looked up in the record; a model only rewords "
+    "Ask Raqeeb": "Ask about this incident in your own words. Answers come from the record; a model only rewords "
                   "them and can take no action.",
 }
 
 CSS = """
 <style>
-:root { --rq-page: %(page)s; --rq-surface: %(surface)s; --rq-ink: %(ink)s; --rq-muted: %(muted)s;
-        --rq-accent: %(accent)s; --rq-line: %(line)s; }
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
+:root { --rq-page: %(page)s; --rq-surface: %(surface)s; --rq-ink: %(ink)s; --rq-body: %(body)s; --rq-muted: %(muted)s;
+        --rq-accent: %(accent)s; --rq-navy: %(navy)s; --rq-amber: %(amber)s; --rq-line: %(line)s; --rq-row: %(row)s;
+        --rq-subtle: %(subtle)s; --rq-tint: %(tint)s; --rq-approval: %(approval)s;
+        --rq-sans: 'IBM Plex Sans', 'Source Sans 3', system-ui, sans-serif; --rq-mono: 'IBM Plex Mono', ui-monospace, monospace; }
+.stApp, .stApp * { font-family: var(--rq-sans); }
 .stApp { background: var(--rq-page); color: var(--rq-ink); }
-[data-testid="stSidebar"] { background: var(--rq-surface); border-right: 1px solid var(--rq-line); }
-h1, h2, h3, [data-testid="stMetricValue"] { color: var(--rq-ink); letter-spacing: 0; }
-h1 { font-size: 1.5rem; font-weight: 600; }  h2 { font-size: 1.25rem; font-weight: 600; }
-h3 { font-size: 1.125rem; font-weight: 600; }
+.stApp code, .stApp pre, .rq-mono { font-family: var(--rq-mono) !important; }
+[data-testid="stSidebar"] { background-color: %(sidebar)s; border-right: 1px solid var(--rq-line);
+  background-image: linear-gradient(rgba(27,47,74,.045) 1px, transparent 1px), linear-gradient(90deg, rgba(27,47,74,.045) 1px, transparent 1px);
+  background-size: 22px 22px; }
+[data-testid="stSidebar"] [data-testid="stRadio"] > label { display: none; }
+[data-testid="stSidebar"] [data-testid="stRadio"] label[data-baseweb="radio"] { padding: 0.45rem 0.6rem; border-radius: 8px;
+  margin: 0; width: 100%%; }
+[data-testid="stSidebar"] [data-testid="stRadio"] label[data-baseweb="radio"]:hover { background: #e3e0d9; }
+[data-testid="stSidebar"] [data-testid="stRadio"] label[data-baseweb="radio"]:has(input:checked) { background: var(--rq-surface); }
+[data-testid="stSidebar"] [data-testid="stRadio"] label[data-baseweb="radio"]:has(input:checked) p { font-weight: 600; }
+[data-testid="stSidebar"] [data-testid="stRadio"] label[data-baseweb="radio"] > div:first-child { display: none; }
+[data-testid="stSidebar"] [data-testid="stRadio"] [data-testid="stCaptionContainer"] { margin: 0; }
+.rq-group { font-size: 11px; font-weight: 600; color: #6b6d71; text-transform: uppercase; letter-spacing: 0.06em;
+            padding: 6px 10px 2px; }
+.rq-logo { display: flex; align-items: center; gap: 10px; padding: 4px 8px 10px; }
+.rq-logo .mark { width: 32px; height: 32px; border-radius: 8px; background: var(--rq-navy); position: relative; overflow: hidden; flex: none; }
+.rq-logo .mark i { position: absolute; left: 8px; top: 7px; width: 16px; height: 16px; border-radius: 50%%; background: var(--rq-amber); }
+.rq-logo .mark b { position: absolute; left: 0; right: 0; top: 15px; bottom: 0; background: var(--rq-navy); }
+.rq-logo .mark s { position: absolute; left: 5px; right: 5px; height: 2px; background: #8fa6c4; }
+.rq-logo .name { font-weight: 700; font-size: 16px; letter-spacing: -0.01em; display: block; }
+.rq-logo .sub { font-size: 12px; color: var(--rq-muted); display: block; }
+.rq-synthetic { margin-top: 1rem; padding: 12px; border: 1px solid var(--rq-line); border-radius: 10px; background: var(--rq-page);
+                font-size: 12px; color: var(--rq-muted); line-height: 1.45; }
+.rq-synthetic b { color: var(--rq-ink); display: block; }
+.st-key-header { position: sticky; top: 0; z-index: 5; background: rgba(246,242,234,.94); backdrop-filter: blur(8px);
+                 border-bottom: 2px solid var(--rq-amber); padding: 0.3rem 0 0.4rem; margin-bottom: 0.4rem; }
+.rq-title small { font-size: 12px; color: var(--rq-muted); display: block; }
+.rq-title span { font-size: 17px; font-weight: 600; display: block; }
+.rq-eyebrow { font-size: 11px; font-weight: 600; color: var(--rq-muted); text-transform: uppercase; letter-spacing: 0.06em; }
+.rq-clock { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--rq-muted); padding-top: 0.35rem; }
+.rq-clock b { font-family: var(--rq-mono); font-size: 13px; font-weight: 500; color: var(--rq-ink); }
+.rq-bar { flex: 1; height: 4px; background: #e6e3dc; border-radius: 2px; position: relative; min-width: 60px; }
+.rq-bar i { position: absolute; left: 0; top: 0; bottom: 0; background: var(--rq-amber); border-radius: 2px; }
+h1, h2, h3 { color: var(--rq-ink); letter-spacing: -0.01em; }
+h1 { font-size: 26px; font-weight: 700; }  h2 { font-size: 20px; font-weight: 600; }  h3 { font-size: 18px; font-weight: 600; }
+.rq-intro { font-size: 15px; color: var(--rq-body); margin: -0.4rem 0 0.8rem; }
 [data-testid="stCaptionContainer"] { color: var(--rq-muted); }
-[data-testid="stMetricLabel"] p { color: var(--rq-muted); font-size: 0.85rem; }
-button[role="tab"] p { font-size: 1rem; }
-[data-testid="stVerticalBlockBorderWrapper"] { background: var(--rq-surface); border-color: var(--rq-line) !important; }
-.rq-header { display: flex; justify-content: space-between; align-items: baseline; gap: 1rem; flex-wrap: wrap;
-             padding: 0.6rem 0 0.4rem; border-bottom: 2px solid var(--rq-ink); margin-bottom: 0.6rem; }
-.rq-brand { font-size: 1.5rem; font-weight: 600; color: var(--rq-ink); }
-.rq-brand small { font-size: 0.95rem; font-weight: 400; color: var(--rq-muted); margin-left: 0.6rem; }
-.rq-facts { display: flex; gap: 1.5rem; flex-wrap: wrap; font-size: 0.95rem; color: var(--rq-ink); }
-.rq-facts span b { color: var(--rq-muted); font-weight: 500; margin-right: 0.35rem; }
+[data-testid="stMetricLabel"] p { color: var(--rq-muted); font-size: 13px; }
+[data-testid="stMetricValue"] { font-variant-numeric: tabular-nums; letter-spacing: -0.02em; }
+[data-testid="stVerticalBlockBorderWrapper"] { background: var(--rq-surface); border-color: var(--rq-line) !important; border-radius: 12px; }
+.stButton > button[kind="primary"] { background: var(--rq-navy); border-color: var(--rq-navy); }
 .rq-strip { display: flex; align-items: center; gap: 0.9rem; flex-wrap: wrap; background: var(--rq-surface);
-            border: 1px solid var(--rq-line); border-left: 6px solid var(--rq-accent); padding: 0.55rem 0.9rem;
-            margin: 0.2rem 0 0.4rem; font-size: 0.95rem; }
+            border: 1px solid var(--rq-line); border-left: 6px solid var(--rq-navy); border-radius: 12px; padding: 0.55rem 0.9rem;
+            margin: 0.2rem 0 0.4rem; font-size: 14px; }
 .rq-strip.critical { border-left-color: %(crit)s; }  .rq-strip.human { border-left-color: %(human)s; }
 .rq-strip.healthy { border-left-color: %(ok)s; }
-.rq-time { font-variant-numeric: tabular-nums; color: var(--rq-muted); }
+.rq-time { font-family: var(--rq-mono); font-variant-numeric: tabular-nums; color: var(--rq-muted); }
 .rq-event { flex: 1 1 24rem; min-width: 16rem; }
-.rq-chip { display: inline-block; padding: 0.1rem 0.55rem; border-radius: 0.3rem; font-size: 0.85rem;
-           font-weight: 500; white-space: nowrap; }
-.rq-pulse::before { content: ""; display: inline-block; width: 0.55rem; height: 0.55rem; border-radius: 50%%;
-                    background: %(human)s; margin-right: 0.4rem; animation: rq-pulse 1.2s ease-in-out infinite; }
+.rq-chip { display: inline-flex; align-items: center; gap: 6px; padding: 0.15rem 0.6rem; border-radius: 999px; font-size: 12px;
+           font-weight: 600; white-space: nowrap; }
+.rq-chip::before { content: ""; width: 8px; height: 8px; border-radius: 50%%; background: currentColor; opacity: .85; }
+.rq-pulse::before { animation: rq-pulse 1.2s ease-in-out infinite; }
 @keyframes rq-pulse { 0%%, 100%% { opacity: 1; } 50%% { opacity: 0.25; } }
 @media (prefers-reduced-motion: reduce) { .rq-pulse::before { animation: none; } }
-.rq-headline { font-size: 1.05rem; font-weight: 600; color: var(--rq-ink); margin: 0 0 0.2rem; }
-.rq-found { border-left: 4px solid %(att)s; padding-left: 0.6rem; margin: 0.25rem 0; }
-.rq-found b { color: var(--rq-muted); font-weight: 500; }
+.rq-headline { font-size: 16px; font-weight: 600; color: var(--rq-ink); margin: 0 0 0.2rem; }
+.rq-found { border-left: 4px solid %(att)s; padding-left: 0.6rem; margin: 0.25rem 0; color: var(--rq-body); }
+.rq-found b { color: var(--rq-ink); font-weight: 600; }
 .rq-quiet { color: var(--rq-muted); }
+.st-key-ask_fab { position: fixed; right: 24px; bottom: 24px; z-index: 1000; width: auto !important; }
+.st-key-ask_fab [data-testid="stPopover"] > button { background: var(--rq-navy); color: #fff; border: 0; border-radius: 999px;
+  padding: 10px 18px; font-weight: 600; box-shadow: 0 10px 30px rgba(27,47,74,.25); }
+.st-key-ask_fab [data-testid="stPopover"] > button:hover { background: #24406a; color: #fff; }
+.st-key-ask_fab [data-testid="stPopover"] > button p { color: #fff; }
+.st-key-approval_card [data-testid="stVerticalBlockBorderWrapper"] { border: 1.5px solid var(--rq-approval) !important; }
 </style>
 """ % {**TOKENS, "crit": SEMANTIC["critical"][0], "human": SEMANTIC["needs a human"][0],
        "ok": SEMANTIC["healthy"][0], "att": SEMANTIC["attention"][0]}
@@ -198,7 +241,7 @@ def mode_words(run: source.Run) -> str:
 
 
 def intro(tab: str) -> None:
-    st.caption(INTRO[tab])
+    st.markdown(f'<p class="rq-intro">{html_text(INTRO[tab])}</p>', unsafe_allow_html=True)
 
 
 def show_data(key: str):
@@ -369,18 +412,67 @@ def _trace_pace() -> None:
         runner.set_pace(st.session_state.trace_pace)
 
 
-def _go_to_approval() -> None:
-    st.session_state.jump_approval = True
+# -- navigation, header, run panel, playback ----------------------------------------------------------------
+
+DEFAULT_PAGE = "Summary"
 
 
-# -- sidebar -----------------------------------------------------------------------------
+def _nav_main() -> None:
+    if st.session_state.get("nav_main"):
+        st.session_state.nav = st.session_state.nav_main
+        st.session_state.nav_judge = None
+
+
+def _nav_judge() -> None:
+    if st.session_state.get("nav_judge"):
+        st.session_state.nav = st.session_state.nav_judge
+        st.session_state.nav_main = None
+
+
+def go_to(page: str) -> None:
+    """Switch the page from a callback (the radios read these keys on the next run)."""
+    st.session_state.nav = page
+    st.session_state.nav_main = page if page in PAGES_MAIN else None
+    st.session_state.nav_judge = page if page in PAGES_JUDGE else None
+
+
+def current_page() -> str:
+    page = st.session_state.get("nav") or DEFAULT_PAGE
+    return page if page in PAGES_MAIN + PAGES_JUDGE else DEFAULT_PAGE
 
 
 def sidebar(run: source.Run) -> None:
+    """Brand, the two navigation groups and the synthetic-data note. The run controls live in the header."""
+    page = current_page()
+    st.session_state.setdefault("nav", page)
+    st.session_state.setdefault("nav_main", page if page in PAGES_MAIN else None)
+    st.session_state.setdefault("nav_judge", page if page in PAGES_JUDGE else None)
+    with st.sidebar:
+        st.markdown('<div class="rq-logo"><div class="mark"><i></i><b></b><s style="top:17px"></s><s style="top:21px"></s>'
+                    '<s style="top:25px"></s></div><div><span class="name">Raqeeb</span>'
+                    '<span class="sub">Solar plant console</span></div></div>', unsafe_allow_html=True)
+        st.markdown('<div class="rq-group">The incident</div>', unsafe_allow_html=True)
+        st.radio("The incident", PAGES_MAIN, key="nav_main", on_change=_nav_main, label_visibility="collapsed",
+                 captions=[HINTS[x] for x in PAGES_MAIN])
+        st.markdown('<div class="rq-group">For judges</div>', unsafe_allow_html=True)
+        st.radio("For judges", PAGES_JUDGE, key="nav_judge", on_change=_nav_judge, label_visibility="collapsed",
+                 captions=[HINTS[x] for x in PAGES_JUDGE])
+        st.markdown('<div class="rq-synthetic"><b>Simulated plant</b>16 inverters, synthetic data. Only the weather is '
+                    'real (NASA POWER, Riyadh 2025).</div>', unsafe_allow_html=True)
+
+
+def run_label(run: source.Run) -> str:
+    if isinstance(run, ReplayRun):
+        return f"Replay: {run.incident.id}"
+    return "Live: rules + local model" if run.log.model else "Live: rules only"
+
+
+def run_panel(run: source.Run) -> None:
+    """The old sidebar Run and Playback settings, in a popover: same widgets, same keys."""
     ids, _ = scenario_choices()
     available, reason = local_status()
-    with st.sidebar:
-        st.header("Run")
+    with st.popover(f"{run_label(run)} · Change", use_container_width=True):
+        st.markdown("**Run the agent**")
         st.radio("Mode", MODES, key="mode_choice", on_change=_mode_chosen,
                  captions=["The agent's rules, no language model", f"{'Available' if available else 'Unavailable'}: "
                            f"{reason}", "Play back a recorded run"])
@@ -390,6 +482,11 @@ def sidebar(run: source.Run) -> None:
         if st.session_state.get("model_choice") not in options:
             st.session_state.model_choice = models[0] if choice == LIVE_LOCAL and models else RULES_ONLY
         if choice != REPLAY:
+            st.markdown("Language model")
+            st.segmented_control("Provider", ["Local LLM"], default="Local LLM", key="provider",
+                                 label_visibility="collapsed")
+            st.caption("Claude, ChatGPT and Gemini: not configured in this deployment (no API key; the console runs "
+                       "fully local).")
             st.selectbox("Model", options, key="model_choice", on_change=_model_chosen,
                          help="Rules only, or one of the models the local server lists at /models. The choice "
                               "changes only the model name the agent's router calls.")
@@ -400,10 +497,10 @@ def sidebar(run: source.Run) -> None:
             replays = replay_choices()
             if replays:
                 st.selectbox("Recorded run", list(replays), key="replay_choice", format_func=replays.get)
-                st.button("Load replay", key="load_replay", on_click=_load_replay, width="stretch")
+                st.button("Load replay", key="load_replay", on_click=_load_replay, type="primary", width="stretch")
             else:
                 st.caption("No recorded runs in this deployment.")
-            st.file_uploader("Or upload a replay file (.json)", type=["json"], key="replay_upload")
+            st.file_uploader("Or upload a replay file (.json, up to 20 MB)", type=["json"], key="replay_upload")
             st.button("Load uploaded file", key="load_upload", on_click=_load_upload, width="stretch",
                       disabled=st.session_state.get("replay_upload") is None)
             if st.session_state.get("load_error"):
@@ -411,50 +508,74 @@ def sidebar(run: source.Run) -> None:
         else:
             blocked = choice == LIVE_LOCAL and not available
             st.selectbox("Scenario (practice sets)", ids, key="scenario_id")
-            st.button("Start live run", key="start_live", on_click=_start_live, type="primary", width="stretch",
-                      disabled=blocked)
-            st.button("Dust storm + 2 random faults", key="inject_storm", on_click=_start_storm, width="stretch",
-                      disabled=blocked)
+            a, b = st.columns(2)
+            a.button("Start live run", key="start_live", on_click=_start_live, type="primary", width="stretch",
+                     disabled=blocked)
+            b.button("Dust storm + 2 random faults", key="inject_storm", on_click=_start_storm, width="stretch",
+                     disabled=blocked)
             if blocked:
                 st.caption(f"Rules + local model is unavailable: {reason}.")
-            st.caption("Faults are planted in the synthetic twin; the agent sees only telemetry.")
-
-        st.header("Playback")
-        st.select_slider("Speed (simulated minutes per tick)", SPEEDS, key="speed")
-        play, step, end = st.columns(3)
-        stopped = run.finished or bool(run.waiting)
-        runner = _runner(run)
-        playing = st.session_state.playing or bool(runner and runner.state().running)
-        play.button("Pause" if playing else "Play", key="play", on_click=_toggle_play,
-                    width="stretch", disabled=stopped)
-        step.button("Step", key="step", on_click=_step, width="stretch", disabled=stopped)
-        end.button("To end", key="to_end", on_click=_to_end, width="stretch", disabled=stopped)
-        if run.waiting:
-            st.warning("Paused: an action needs your decision.")
-        elif run.finished:
-            st.success("Run finished. The answer key can be revealed.")
+            st.caption("Faults are planted in the synthetic plant. The agent sees only the readings.")
+        st.divider()
+        st.select_slider("Playback speed (simulated minutes per tick)", SPEEDS, key="speed")
         if isinstance(run, LiveRun) and run.finished:
             st.download_button("Save recording (replay JSON)", run.recording().to_json(),
                                file_name=f"raqeeb_replay_{run.incident.id}_{run.mode.value}.json",
                                mime="application/json", key="save_recording", width="stretch")
 
 
-# -- header and notification strip ----------------------------------------------------------------
+def playback(run: source.Run) -> None:
+    """Simulated clock, progress through the window, Step / To end / Play."""
+    span = (run.incident.end - run.incident.start).total_seconds() or 1
+    done = min(max((run.now - run.incident.start).total_seconds() / span, 0.0), 1.0)
+    st.markdown(f'<div class="rq-clock"><span>Sim time</span><b>{local(run.now):%H:%M}</b>'
+                f'<div class="rq-bar"><i style="width:{done * 100:.1f}%"></i></div>'
+                f'<span>{local(run.incident.end):%H:%M}</span></div>', unsafe_allow_html=True)
+    stopped = run.finished or bool(run.waiting)
+    runner = _runner(run)
+    playing = st.session_state.playing or bool(runner and runner.state().running)
+    a, b, c = st.columns([1, 1, 1.4])
+    a.button("Step", key="step", on_click=_step, width="stretch", disabled=stopped)
+    b.button("To end", key="to_end", on_click=_to_end, width="stretch", disabled=stopped)
+    c.button("Pause" if playing else "Play", key="play", on_click=_toggle_play, type="primary", width="stretch",
+             disabled=stopped)
+
+
+def _go_approval() -> None:
+    go_to("Summary")
+    st.session_state.jump_approval = True
 
 
 def header(run: source.Run) -> None:
+    """Sticky: incident and page title, the run pill, playback, the approval pill."""
     plant = load_plant()
-    model = run.log.model or "none (rules only)"
-    kind = "Replay" if isinstance(run, ReplayRun) else "Live"
-    st.markdown(CSS, unsafe_allow_html=True)
-    st.markdown(
-        f'<div class="rq-header"><div class="rq-brand">Raqeeb<small>plant recovery console</small></div>'
-        f'<div class="rq-facts"><span><b>Plant</b>{html_text(plant.site.name)} (synthetic)</span>'
-        f'<span><b>Mode</b>{html_text(mode_words(run))}</span>'
-        f'<span><b>Simulated clock</b>{local(run.now):%H:%M} {DISPLAY_TZ}, {local(run.incident.start):%Y-%m-%d}</span>'
-        f'<span><b>Model</b>{html_text(model)}</span></div></div>', unsafe_allow_html=True)
-    st.caption(f"Mode: {md_escape(mode_words(run))}. {kind} run of incident {md_escape(run.incident.id)}: "
-               f"{md_escape(run.log.label)}. {source.FOOTER}")
+    page = current_page()
+    with st.container(key="header"):
+        title, runcol, play, right = st.columns([2.6, 2.2, 3.2, 2.0], vertical_alignment="top")
+        with title:
+            st.markdown(f'<div class="rq-title"><small>Incident {html_text(run.incident.id)}, '
+                        f'{local(run.incident.start):%d %B %Y}. {html_text(plant.site.name)} plant (synthetic)</small>'
+                        f'<span>{html_text(page)}</span></div>', unsafe_allow_html=True)
+            st.caption(f"Mode: {md_escape(mode_words(run))}. Model: {md_escape(run.log.model or 'none (rules only)')}. "
+                       f"{md_escape(run.log.label)}.")
+        with runcol:
+            st.markdown('<div class="rq-eyebrow">Run the agent</div>', unsafe_allow_html=True)
+            run_panel(run)
+        with play:
+            playback(run)
+        with right:
+            waiting = len(run.waiting)
+            if waiting:
+                st.button(f"{waiting} action{'s' if waiting != 1 else ''} need{'s' if waiting == 1 else ''} your approval",
+                          key="strip_decide", on_click=_go_approval, type="primary", width="stretch")
+            elif run.finished:
+                st.markdown(chip("Run finished", "healthy", in_block=True), unsafe_allow_html=True)
+            else:
+                st.markdown(chip("Nothing waiting for you", "no data", in_block=True), unsafe_allow_html=True)
+            if run.waiting:
+                st.caption("Paused: an action needs your decision.")
+            elif run.finished:
+                st.caption("The answer key can be revealed.")
 
 
 def alert_status(run: source.Run) -> tuple[str, str]:
@@ -505,9 +626,6 @@ def notification_strip(run: source.Run) -> None:
     chips.append(chip(text, kind, in_block=True))
     st.markdown(f'<div class="rq-strip {state}"><span class="rq-event">{event}</span>{"".join(chips)}</div>',
                 unsafe_allow_html=True)
-    if waiting:
-        st.button("Needs your decision: open the approval card", key="strip_decide", on_click=_go_to_approval,
-                  type="primary")
 
 
 # -- panels ----------------------------------------------------------------------------
@@ -661,7 +779,7 @@ def recovery_figure(run: source.Run, power: pd.DataFrame, height: int = 380) -> 
     fig = go.Figure()
     for col, name, color, dash in (
         ("actual_kw", "Actual output (meter)", SERIES["actual"], "solid"),
-        ("expected_ref_kw", "Expected from the weather reference", SERIES["reference"], "solid"),
+        ("expected_ref_kw", "Expected from the weather reference", SERIES["reference"], "dash"),
         ("expected_sensor_kw", "Expected from the on-site sun sensor", SERIES["sensor"], "dot"),
     ):
         fig.add_trace(go.Scatter(x=x, y=power[col] / 1000, name=name, mode="lines",
@@ -1163,15 +1281,6 @@ def _scroll_to_approval() -> None:
     </script>""", unsafe_allow_javascript=True)
 
 
-def _switch_to_trace() -> None:
-    """Click the Trace tab after a Summary jump (st.tabs has no Python API for that). Fixed script."""
-    st.html("""<script>
-      for (const tab of document.querySelectorAll('button[role="tab"]')) {
-        if (tab.textContent.trim() === 'Trace') { tab.click(); break; }
-      }
-    </script>""", unsafe_allow_javascript=True)
-
-
 def trace_loader() -> None:
     """Open a bench trajectory file (bench/<set>/trajectories/<scenario>__<agent>.json[.gz]) or any replay."""
     with st.expander("Open a trajectory or replay file", expanded=False):
@@ -1257,20 +1366,10 @@ def _trace_body() -> None:
             if st.session_state.get(summary.FOCUS_KEY) not in (None, k + 1):
                 st.session_state.pop(summary.FOCUS_KEY)  # the clock was moved by hand: the focus is over
         trace_header(trace.header(view.log, view.now, live=isinstance(run, LiveRun)))
-        left, right = st.columns([5, 6], gap="medium")
-        with left:  # the plant as the agent reasons: same map and chart as the Plant tab, compact
-            plant = load_plant()
-            st.plotly_chart(plantmap.map_figure(plantmap.map_view(view, plant), plant, compact=True),
-                            key="trace_map", config={"displayModeBar": False})
-            st.plotly_chart(recovery_figure(view, source.power_lines(view), height=300), key="trace_recovery")
-            st.caption("Map: telemetry and the agent's record at the simulated clock. Chart: metered output against "
-                       "what the weather reference and the on-site sensor say to expect; vertical lines are applied "
-                       "actions.")
-        with right:
-            if summary.FOLLOW_KEY not in st.session_state:
-                st.session_state[summary.FOLLOW_KEY] = True
-            st.toggle("Auto-scroll to latest", key=summary.FOLLOW_KEY)
-            trace_stream(run, view.now)
+        if summary.FOLLOW_KEY not in st.session_state:
+            st.session_state[summary.FOLLOW_KEY] = True
+        st.toggle("Auto-scroll to latest", key=summary.FOLLOW_KEY)
+        trace_stream(run, view.now)
 
 
 def report_markdown(run: source.Run, report: IncidentReport) -> str:
@@ -1320,6 +1419,7 @@ OUTCOME_STATE = {"rejected": "critical", "not recovered": "critical", "never sen
 
 def _jump_to_turn(turn: int) -> None:
     summary.jump(st.session_state, int(turn))
+    go_to("Trace")
 
 
 def _timeline_clicked() -> None:
@@ -1385,7 +1485,13 @@ def summary_tab(run: source.Run, power: pd.DataFrame) -> None:
         first_time_path(run)
         st.caption("No turns yet: press Play the storm, or Step in the sidebar. The summary fills in as the agent works.")
         return
-    if not run.finished and not st.session_state.get("playing") and not (_runner(run) and _runner(run).state().running):
+    if run.waiting:
+        with st.container(key="approval_card"):
+            st.warning("The agent asked for an action that needs your approval. The run is paused until you decide.")
+            approvals(run)
+        if st.session_state.pop("jump_approval", False):
+            _scroll_to_approval()
+    elif not run.finished and not st.session_state.get("playing") and not (_runner(run) and _runner(run).state().running):
         first_time_path(run)
     a, b, c, d, f = st.columns(5)
     a.metric("Agent steps", head.turn if head.turns_total is None else f"{head.turn} of {head.turns_total}")
@@ -1447,16 +1553,16 @@ def summary_tab(run: source.Run, power: pd.DataFrame) -> None:
     else:
         st.caption("No cause named yet. The causes the agent names, how it found them and what it did appear here.")
 
+    if not run.waiting and any(a.gated for a in log.actions_until(now)):
+        approvals(run)
+
     report = log.report_until(now)
     st.markdown("**Shift report**")
     if report is None:
         st.caption("The agent writes the shift report at the end of the run.")
     else:
         report_columns(report)
-    if st.session_state.pop(summary.SWITCH_KEY, False):
-        focus = st.session_state.get(summary.FOCUS_KEY)
-        st.toast(f"Trace tab opened at turn {focus}.")
-        _switch_to_trace()
+    st.session_state.pop(summary.SWITCH_KEY, None)  # the jump already switched the page
 
 
 def _plain_actions(label: str, log, now) -> str:
@@ -1483,32 +1589,45 @@ def _ask_gateway():
     return Gateway(settings)
 
 
-def ask_tab(run: source.Run, power: pd.DataFrame) -> None:
-    st.subheader("Ask Raqeeb")
-    intro("Ask Raqeeb")
-    st.caption("Code looks the facts up in the record (actions and why, model proposals, approvals, what is "
-               "unexplained, the energy shortfall); when the local model is reachable it only rewords those facts, "
-               "shown underneath as \"Based on:\". The chat cannot request, approve or reject an action. Try: "
-               + "; ".join(f"*{e}*" for e in ask.EXAMPLES) + ".")
+SUGGESTIONS = ("what went wrong", "which actions needed approval", "how much energy was lost")
+
+
+def _suggest(text: str) -> None:
+    st.session_state.ask_pending = text
+
+
+def ask_fab(run: source.Run, power: pd.DataFrame) -> None:
+    """Ask Raqeeb as a floating popup, pinned bottom-right on every page (CSS on the keyed container)."""
     history: list[ask.Answer] = st.session_state.setdefault("ask_history", [])
-    question = st.chat_input("Ask about this run", key="ask_input", max_chars=400)
-    if question and question.strip():
-        with run_lock(run):
-            history.append(ask.ask(question.strip(), run.log, run.now, power, gateway=_ask_gateway()))
-    if not history:
-        st.caption("No question yet. Your questions and the answers appear here.")
-    for a in history:
-        with st.chat_message("user"):
-            st.markdown(md_escape(a.question))
-        with st.chat_message("assistant"):
-            st.markdown(md_escape(a.text if a.phrased_by else plain.humanize(a.text)))
-            if a.phrased_by:
-                st.caption(f"Worded by {md_escape(a.phrased_by)} in {a.llm_s:.1f} s from the facts below, nothing else.")
-            else:
-                st.caption("No model reachable" + (f" ({md_escape(a.note)})" if a.note else "") + ": the facts are "
-                           "shown as retrieved.")
-            with st.expander("Based on:", expanded=bool(a.phrased_by)):
-                st.markdown("\n".join(f"- {md_escape(plain.humanize(f))}" for f in a.facts))
+    with st.container(key="ask_fab"):
+        with st.popover("Ask Raqeeb"):
+            st.markdown("**Ask Raqeeb**  \nAnswers from this incident's record only. The chat cannot request, approve or "
+                        "reject an action.")
+            question = st.chat_input("Ask about this incident", key="ask_input", max_chars=400)
+            pending = st.session_state.pop("ask_pending", None)
+            question = (question or pending or "").strip()
+            if question:
+                with run_lock(run):
+                    history.append(ask.ask(question, run.log, run.now, power, gateway=_ask_gateway()))
+            if len(history) < 2:
+                cols = st.columns(len(SUGGESTIONS))
+                for i, text in enumerate(SUGGESTIONS):
+                    cols[i].button(text.capitalize(), key=f"ask_sugg_{i}", on_click=_suggest, args=(text,),
+                                   width="stretch")
+            if not history:
+                st.caption("No question yet. Try one of the suggestions, or type your own.")
+            for a in history:
+                with st.chat_message("user"):
+                    st.markdown(md_escape(a.question))
+                with st.chat_message("assistant"):
+                    st.markdown(md_escape(a.text if a.phrased_by else plain.humanize(a.text)))
+                    if a.phrased_by:
+                        st.caption(f"Worded by {md_escape(a.phrased_by)} in {a.llm_s:.1f} s from the facts below, nothing else.")
+                    else:
+                        st.caption("No model reachable" + (f" ({md_escape(a.note)})" if a.note else "") + ": the facts are "
+                                   "shown as retrieved.")
+                    with st.expander("Based on:", expanded=bool(a.phrased_by)):
+                        st.markdown("\n".join(f"- {md_escape(plain.humanize(f))}" for f in a.facts))
 
 
 def report_tab(run: source.Run) -> None:
@@ -1632,6 +1751,7 @@ def main() -> None:
         st.session_state.mode_choice = REPLAY if isinstance(st.session_state.run, ReplayRun) else LIVE_RULES
     run: source.Run = st.session_state.run
 
+    st.markdown(CSS, unsafe_allow_html=True)
     with run_lock(run):  # a background runner (live Trace) polls under the same lock
         sidebar(run)
         header(run)
@@ -1672,48 +1792,36 @@ def alerts_banner(run: source.Run) -> None:
 def _page(run: source.Run) -> None:
     data = source.tables(run)
     power = lines(run)
+    page = current_page()
     notification_strip(run)
     alerts_banner(run)
-    if run.waiting:
-        with st.container(key="approval_card"):
-            st.warning("The agent asked for an action that needs your approval. The run is paused until you decide.")
-            approvals(run)
-        if st.session_state.pop("jump_approval", False):
-            _scroll_to_approval()
-    headline(run, power, data)
-
-    summary_page, trace_page, plant_page, agent, report, key, results, ask_page = st.tabs(
-        ["Summary", "Trace", "Plant", "Agent", "Report", "Answer key", "Results", "Ask Raqeeb"])
-    with trace_page:
-        trace_tab(run, power)
-    with summary_page:
+    if page == "Summary":
         summary_tab(run, power)
-    with plant_page:
+    elif page == "Trace":
+        trace_tab(run, power)
+    elif page == "Plant":
+        st.subheader("Plant")
         intro("Plant")
+        headline(run, power, data)
         plant_map(run)
-        alarm_feed(data)
         recovery_chart(run, power)
+        alarm_feed(data)
         notes_panel(run)
-    with agent:
+    elif page == "Agent":
+        st.subheader("Agent")
         intro("Agent")
-        left, right = st.columns([3, 2])
-        with left:
-            agent_timeline(run)
-        with right:
-            if not run.waiting:
-                approvals(run)
+        agent_timeline(run)
         proposals_panel(run)
         actions_panel(run)
         llm_panel(run)
-    with report:
+    elif page == "Report":
         report_tab(run)
-    with key:
+    elif page == "Answer key":
         answer_key_tab(run)
-    with results:
+    elif page == "Results":
         results_tab()
-    with ask_page:
-        ask_tab(run, power)
     footer()
+    ask_fab(run, power)
 
 
 main()
