@@ -180,7 +180,7 @@ def test_trajectory_files_plain_gzip_and_folders(tmp_path):
     uploaded = source.start_replay(gzip.compress(FIXTURE.read_bytes()))  # an upload hands over bytes
     assert plain.log == zipped.log == uploaded.log
 
-    at = AppTest.from_file(str(APP), default_timeout=300)
+    at = _trace(AppTest.from_file(str(APP), default_timeout=300))
     at.run()
     at.text_input(key="trace_path").input(str(folder)).run()
     at.selectbox(key="trace_pick").set_value(str(files[0])).run()
@@ -191,7 +191,7 @@ def test_trajectory_files_plain_gzip_and_folders(tmp_path):
 def test_a_bad_file_gives_a_message_not_an_exception(tmp_path):
     bad = tmp_path / "not_a_run.json"
     bad.write_text('{"format": "something-else"}', encoding="utf-8")
-    at = AppTest.from_file(str(APP), default_timeout=300)
+    at = _trace(AppTest.from_file(str(APP), default_timeout=300))
     at.run()
     before = at.session_state.run
     at.text_input(key="trace_path").input(str(bad)).run()
@@ -319,7 +319,7 @@ def test_runner_pace_and_pause():
 
 
 def test_a_new_run_stops_the_old_runner():
-    at = AppTest.from_file(str(APP), default_timeout=300)
+    at = _trace(AppTest.from_file(str(APP), default_timeout=300))
     at.run()
     at.radio(key="mode_choice").set_value(live.MODE_LABEL[live.Mode.RULES]).run()
     at.selectbox(key="scenario_id").set_value("scn_0002").run()
@@ -353,7 +353,7 @@ def test_showcase_replays_are_the_console_default():
 
 
 def test_showcase_replays_render_in_the_trace_tab():
-    at = AppTest.from_file(str(APP), default_timeout=300)
+    at = _trace(AppTest.from_file(str(APP), default_timeout=300))
     at.run()  # the console opens on the default showcase replay
     assert at.session_state.run.log.incident.id == "fin_0029"
     at.radio(key="nav_judge").set_value("Answer key").run()

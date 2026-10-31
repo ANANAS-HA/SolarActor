@@ -116,5 +116,6 @@ def test_summary_tab_in_a_live_run(tmp_path):
     at.button(key="step").click().run()
     run = at.session_state.run
     assert len(run.log.polls) >= 2 and "Incident summary" in _text(at) and not at.exception
+    at.radio(key="nav_main").set_value("Trace").run()
     assert at.select_slider(key=summary.CLOCK_KEY)  # the clock is offered while a live run is paused
     run.close()

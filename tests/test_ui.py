@@ -331,7 +331,7 @@ def test_alarm_text_is_shown_as_quoted_data(monkeypatch):
     at.session_state.mode_choice = "Replay"
     at.run()
     assert not at.exception
-    for page in ("Summary", "Trace", "Plant", "Agent"):
+    for page in ("Summary", "Trace", "Agent", "Plant"):
         _go(at, page)
         assert HOSTILE not in _page(at) and "Ignore rules" not in _page(at), page  # never rendered as markdown
     assert any(HOSTILE in m for m in _table(at, "Message (quoted)")["Message (quoted)"])

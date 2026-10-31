@@ -559,7 +559,7 @@ def header(run: source.Run) -> None:
                         f'{local(run.incident.start):%d %B %Y}. {html_text(plant.site.name)} plant (synthetic)</small>'
                         f'<span>{html_text(page)}</span></div>', unsafe_allow_html=True)
             st.caption(f"Mode: {md_escape(mode_words(run))}; model {md_escape(run.log.model or 'none')}. "
-                       f"{md_escape(run.log.label[:1].upper() + run.log.label[1:])}.")
+                       f"Record: {md_escape(run.log.label)}.")
         with runcol:
             st.markdown('<div class="rq-eyebrow">Run the agent</div>', unsafe_allow_html=True)
             run_panel(run)
@@ -1603,8 +1603,8 @@ def ask_fab(run: source.Run, power: pd.DataFrame) -> None:
     history: list[ask.Answer] = st.session_state.setdefault("ask_history", [])
     with st.container(key="ask_fab"):
         with st.popover("Ask Raqeeb"):
-            st.markdown("**Ask Raqeeb**  \nAnswers from this incident's record only. The chat cannot request, approve or "
-                        "reject an action.")
+            st.markdown("**Ask Raqeeb**  \nAnswers from this incident's record only; the facts used are listed under "
+                        "\"Based on:\". The chat cannot request, approve or reject an action.")
             question = st.chat_input("Ask about this incident", key="ask_input", max_chars=400)
             pending = st.session_state.pop("ask_pending", None)
             question = (question or pending or "").strip()
