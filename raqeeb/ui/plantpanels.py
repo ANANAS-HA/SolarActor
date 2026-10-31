@@ -360,7 +360,7 @@ _KV: list[tuple[re.Pattern, str, str | None]] = [  # tile line -> (key, value); 
     (re.compile(r"^(\d+%) of expected \(on-site sensor\)$"), "Of expected, sun sensor", None),
     (re.compile(r"^export limit (.+)$"), "Export limit", None),
     (re.compile(r"^no export limit$"), "Export limit", "None"),
-    (re.compile(r"^grid curtailment$"), "Grid operator", "curtailing (normal operation)"),
+    (re.compile(r"^grid curtailment$"), "Grid operator", "curtailing"),  # normal operation, not a fault
     (re.compile(r"^no data$"), "Reading", "none at this step"),
     (re.compile(r"^last reading (.+)$"), "Last reading", None),
     (re.compile(r"^no reading yet$"), "Last reading", "none yet"),

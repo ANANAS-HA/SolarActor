@@ -76,7 +76,7 @@ NODE_WORDS = {"start": "Started watching", "triage": "Looked at the new alarms",
               "rank": "Weighed the causes", "consult": "Asked the model", "plan": "Planned the fix",
               "safety": "Safety gate", "execute": "Requested an action", "verify": "Checked the result",
               "report": "Wrote the report", "approval": "Operator decision"}
-PAGES_MAIN = ["Summary", "Trace", "Plant", "Agent", "Report"]
+PAGES_MAIN = ["Plant", "Summary", "Trace", "Agent", "Report"]  # Plant first in the sidebar; the console still opens on Summary
 PAGES_JUDGE = ["Answer key", "Results"]
 HINTS = {"Summary": "What happened", "Trace": "How it was solved", "Plant": "Map and inverters",
          "Agent": "What Raqeeb did", "Report": "Shift report", "Answer key": "The faults we injected",
@@ -125,6 +125,8 @@ CSS = """
 [data-testid="stSidebar"] [data-testid="stRadio"] [data-testid="stCaptionContainer"] p { font-size: 13px !important; font-weight: 400; }
 .rq-group { font-size: 12px; font-weight: 700; color: var(--rq-muted); text-transform: uppercase; letter-spacing: 0.06em;
             padding: 6px 10px 2px; }
+.rq-hackathon { font-size: 12px; font-weight: 700; color: var(--rq-accent); text-transform: uppercase; letter-spacing: 0.08em;
+            padding: 2px 8px 8px; border-bottom: 1px solid var(--rq-line); margin-bottom: 10px; }
 .rq-logo { display: flex; align-items: center; gap: 10px; padding: 4px 8px 10px; }
 .rq-logo .mark { width: 32px; height: 32px; border-radius: 8px; background: var(--rq-navy); position: relative; overflow: hidden; flex: none; }
 .rq-logo .mark i { position: absolute; left: 8px; top: 7px; width: 16px; height: 16px; border-radius: 50%%; background: var(--rq-amber); }
@@ -533,6 +535,7 @@ def sidebar(run: source.Run) -> None:
     st.session_state.setdefault("nav_main", page if page in PAGES_MAIN else None)
     st.session_state.setdefault("nav_judge", page if page in PAGES_JUDGE else None)
     with st.sidebar:
+        st.markdown('<div class="rq-hackathon">HUMAIN AI Builders Hackathon</div>', unsafe_allow_html=True)
         st.markdown('<div class="rq-logo"><div class="mark"><i></i><b></b><s style="top:17px"></s><s style="top:21px"></s>'
                     '<s style="top:25px"></s></div><div><span class="name">Raqeeb</span>'
                     '<span class="sub">Solar plant console</span></div></div>', unsafe_allow_html=True)
@@ -1932,8 +1935,8 @@ def _page(run: source.Run) -> None:
         plant = load_plant()
         stat_row(run, power, data)
         sun_wind_panel(run, plant)
-        output_panel(run, power)
         map_panel(run, plant)
+        output_panel(run, power)
         alarm_feed(data)
         notes_panel(run)
     elif page == "Agent":
