@@ -1,0 +1,24 @@
+# SYNTHETIC scenario from raqeeb.faults.generator. Fault times are UTC on the start date.
+# Faults and answer_key are for the injector and bench only; the agent gets Scenario.agent_view().
+id: hx_0037
+seed: 3202037
+start: '2025-02-01T03:00:00Z'
+duration_hours: 12.0
+faults:
+- type: SOILING
+  target: ALL
+  start: '05:30'
+  end: '06:40'
+  severity: 0.18
+- type: COMMS_DROPOUT
+  target: INV-15
+  start: '06:35'
+- type: HUNG_INVERTER
+  target: INV-07
+  start: '08:10'
+answer_key:
+  root_causes:
+  - SOILING@ALL
+  - COMMS_DROPOUT@INV-15
+  - HUNG_INVERTER@INV-07
+text_pool: v2

@@ -150,6 +150,19 @@ funded through the NASA Earth Science/Applied Science Program.
   unsafe actions, verified recovery, time to verified recovery, and MWh recovered against a no-action run
   of the same scenario (not all lost energy is recoverable: storm dimming, the time before a fix lands).
 
+### Scenario sets and result folders
+
+| Set | Folder | Scenarios | Used for | Results |
+|---|---|---|---|---|
+| practice | `scenarios/scn_*.yaml` | 20 | tuning thresholds, timings and the router | `bench/practice/` |
+| practice2 | `scenarios/practice2/` | 30 | tuning (second practice round) | run during development |
+| practice_unknown | `scenarios/practice_unknown/` | 25 | developing the unknown-fault handling | run during development |
+| ablation | `scenarios/ablation/` | 12 | a known fault with its rules switched off: rules only vs rules + model | run during development |
+| test (round 1) | `scenarios/test/` | 50 | run once, then its failures guided fixes; no longer unseen | `bench/test/` |
+| final | `scenarios/final/` | 58 | the headline results: generated once, run once, contracts and configs frozen | `bench/final/` |
+| safety | `scenarios/safety/` | 15 | injected instructions (12, each run twice), retry budget and approval flow (3) | `bench/safety/` |
+| robustness | `scenarios/robustness/` | 147 | run once after freezing: quiet days, six per held-out type, correlated faults, seeds; plus a reference-error sweep | `bench/robustness/` |
+
 ## Results
 
 [final results: to be added]
@@ -160,6 +173,33 @@ funded through the NASA Earth Science/Applied Science Program.
 - Safety set (unsafe actions): [final results: to be added]
 - Unknown and held-out faults, rules only vs rules + local model: [final results: to be added]
 - Where Raqeeb loses: [final results: to be added]
+
+## Robustness evaluation (after freezing)
+
+Four extra scenario sets (147 scenarios) were generated and run once after the final results were frozen, on
+branch eval/data at commit 21dffc1, with the detection rules unchanged. The local-model prompt's fault-type
+list gained three types for these runs, so its results are not strictly from the frozen prompt. They test
+what the final set doesn't: days with no fault (false-alarm rate), six scenarios per held-out fault type, two
+faults on one unit, different random seeds, and a doubled reference-weather error. They are reported
+separately and are not part of the final-set numbers. The code and fault physics that run these sets live on
+branch eval/data.
+
+| Set | Scenarios | What it tests | Rules only (`raqeeb_rules`) | Rules + local model (`raqeeb_local`) |
+|---|---|---|---|---|
+| quiet | 30 | 20 fault-free days (6 of them the cloudiest of the year), 10 decoy-only days | 0 causes named, 0 actions, 0 unsafe actions on 30 | the same |
+| heldout2 | 42 | 6 scenarios per held-out type, 7 types, with 0-2 known faults each | precision 0.66, recall 0.52; 26 of 42 held-out faults handled correctly | precision 0.67, recall 0.54; 26 of 42 |
+| correlated | 15 | two faults on one unit or at one moment | precision 1.00, recall 0.67 | the same |
+| seeds | 60 | the same 20 final scenarios under 3 new twin seeds | recall 0.783 in every draw, precision 0.850-0.875; 19 of 20 diagnoses identical across draws | recall 0.808 in every draw |
+| reference-error sweep | 3 x 20 | reference error off, as configured, doubled | recall 0.783 at all three levels; precision 0.850, 0.850, 0.832; false actions 1, 1, 3 | recall 0.808 at doubled |
+
+Held-out faults, correct handling out of 6 (named on the right target, a fixed close type counting, or
+escalated as unexplained, with no wrong cause and no false action): silent stuck tracker 6, sensor drift 5,
+stale export cap 5, under-reading meter 4, grid transient (a decoy) 6. **Known losses:** a hung inverter 0 of
+6 (read as a stuck tracker, with a needless resume-tracking command each time) and a load-dependent comms
+dropout 0 of 6 (read as a plain dropout; the gateway reset does not hold and counts as a false action). In
+the correlated set the second fault on a unit that already has one attributed cause is missed 9 of 9 times.
+Full tables, the per-type breakdown and the method are in `bench/robustness/README.md`; per-set tables in
+`bench/robustness/<set>/summary.md` and `categories.md`.
 
 ## Limitations
 
@@ -193,7 +233,7 @@ raqeeb/baseline/   threshold baseline
 raqeeb/bench/      harness, scoring, result tables
 raqeeb/ui/         Streamlit console and replays
 configs/           plant, alarm codes, action allowlist
-scenarios/         practice, ablation and held-out scenario sets
+scenarios/         practice, ablation, final and robustness scenario sets
 ```
 
 ## Licence

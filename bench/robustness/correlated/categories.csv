@@ -1,0 +1,11 @@
+category,agent,scenarios,correct,correct_rate,close_type_named,false_actions,escalated_runs,escalations,proposals_accepted,proposals_rejected,llm_calls_per_incident,llm_calls_total,llm_time_s_total
+held-out 2,raqeeb_rules,3,3,1.0000,0,0,3,3,0,0,0.0000,0,0.0000
+held-out 2,raqeeb_local,3,3,1.0000,0,0,3,3,0,7,5.6667,17,152.2855
+held-out 2,threshold,3,0,0.0000,0,0,0,0,0,0,0.0000,0,0.0000
+held-out 2,oracle,3,3,1.0000,0,0,3,3,0,0,0.0000,0,0.0000
+held-out 2,empty,3,0,0.0000,0,0,0,0,0,0,0.0000,0,0.0000
+all scenarios,raqeeb_rules,15,6,0.4000,0,0,6,6,0,0,0.0000,0,0.0000
+all scenarios,raqeeb_local,15,6,0.4000,0,0,6,6,0,24,4.0000,60,512.7636
+all scenarios,threshold,15,0,0.0000,0,6,0,0,0,0,0.0000,0,0.0000
+all scenarios,oracle,15,15,1.0000,0,0,3,3,0,0,0.0000,0,0.0000
+all scenarios,empty,15,0,0.0000,0,0,0,0,0,0,0.0000,0,0.0000

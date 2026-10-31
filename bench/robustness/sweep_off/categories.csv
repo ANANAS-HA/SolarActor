@@ -1,0 +1,8 @@
+category,agent,scenarios,correct,correct_rate,close_type_named,false_actions,escalated_runs,escalations,proposals_accepted,proposals_rejected,llm_calls_per_incident,llm_calls_total,llm_time_s_total
+numbers decide,raqeeb_rules,1,0,0.0000,0,0,1,2,0,0,0.0000,0,0.0000
+notes decide,raqeeb_rules,3,0,0.0000,0,0,3,6,0,0,0.0000,0,0.0000
+grid notice,raqeeb_rules,2,0,0.0000,0,0,2,2,0,0,0.0000,0,0.0000
+grid notice (English),raqeeb_rules,1,0,0.0000,0,0,1,1,0,0,0.0000,0,0.0000
+grid notice (Arabic),raqeeb_rules,1,0,0.0000,0,0,1,1,0,0,0.0000,0,0.0000
+held-out,raqeeb_rules,4,3,0.7500,3,1,1,1,0,0,0.0000,0,0.0000
+all scenarios,raqeeb_rules,20,12,0.6000,0,1,8,12,0,0,0.0000,0,0.0000

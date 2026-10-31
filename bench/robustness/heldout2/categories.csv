@@ -1,0 +1,21 @@
+category,agent,scenarios,correct,correct_rate,close_type_named,false_actions,escalated_runs,escalations,proposals_accepted,proposals_rejected,llm_calls_per_incident,llm_calls_total,llm_time_s_total
+held-out,raqeeb_rules,24,11,0.4583,15,13,10,18,0,0,0.0000,0,0.0000
+held-out,raqeeb_local,24,11,0.4583,15,13,9,16,1,19,2.7500,66,610.7770
+held-out,threshold,24,0,0.0000,6,91,0,0,0,0,0.0000,0,0.0000
+held-out,oracle,24,24,1.0000,0,0,0,0,0,0,0.0000,0,0.0000
+held-out,empty,24,0,0.0000,0,0,0,0,0,0,0.0000,0,0.0000
+held-out 2,raqeeb_rules,12,9,0.7500,0,0,9,10,0,0,0.0000,0,0.0000
+held-out 2,raqeeb_local,12,9,0.7500,0,0,9,10,0,17,4.9167,59,327.4826
+held-out 2,threshold,12,0,0.0000,0,4,0,0,0,0,0.0000,0,0.0000
+held-out 2,oracle,12,12,1.0000,0,0,12,12,0,0,0.0000,0,0.0000
+held-out 2,empty,12,0,0.0000,0,0,0,0,0,0,0.0000,0,0.0000
+grid transient,raqeeb_rules,6,6,1.0000,0,0,3,3,0,0,0.0000,0,0.0000
+grid transient,raqeeb_local,6,6,1.0000,0,0,3,3,0,5,2.8333,17,141.8315
+grid transient,threshold,6,5,0.8333,0,0,0,0,0,0,0.0000,0,0.0000
+grid transient,oracle,6,6,1.0000,0,0,0,0,0,0,0.0000,0,0.0000
+grid transient,empty,6,6,1.0000,0,0,0,0,0,0,0.0000,0,0.0000
+all scenarios,raqeeb_rules,42,6,0.1429,0,13,22,31,0,0,0.0000,0,0.0000
+all scenarios,raqeeb_local,42,6,0.1429,0,13,21,29,1,41,3.3810,142,1080.0911
+all scenarios,threshold,42,3,0.0714,0,95,0,0,0,0,0.0000,0,0.0000
+all scenarios,oracle,42,42,1.0000,0,0,12,12,0,0,0.0000,0,0.0000
+all scenarios,empty,42,0,0.0000,0,0,0,0,0,0,0.0000,0,0.0000

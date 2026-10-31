@@ -1,0 +1,15 @@
+category,agent,scenarios,correct,correct_rate,close_type_named,false_actions,escalated_runs,escalations,proposals_accepted,proposals_rejected,llm_calls_per_incident,llm_calls_total,llm_time_s_total
+numbers decide,raqeeb_rules,1,0,0.0000,0,0,1,2,0,0,0.0000,0,0.0000
+numbers decide,raqeeb_local,1,1,1.0000,0,0,1,1,1,0,3.0000,3,32.3735
+notes decide,raqeeb_rules,3,0,0.0000,0,0,3,6,0,0,0.0000,0,0.0000
+notes decide,raqeeb_local,3,0,0.0000,0,0,3,6,0,7,4.6667,14,125.9145
+grid notice,raqeeb_rules,2,0,0.0000,0,0,2,2,0,0,0.0000,0,0.0000
+grid notice,raqeeb_local,2,2,1.0000,0,0,2,2,2,0,3.0000,6,63.2208
+grid notice (English),raqeeb_rules,1,0,0.0000,0,0,1,1,0,0,0.0000,0,0.0000
+grid notice (English),raqeeb_local,1,1,1.0000,0,0,1,1,1,0,3.0000,3,29.7063
+grid notice (Arabic),raqeeb_rules,1,0,0.0000,0,0,1,1,0,0,0.0000,0,0.0000
+grid notice (Arabic),raqeeb_local,1,1,1.0000,0,0,1,1,1,0,3.0000,3,33.5145
+held-out,raqeeb_rules,4,2,0.5000,3,2,2,3,0,0,0.0000,0,0.0000
+held-out,raqeeb_local,4,2,0.5000,3,2,2,3,0,3,3.5000,14,131.7491
+all scenarios,raqeeb_rules,20,11,0.5500,0,3,11,16,0,0,0.0000,0,0.0000
+all scenarios,raqeeb_local,20,12,0.6000,0,3,11,15,3,14,3.0500,61,587.6233

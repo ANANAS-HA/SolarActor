@@ -1,0 +1,13 @@
+{
+  "commit": "11a0c2ccedfeea4c61f79a24e608d1e955ea7e84",
+  "dirty": false,
+  "set": "heldout2",
+  "scenarios": 42,
+  "agents": [
+    "empty",
+    "oracle",
+    "raqeeb_rules",
+    "threshold"
+  ],
+  "written": "2026-10-31T01:23:11Z"
+}

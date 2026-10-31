@@ -1,0 +1,36 @@
+category,agent,scenarios,correct,correct_rate,close_type_named,false_actions,escalated_runs,escalations,proposals_accepted,proposals_rejected,llm_calls_per_incident,llm_calls_total,llm_time_s_total
+grid notice,raqeeb_rules,2,0,0.0000,0,0,2,2,0,0,0.0000,0,0.0000
+grid notice,raqeeb_local,2,2,1.0000,0,0,2,2,2,0,3.0000,6,32.3817
+grid notice,threshold,2,0,0.0000,0,0,0,0,0,0,0.0000,0,0.0000
+grid notice,oracle,2,0,0.0000,0,0,0,0,0,0,0.0000,0,0.0000
+grid notice,empty,2,0,0.0000,0,0,0,0,0,0,0.0000,0,0.0000
+grid notice (English),raqeeb_rules,1,0,0.0000,0,0,1,1,0,0,0.0000,0,0.0000
+grid notice (English),raqeeb_local,1,1,1.0000,0,0,1,1,1,0,3.0000,3,17.3505
+grid notice (English),threshold,1,0,0.0000,0,0,0,0,0,0,0.0000,0,0.0000
+grid notice (English),oracle,1,0,0.0000,0,0,0,0,0,0,0.0000,0,0.0000
+grid notice (English),empty,1,0,0.0000,0,0,0,0,0,0,0.0000,0,0.0000
+grid notice (Arabic),raqeeb_rules,1,0,0.0000,0,0,1,1,0,0,0.0000,0,0.0000
+grid notice (Arabic),raqeeb_local,1,1,1.0000,0,0,1,1,1,0,3.0000,3,15.0312
+grid notice (Arabic),threshold,1,0,0.0000,0,0,0,0,0,0,0.0000,0,0.0000
+grid notice (Arabic),oracle,1,0,0.0000,0,0,0,0,0,0,0.0000,0,0.0000
+grid notice (Arabic),empty,1,0,0.0000,0,0,0,0,0,0,0.0000,0,0.0000
+grid transient,raqeeb_rules,2,2,1.0000,0,0,0,0,0,0,0.0000,0,0.0000
+grid transient,raqeeb_local,2,2,1.0000,0,0,0,0,0,0,2.0000,4,23.2536
+grid transient,threshold,2,2,1.0000,0,0,0,0,0,0,0.0000,0,0.0000
+grid transient,oracle,2,2,1.0000,0,0,0,0,0,0,0.0000,0,0.0000
+grid transient,empty,2,2,1.0000,0,0,0,0,0,0,0.0000,0,0.0000
+quiet day,raqeeb_rules,20,20,1.0000,0,0,0,0,0,0,0.0000,0,0.0000
+quiet day,raqeeb_local,20,20,1.0000,0,0,0,0,0,0,2.0000,40,196.9249
+quiet day,threshold,20,20,1.0000,0,0,0,0,0,0,0.0000,0,0.0000
+quiet day,oracle,20,20,1.0000,0,0,0,0,0,0,0.0000,0,0.0000
+quiet day,empty,20,20,1.0000,0,0,0,0,0,0,0.0000,0,0.0000
+decoys only,raqeeb_rules,6,6,1.0000,0,0,0,0,0,0,0.0000,0,0.0000
+decoys only,raqeeb_local,6,6,1.0000,0,0,0,0,0,0,2.0000,12,67.0945
+decoys only,threshold,6,6,1.0000,0,0,0,0,0,0,0.0000,0,0.0000
+decoys only,oracle,6,6,1.0000,0,0,0,0,0,0,0.0000,0,0.0000
+decoys only,empty,6,6,1.0000,0,0,0,0,0,0,0.0000,0,0.0000
+all scenarios,raqeeb_rules,30,30,1.0000,0,0,2,2,0,0,0.0000,0,0.0000
+all scenarios,raqeeb_local,30,30,1.0000,0,0,2,2,2,0,2.0667,62,319.6547
+all scenarios,threshold,30,30,1.0000,0,0,0,0,0,0,0.0000,0,0.0000
+all scenarios,oracle,30,30,1.0000,0,0,0,0,0,0,0.0000,0,0.0000
+all scenarios,empty,30,30,1.0000,0,0,0,0,0,0,0.0000,0,0.0000

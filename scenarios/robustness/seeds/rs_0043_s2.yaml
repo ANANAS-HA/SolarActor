@@ -1,0 +1,24 @@
+# SYNTHETIC scenario from raqeeb.faults.generator. Fault times are UTC on the start date.
+# Faults and answer_key are for the injector and bench only; the agent gets Scenario.agent_view().
+id: rs_0043_s2
+seed: 3404432
+start: '2025-06-06T03:00:00Z'
+duration_hours: 12.0
+faults:
+- type: FIRMWARE_ALARM
+  target: INV-04
+  start: '04:20'
+  severity: 0.23
+  variant: quiet
+- type: UNAUTHORIZED_CMD
+  target: INV-13
+  start: '04:50'
+- type: INVERTER_DERATE
+  target: INV-14
+  start: '05:50'
+  severity: 0.34
+answer_key:
+  root_causes:
+  - FIRMWARE_ALARM@INV-04
+  - UNAUTHORIZED_CMD@INV-13
+  - INVERTER_DERATE@INV-14

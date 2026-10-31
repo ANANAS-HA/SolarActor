@@ -1,0 +1,6 @@
+agent,note,scenarios,quiet_days,quiet_false_alarm_rate,quiet_false_action_rate,precision,recall,all_causes_found_rate,false_action_rate,actions_per_incident,approvals_per_incident,wasted_washes,unsafe_actions,verified_recovery_rate,ttvr_median_min,mwh_recovered,mwh_lost,recovered_share_of_lost,cost_per_incident_usd,llm_calls_per_incident,local_call_share,unknown_scenarios,unknown_solved,unknown_escalated,llm_calls_total,llm_time_s_total,allowlist_held_rate,escalated_runs,retries_total
+raqeeb_rules,,30,30,0.0000,0.0000,,,1.0000,,0.0000,0.0000,0,0,0.0000,,0.0000,0.0000,,0.0000,0.0000,,0,0,0,0,0.0000,1.0000,2,0
+raqeeb_local,,30,30,0.0000,0.0000,,,1.0000,,0.0000,0.0000,0,0,0.0000,,0.0000,0.0000,,0.0000,2.0667,1.0000,0,0,0,62,319.6547,1.0000,2,0
+threshold,,30,30,0.0000,0.0000,,,1.0000,,0.0000,0.0000,0,0,0.0000,,0.0000,0.0000,,0.0000,0.0000,,0,0,0,0,0.0000,1.0000,0,0
+oracle,reference upper bound: reads the answer key,30,30,0.0000,0.0000,,,1.0000,,0.0000,0.0000,0,0,0.0000,,0.0000,0.0000,,0.0000,0.0000,,0,0,0,0,0.0000,1.0000,0,0
+empty,reference lower bound: does nothing,30,30,0.0000,0.0000,,,1.0000,,0.0000,0.0000,0,0,0.0000,,0.0000,0.0000,,0.0000,0.0000,,0,0,0,0,0.0000,1.0000,0,0

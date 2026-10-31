@@ -1,0 +1,4 @@
+ts,step,actor,payload
+2025-01-13 04:45:00+00:00,request,agent:oracle,"{'id': 'oracle-1', 'action': 'create_cleaning_work_order', 'target': 'ALL', 'params': {}, 'needs_approval': False, 'rationale': 'answer key: SOILING@ALL'}"
+2025-01-13 04:45:00+00:00,execute,system,"{'id': 'oracle-1', 'status': 'APPLIED', 'note': ''}"
+2025-01-13 06:00:00+00:00,verify,agent:oracle,"{'id': 'oracle-1', 'recovered': True, 'note': 'oracle'}"
