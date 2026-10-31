@@ -10,3 +10,19 @@ maxUploadSize = 20  # MB; a 12-hour replay file is about 1 MB
 
 [client]
 toolbarMode = "minimal"
+
+# Light "control room" look (docs/CONSOLE_DESIGN.md): pale cool page, white surfaces, deep navy text,
+# one accent blue for links and primary buttons. Semantic colours live in raqeeb/ui/app.py (SEMANTIC)
+# and always carry a word beside them.
+[theme]
+base = "light"
+primaryColor = "#1d5fb4"
+backgroundColor = "#f2f5f9"
+secondaryBackgroundColor = "#ffffff"
+textColor = "#13293f"
+linkColor = "#1d5fb4"
+font = "sans serif"
+headingFont = "sans serif"
+baseRadius = "0.3rem"
+borderColor = "#d6dee8"
+showWidgetBorder = true

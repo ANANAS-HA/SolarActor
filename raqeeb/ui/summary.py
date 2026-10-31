@@ -35,8 +35,9 @@ class Moment:
     ts: datetime
     turn: int  # 1-based turn whose card shows it
     kind: str  # one of KINDS
-    text: str  # what happened, one line (free text escaped by the page)
+    text: str  # what happened, one line, with the record's identifiers (free text escaped by the page)
     outcome: str = ""  # accepted / rejected / applied / recovered ... (for the colour)
+    said: str = ""  # the same moment as a plain-language sentence (ui/plain.py); the page shows this one
 
 
 @dataclass
@@ -66,37 +67,58 @@ def _turn_at(cards: list[trace.TurnCard], ts: datetime) -> int:
 
 
 def key_moments(log: RunLog, now: datetime) -> list[Moment]:
+    from raqeeb.ui import plain
+
     cards = trace.turn_cards(log, now)
+    actions = log.actions_until(now)
+    by_id = {a.request.id: a for a in actions}
+    proposals = log.proposals_until(now)
     out: list[Moment] = []
     seen_symptom, named = False, set()
     for card in cards:
         if card.symptoms and not seen_symptom:
             seen_symptom = True
             more = f" (+{len(card.symptoms) - 1} more)" if len(card.symptoms) > 1 else ""
-            out.append(Moment(card.ts, card.index, SYMPTOM, card.symptoms[0] + more))
+            first = plain.symptom_from_id(card.symptom_ids[0]) if card.symptom_ids else card.symptoms[0]
+            out.append(Moment(card.ts, card.index, SYMPTOM, card.symptoms[0] + more,
+                              said=f"First sign: {first}" + (f" and {len(card.symptoms) - 1} more" if more else "") + "."))
         for c in card.candidates or []:
             if c.selected and c.label not in named:
                 named.add(c.label)
-                out.append(Moment(card.ts, card.index, CAUSE, f"{c.label} (score {c.score:.2f})", "confirmed"))
+                out.append(Moment(card.ts, card.index, CAUSE, f"{c.label} (score {c.score:.2f})", "confirmed",
+                                  said=plain.found(c.label, proposals)))
         for p in card.proposals:
             text = f"{p.label}: {p.decision}" + (f" ({p.reason})" if p.reason else "")
-            out.append(Moment(card.ts, card.index, PROPOSAL, text, p.decision))
+            out.append(Moment(card.ts, card.index, PROPOSAL, text, p.decision,
+                              said=plain.proposal(p.label, p.decision, p.reason, len(p.checks))))
         for g in card.gate:
-            out.append(Moment(card.ts, card.index, ACTION, f"{g.action} on {g.target}: {g.gate}", g.decision))
+            if g.entry is None:
+                said = f"Held back by the safety gate: {plain.action_text(g.action, g.target)} ({g.gate.removeprefix('held back: ')})."
+            elif g.entry.gated:
+                said = plain.approval_needed(g.action, g.target, g.entry.request.params)
+            else:
+                said = plain.acted(g.action, g.target, g.entry.request.params)
+            out.append(Moment(card.ts, card.index, ACTION, f"{g.action} on {g.target}: {g.gate}", g.decision, said=said))
         for v in card.verifications:
             word = "recovered" if v.recovered else "not recovered"
+            a = by_id.get(v.action_id)
+            said = (plain.verified(a.request.action, a.request.target, v.recovered, v.before_kw, v.after_kw, v.expected_kw)
+                    if a else f"Verified {v.action_id}: {word} ({plain.power_change(v.before_kw, v.after_kw, v.expected_kw)}).")
             out.append(Moment(card.ts, card.index, VERIFICATION,
                               f"{v.action_id}: {word} ({v.before_kw:.0f} → {v.after_kw:.0f} kW, "
-                              f"expected {v.expected_kw:.0f})", word))
+                              f"expected {v.expected_kw:.0f})", word, said=said))
         for e in card.escalations:
-            out.append(Moment(card.ts, card.index, ESCALATION, f"{e.subject}: {e.reason}", "escalated"))
-    for a in log.actions_until(now):
+            out.append(Moment(card.ts, card.index, ESCALATION, f"{e.subject}: {e.reason}", "escalated",
+                              said=plain.escalated(e.subject, e.devices, e.reason)))
+    for a in actions:
         if a.status is not None and a.decided_by in HUMANS and a.decided_at is not None:
             word = {ActionStatus.APPLIED: "approved", ActionStatus.REJECTED: "rejected"}.get(a.status, a.status.value.lower())
             who = trace.DECIDED_BY.get(a.decided_by, a.decided_by)
             out.append(Moment(a.decided_at, _turn_at(cards, a.decided_at), APPROVAL,
                               f"{a.request.action.value} on {a.request.target}: {word} {who}"
-                              + (f" — {a.note}" if a.note else ""), word))
+                              + (f" — {a.note}" if a.note else ""), word,
+                              said=plain.decided(a.request.action, a.request.target, a.status == ActionStatus.APPLIED,
+                                                 a.decided_by, a.note, a.request.params)))
     order = {k: i for i, k in enumerate(KINDS)}
     out.sort(key=lambda m: (m.ts, m.turn, order[m.kind]))
     return out

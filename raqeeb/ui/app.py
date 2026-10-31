@@ -6,11 +6,14 @@ Three modes: "Live: rules only" (the real agent, no LLM), "Live: rules + local m
 .env names a reachable local model server) and "Replay" (a recorded run, ui/replays/*.json or an
 uploaded file). Live runs drive the twin and the agent step by step (ui/live.py); gated actions
 pause the run for an operator decision. The planted faults are shown only after the run has ended.
-The page opens with the plant map (ui/plantmap.py: telemetry and the agent's record only). Panels
-include technician and operator notes, and model proposals with the agent's tool test of each
-(ui/proposals.py): a rejected proposal changes nothing.
+
+Every screen is written for a plant manager, not a developer: identifiers, tool names, verdicts and
+actions go through ui/plain.py; the raw record stays one click away behind "Show data" on each card.
+A header names the plant, the mode, the simulated clock and the model; a notification strip above the
+tabs carries the latest event, the open items and the alert status. The page opens on the Summary tab.
 Plant, telemetry and faults are synthetic; weather is NASA POWER. Times are shown in Asia/Riyadh.
 Alarm, note and log text is untrusted data: it is shown in tables or escaped, never as markdown or HTML.
+Design tokens and the CSS block are documented in docs/CONSOLE_DESIGN.md.
 """
 
 from __future__ import annotations
@@ -27,12 +30,12 @@ import streamlit as st
 
 from raqeeb.config import REPO_ROOT, load_plant
 from raqeeb.contracts import DISPLAY_TZ, ActionStatus, IncidentReport
-from raqeeb.ui import alerts, ask, plantmap, source, summary, trace
+from raqeeb.ui import alerts, ask, plain, plantmap, source, summary, trace
 from raqeeb.ui.live import LiveRun, ReplayRun, list_local_models, local_model_status
 from raqeeb.ui.runner import DEFAULT_PACE, PACES, Runner
 from raqeeb.ui.proposals import effect
 from raqeeb.ui.runlog import MODE_LABEL, Mode
-from raqeeb.ui.source import local_hhmm, md_escape
+from raqeeb.ui.source import html_text, local_hhmm, md_escape
 
 LIVE_RULES, LIVE_LOCAL, REPLAY = MODE_LABEL[Mode.RULES], MODE_LABEL[Mode.LOCAL], "Replay"
 MODES = [LIVE_RULES, LIVE_LOCAL, REPLAY]
@@ -42,9 +45,18 @@ SPEEDS = [15, 30, 60, 120, 240]  # sim minutes per tick
 TICK_S = 0.4  # wall-clock pause between ticks while playing
 TRACE_REFRESH_S = 1.0  # the Trace tab re-renders this often while the background runner advances a live run
 
-# Reference data-viz palette: status colors carry a text label and an icon too; series slots in fixed order
-SERIES = {"actual": "#2a78d6", "reference": "#eb6834", "sensor": "#1baf7a"}
-MUTED = "#898781"
+# -- design tokens (docs/CONSOLE_DESIGN.md): a light control-room look; every colour has a word beside it ---
+TOKENS = {
+    "page": "#f2f5f9", "surface": "#ffffff", "ink": "#13293f", "muted": "#51657a", "accent": "#1d5fb4",
+    "line": "#d6dee8",
+}
+# semantic states: (text/ink, background); each pair is at least 4.5:1
+SEMANTIC = {
+    "healthy": ("#116b3f", "#def3e6"), "attention": ("#8a4b00", "#fff0cc"), "critical": ("#a8251c", "#fde2df"),
+    "no data": ("#4a5563", "#e9edf2"), "needs a human": ("#5b3aa6", "#ece5fa"), "info": ("#1d5fb4", "#dfe9f8"),
+}
+SERIES = {"actual": "#1d5fb4", "reference": "#c2571a", "sensor": "#117a65"}  # chart series, fixed order
+MUTED = TOKENS["muted"]
 RECENT_ALARM_MIN = 30
 MIN_GAP_FRACTION = 0.05  # of the plant rating: below this (dawn, dusk) no "vs expected" delta
 ON_EXPECTED_FRACTION = 0.01
@@ -56,6 +68,74 @@ SUMMARY_COLUMNS = {  # bench summary.csv column -> shown name
     "mwh_lost": "MWh lost (no action)", "cost_per_incident_usd": "Cost per incident (USD)",
     "llm_calls_per_incident": "LLM calls per incident", "local_call_share": "Local call share", "note": "Note",
 }
+AGENT_NAMES = {"raqeeb_rules": "Raqeeb, rules only", "raqeeb_local": "Raqeeb, rules + local model",
+               "raqeeb_full": "Raqeeb, rules + local + API model", "raqeeb": "Raqeeb", "threshold": "Threshold baseline",
+               "oracle": "Oracle (reads the answer key)", "empty": "Does nothing"}
+NODE_WORDS = {"start": "Started watching", "triage": "Looked at the new alarms", "investigate": "Ran the checks",
+              "rank": "Weighed the causes", "consult": "Asked the model", "plan": "Planned the fix",
+              "safety": "Safety gate", "execute": "Requested an action", "verify": "Checked the result",
+              "report": "Wrote the report", "approval": "Operator decision"}
+INTRO = {
+    "Summary": "The whole incident on one screen: what went wrong, what Raqeeb did about it and what it cost. "
+               "Click a moment to open that step in the Trace tab.",
+    "Trace": "This is the agent's log. Each card is one 15-minute step: what it checked, what it found, what it "
+             "decided, and what happened next.",
+    "Plant": "The plant as the agent sees it at the simulated clock: the map, the alarms, the output against what "
+             "the weather says it should be, and the notes from site staff.",
+    "Agent": "The agent's record in tables: every step, decision, model proposal and action, with the raw values.",
+    "Report": "The shift report the agent wrote at the end of the run, in English and Arabic.",
+    "Answer key": "The faults that were planted in the synthetic plant. The agent never sees this; it appears only "
+                  "after the run ends.",
+    "Results": "Benchmark results over many scenarios: Raqeeb against a simple alarm-threshold baseline and two "
+               "reference bounds.",
+    "Ask Raqeeb": "Ask about this run in your own words. Answers are looked up in the record; a model only rewords "
+                  "them and can take no action.",
+}
+
+CSS = """
+<style>
+:root { --rq-page: %(page)s; --rq-surface: %(surface)s; --rq-ink: %(ink)s; --rq-muted: %(muted)s;
+        --rq-accent: %(accent)s; --rq-line: %(line)s; }
+.stApp { background: var(--rq-page); color: var(--rq-ink); }
+[data-testid="stSidebar"] { background: var(--rq-surface); border-right: 1px solid var(--rq-line); }
+h1, h2, h3, [data-testid="stMetricValue"] { color: var(--rq-ink); letter-spacing: 0; }
+h1 { font-size: 1.5rem; font-weight: 600; }  h2 { font-size: 1.25rem; font-weight: 600; }
+h3 { font-size: 1.125rem; font-weight: 600; }
+[data-testid="stCaptionContainer"] { color: var(--rq-muted); }
+[data-testid="stMetricLabel"] p { color: var(--rq-muted); font-size: 0.85rem; }
+button[role="tab"] p { font-size: 1rem; }
+[data-testid="stVerticalBlockBorderWrapper"] { background: var(--rq-surface); border-color: var(--rq-line) !important; }
+.rq-header { display: flex; justify-content: space-between; align-items: baseline; gap: 1rem; flex-wrap: wrap;
+             padding: 0.6rem 0 0.4rem; border-bottom: 2px solid var(--rq-ink); margin-bottom: 0.6rem; }
+.rq-brand { font-size: 1.5rem; font-weight: 600; color: var(--rq-ink); }
+.rq-brand small { font-size: 0.95rem; font-weight: 400; color: var(--rq-muted); margin-left: 0.6rem; }
+.rq-facts { display: flex; gap: 1.5rem; flex-wrap: wrap; font-size: 0.95rem; color: var(--rq-ink); }
+.rq-facts span b { color: var(--rq-muted); font-weight: 500; margin-right: 0.35rem; }
+.rq-strip { display: flex; align-items: center; gap: 0.9rem; flex-wrap: wrap; background: var(--rq-surface);
+            border: 1px solid var(--rq-line); border-left: 6px solid var(--rq-accent); padding: 0.55rem 0.9rem;
+            margin: 0.2rem 0 0.4rem; font-size: 0.95rem; }
+.rq-strip.critical { border-left-color: %(crit)s; }  .rq-strip.human { border-left-color: %(human)s; }
+.rq-strip.healthy { border-left-color: %(ok)s; }
+.rq-time { font-variant-numeric: tabular-nums; color: var(--rq-muted); }
+.rq-event { flex: 1 1 24rem; min-width: 16rem; }
+.rq-chip { display: inline-block; padding: 0.1rem 0.55rem; border-radius: 0.3rem; font-size: 0.85rem;
+           font-weight: 500; white-space: nowrap; }
+.rq-pulse::before { content: ""; display: inline-block; width: 0.55rem; height: 0.55rem; border-radius: 50%%;
+                    background: %(human)s; margin-right: 0.4rem; animation: rq-pulse 1.2s ease-in-out infinite; }
+@keyframes rq-pulse { 0%%, 100%% { opacity: 1; } 50%% { opacity: 0.25; } }
+@media (prefers-reduced-motion: reduce) { .rq-pulse::before { animation: none; } }
+.rq-headline { font-size: 1.05rem; font-weight: 600; color: var(--rq-ink); margin: 0 0 0.2rem; }
+.rq-found { border-left: 4px solid %(att)s; padding-left: 0.6rem; margin: 0.25rem 0; }
+.rq-found b { color: var(--rq-muted); font-weight: 500; }
+.rq-quiet { color: var(--rq-muted); }
+</style>
+""" % {**TOKENS, "crit": SEMANTIC["critical"][0], "human": SEMANTIC["needs a human"][0],
+       "ok": SEMANTIC["healthy"][0], "att": SEMANTIC["attention"][0]}
+
+
+def chip(text: str, state: str) -> str:
+    ink, bg = SEMANTIC.get(state, SEMANTIC["info"])
+    return f'<span class="rq-chip" style="color:{ink};background:{bg}">{html_text(text)}</span>'
 
 
 # -- data ------------------------------------------------------------------------------
@@ -95,6 +175,24 @@ def local(ts) -> pd.Timestamp:
     return pd.Timestamp(ts).tz_convert(DISPLAY_TZ)
 
 
+def mode_words(run: source.Run) -> str:
+    """The mode in words for the header: "Replay with the local model", "Live, rules only", ..."""
+    if isinstance(run, ReplayRun):
+        if run.log.mode == Mode.TEST:
+            return "Replay with the scripted test model"
+        return "Replay with the local model" if run.log.model else "Replay, rules only"
+    return "Live with the local model" if run.log.model else "Live, rules only"
+
+
+def intro(tab: str) -> None:
+    st.caption(INTRO[tab])
+
+
+def show_data(key: str):
+    """The raw record behind a card: one collapsed expander, never deleted."""
+    return st.expander("Show data", expanded=False)
+
+
 # -- callbacks ---------------------------------------------------------------------------
 
 
@@ -129,6 +227,7 @@ def _set_run(run: source.Run) -> None:
     st.session_state.run = run
     st.session_state.playing = False
     st.session_state.pop("lines_cache", None)
+    st.session_state.pop("strip_seen", None)
     st.session_state.ask_history = []
     st.session_state.load_error = ""
 
@@ -202,6 +301,15 @@ def _toggle_play() -> None:
     st.session_state.playing = not st.session_state.playing
 
 
+def _play_storm() -> None:
+    """The first-time path: play the loaded run from where it stands."""
+    if isinstance(st.session_state.run, LiveRun):
+        _ensure_runner().resume(st.session_state.get("trace_pace", DEFAULT_PACE))
+        st.session_state.playing = False
+    else:
+        st.session_state.playing = True
+
+
 def _pause_runner() -> None:
     runner = _runner()
     if runner is not None:
@@ -246,6 +354,10 @@ def _trace_pace() -> None:
     runner = _runner()
     if runner is not None:
         runner.set_pace(st.session_state.trace_pace)
+
+
+def _go_to_approval() -> None:
+    st.session_state.jump_approval = True
 
 
 # -- sidebar -----------------------------------------------------------------------------
@@ -295,7 +407,7 @@ def sidebar(run: source.Run) -> None:
             st.caption("Faults are planted in the synthetic twin; the agent sees only telemetry.")
 
         st.header("Playback")
-        st.select_slider("Speed (sim minutes per tick)", SPEEDS, key="speed")
+        st.select_slider("Speed (simulated minutes per tick)", SPEEDS, key="speed")
         play, step, end = st.columns(3)
         stopped = run.finished or bool(run.waiting)
         runner = _runner(run)
@@ -305,13 +417,83 @@ def sidebar(run: source.Run) -> None:
         step.button("Step", key="step", on_click=_step, width="stretch", disabled=stopped)
         end.button("To end", key="to_end", on_click=_to_end, width="stretch", disabled=stopped)
         if run.waiting:
-            st.warning("Paused: an action waits for operator approval.")
+            st.warning("Paused: an action needs your decision.")
         elif run.finished:
             st.success("Run finished. The answer key can be revealed.")
         if isinstance(run, LiveRun) and run.finished:
             st.download_button("Save recording (replay JSON)", run.recording().to_json(),
                                file_name=f"raqeeb_replay_{run.incident.id}_{run.mode.value}.json",
                                mime="application/json", key="save_recording", width="stretch")
+
+
+# -- header and notification strip ----------------------------------------------------------------
+
+
+def header(run: source.Run) -> None:
+    plant = load_plant()
+    model = run.log.model or "none (rules only)"
+    kind = "Replay" if isinstance(run, ReplayRun) else "Live"
+    st.markdown(CSS, unsafe_allow_html=True)
+    st.markdown(
+        f'<div class="rq-header"><div class="rq-brand">Raqeeb<small>plant recovery console</small></div>'
+        f'<div class="rq-facts"><span><b>Plant</b>{html_text(plant.site.name)} (synthetic)</span>'
+        f'<span><b>Mode</b>Mode: {html_text(mode_words(run))}</span>'
+        f'<span><b>Simulated clock</b>{local(run.now):%H:%M} {DISPLAY_TZ}, {local(run.incident.start):%Y-%m-%d}</span>'
+        f'<span><b>Model</b>{html_text(model)}</span></div></div>', unsafe_allow_html=True)
+    st.caption(f"{kind} run of incident {md_escape(run.incident.id)}: {md_escape(run.log.label)}. {source.FOOTER}")
+
+
+def alert_status(run: source.Run) -> tuple[str, str]:
+    """(text, state) of the email alerts for the strip."""
+    if not isinstance(run, LiveRun):
+        return "Recorded run: no email alerts", "no data"
+    config = run.alerter.config
+    if not config.enabled:
+        return "Email alerts off in this deployment", "no data"
+    if not config.configured:
+        return "Email alerts not configured", "no data"
+    last = run.alerts[-1] if run.alerts else None
+    if last is None:
+        return "Email alerts ready", "healthy"
+    return {alerts.SENT: ("Email sent to on-call", "healthy"), alerts.FAILED: ("Email to on-call failed", "critical"),
+            "sending": ("Emailing on-call", "info")}.get(last.status, ("Email alerts ready", "healthy"))
+
+
+def notification_strip(run: source.Run) -> None:
+    """The latest event in words, the open items and the alert status; a pulsing "Needs your decision" chip
+    while an action waits, which jumps to the approval card. New events also raise a toast. Reads the run only
+    (the background runner is never touched here)."""
+    now, log = run.now, run.log
+    moments = summary.key_moments(log, now)
+    waiting = len(run.waiting)
+    escalated = len(log.escalations_until(now))
+    recovered = sum(1 for _, v in log.verifications_until(now) if v.recovered)
+    seen = st.session_state.get("strip_seen")
+    if seen is not None and len(moments) > seen:
+        for m in moments[seen:][-3:]:
+            st.toast(md_escape(f"{local_hhmm(m.ts)}  {m.said or m.text}"))
+    st.session_state.strip_seen = len(moments)
+
+    if moments:
+        last = moments[-1]
+        event = f'<span class="rq-time">{local_hhmm(last.ts)}</span> {html_text(last.said or last.text)}'
+    else:
+        event = "Nothing has happened yet. Press Play, or Step for one agent turn."
+    state = "human" if waiting else "critical" if escalated and not recovered else "healthy" if recovered else "info"
+    chips = []
+    if waiting:
+        chips.append(f'<span class="rq-chip rq-pulse" style="color:{SEMANTIC["needs a human"][0]};'
+                     f'background:{SEMANTIC["needs a human"][1]}">Needs your decision: {waiting}</span>')
+    chips.append(chip(f"Awaiting your approval: {waiting}", "needs a human" if waiting else "no data"))
+    chips.append(chip(f"Handed to a human: {escalated}", "attention" if escalated else "no data"))
+    chips.append(chip(f"Recovered: {recovered}", "healthy" if recovered else "no data"))
+    text, kind = alert_status(run)
+    chips.append(chip(text, kind))
+    st.markdown(f'<div class="rq-strip {state}"><span class="rq-event">{event}</span>{"".join(chips)}</div>',
+                unsafe_allow_html=True)
+    if waiting:
+        st.button("Needs your decision: open the approval card", key="strip_decide", on_click=_go_to_approval,
+                  type="primary")
 
 
 # -- panels ----------------------------------------------------------------------------
@@ -326,20 +508,20 @@ def headline(run: source.Run, power: pd.DataFrame, data: dict[str, pd.DataFrame]
         daylight = line["expected_ref_kw"] > MIN_GAP_FRACTION * plant.rated_ac_kw
         gap = line["actual_kw"] / line["expected_ref_kw"] - 1 if daylight else None
         on_line = gap is not None and abs(gap) < ON_EXPECTED_FRACTION
-        a.metric("Plant output (meter)", f"{line['actual_kw'] / 1000:.1f} MW",
-                 None if gap is None else "on expected (reference)" if on_line
-                 else f"{gap:+.0%} vs expected (reference)", delta_color="off" if on_line else "normal")
+        a.metric("Plant output now", plain.kw(line["actual_kw"]),
+                 None if gap is None else "on expected" if on_line
+                 else f"{gap:+.0%} against expected", delta_color="off" if on_line else "normal")
     else:
-        a.metric("Plant output (meter)", "—")
+        a.metric("Plant output now", "no reading yet")
     events = data["events"]
     recent = int((events["ts"] > run.now - timedelta(minutes=RECENT_ALARM_MIN)).sum()) if len(events) else 0
-    b.metric("Alarms so far", len(events), f"+{recent} in last {RECENT_ALARM_MIN} min" if recent else None,
+    b.metric("Alarms so far", len(events), f"+{recent} in the last {RECENT_ALARM_MIN} min" if recent else None,
              delta_color="inverse")
     readings = data["inverter_readings"]
     last = readings["ts"].max() if len(readings) else None
     reporting = readings.loc[readings["ts"] == last, "inverter_id"].nunique() if last is not None else 0
-    c.metric("Inverters reporting", f"{reporting} / {plant.inverters.count}")
-    d.metric("Waiting for approval", len(run.waiting))
+    c.metric("Inverters reporting", f"{reporting} of {plant.inverters.count}")
+    d.metric("Waiting for your approval", len(run.waiting))
 
 
 def plant_map(run: source.Run) -> None:
@@ -352,12 +534,12 @@ def plant_map(run: source.Run) -> None:
     st.plotly_chart(plantmap.map_figure(view, plant), key="plant_map", on_select=_map_clicked, selection_mode="points",
                     config={"displayModeBar": False})
     counts = pd.Series([tile.state for tile in view.inverters]).value_counts()
-    shown = f"telemetry at {local_hhmm(view.at)}" if view.at is not None else "no telemetry yet"
-    st.caption(f"{shown} · " + " · ".join(f"{plantmap.ICON[s]} {s}: {counts[s]}" for s in plantmap.STATES
-                                           if counts.get(s, 0))
-               + f". Low output = stopped or ≥{plantmap.PEER_SHORTFALL:.0%} below the peer median; capped = the "
-               "inverter reports a derate or power limit; ∅ no data = no reading arrived (hatched, never zero). "
-               "Badges come from the agent's actions, escalations and accepted model proposals. Synthetic plant.")
+    shown = f"Telemetry at {local_hhmm(view.at)}" if view.at is not None else "No telemetry yet"
+    st.caption(f"{shown}. " + ", ".join(f"{plantmap.ICON[s]} {s}: {counts[s]}" for s in plantmap.STATES
+                                       if counts.get(s, 0))
+               + f". Low output means stopped or at least {plantmap.PEER_SHORTFALL:.0%} below the others; capped means "
+               "the inverter reports a derate or a power limit; no data means no reading arrived (hatched, never "
+               "zero). The small marks under a tile are the agent's actions on it. Synthetic plant.")
     inverter_detail(run, plant)
 
 
@@ -376,32 +558,33 @@ def sky_chart(run: source.Run, plant) -> None:
     sky = plantmap.sky_strip(run, plant)
     x = sky.index.tz_convert(DISPLAY_TZ)
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=x, y=sky["sun_elevation_deg"].clip(lower=0), name="Sun elevation (°)", mode="lines",
-                             fill="tozeroy", line={"color": "#d9a400", "width": 1}, fillcolor="rgba(240,190,40,0.25)",
+    fig.add_trace(go.Scatter(x=x, y=sky["sun_elevation_deg"].clip(lower=0), name="Sun height (degrees)", mode="lines",
+                             fill="tozeroy", line={"color": "#b58900", "width": 1}, fillcolor="rgba(230,190,60,0.25)",
                              hovertemplate="sun %{y:.0f}°"))
-    fig.add_trace(go.Scatter(x=x, y=sky["wind_ms"], name="Wind, on-site (m/s)", mode="lines", yaxis="y2",
-                             line={"color": "#2a78d6", "width": 2}, hovertemplate="wind %{y:.1f} m/s"))
+    fig.add_trace(go.Scatter(x=x, y=sky["wind_ms"], name="Wind on site (m/s)", mode="lines", yaxis="y2",
+                             line={"color": SERIES["actual"], "width": 2}, hovertemplate="wind %{y:.1f} m/s"))
     stow = plant.tracker.stow_wind_ms
-    fig.add_hline(y=stow, yref="y2", line={"color": "#2a78d6", "width": 1, "dash": "dot"},
-                  annotation_text=f"stow limit {stow:g} m/s", annotation_font_size=10)
+    fig.add_hline(y=stow, yref="y2", line={"color": SERIES["actual"], "width": 1, "dash": "dot"},
+                  annotation_text=f"trackers stow above {stow:g} m/s", annotation_font_size=10)
     for a, b in plantmap.storm_bands(sky):
         fig.add_vrect(x0=local(a), x1=local(b), fillcolor="rgba(150,110,60,0.25)", line_width=0,
-                      annotation_text="storm: trackers stow", annotation_position="top left",
+                      annotation_text="dust storm: trackers stowed", annotation_position="top left",
                       annotation_font_size=10)
-    fig.add_vline(x=local(run.now), line={"color": "#3d3a35", "width": 1})
+    fig.add_vline(x=local(run.now), line={"color": TOKENS["ink"], "width": 1})
     fig.update_layout(height=150, margin={"l": 0, "r": 0, "t": 18, "b": 0}, hovermode="x unified",
                       legend={"orientation": "h", "y": 1.35, "x": 0, "font": {"size": 11}},
                       yaxis={"title": "sun (°)", "range": [0, 90], "fixedrange": True},
                       yaxis2={"title": "wind (m/s)", "overlaying": "y", "side": "right", "fixedrange": True,
                               "range": [0, max(25.0, float(sky["wind_ms"].max() or 0) * 1.1)]},
-                      xaxis={"range": [local(run.incident.start), local(run.incident.end)], "fixedrange": True})
+                      xaxis={"range": [local(run.incident.start), local(run.incident.end)], "fixedrange": True},
+                      paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
     st.plotly_chart(fig, key="sky_strip", config={"displayModeBar": False})
 
 
 def inverter_detail(run: source.Run, plant) -> None:
     ids = plant.inverters.ids
-    choice = st.selectbox("Inverter output vs its peers (click a tile, or pick one)", ids, index=None,
-                          key="map_inverter", placeholder="Click a tile on the map")
+    choice = st.selectbox("One inverter against the others (click a tile, or pick one)", ids, index=None,
+                          key="map_inverter", placeholder="Click a tile on the map", format_func=plain.device)
     if choice is None:
         return
     hist = plantmap.inverter_history(run, choice, plant)
@@ -410,31 +593,36 @@ def inverter_detail(run: source.Run, plant) -> None:
     fig.add_trace(go.Scatter(x=x, y=hist["peer_max_kw"] / 1000, mode="lines", line={"width": 0}, showlegend=False,
                              hoverinfo="skip"))
     fig.add_trace(go.Scatter(x=x, y=hist["peer_min_kw"] / 1000, mode="lines", line={"width": 0}, fill="tonexty",
-                             fillcolor="rgba(137,135,129,0.2)", name="Peers, min to max", hoverinfo="skip"))
-    fig.add_trace(go.Scatter(x=x, y=hist["peer_median_kw"] / 1000, mode="lines", name="Peer median",
+                             fillcolor="rgba(81,101,122,0.2)", name="The others, lowest to highest", hoverinfo="skip"))
+    fig.add_trace(go.Scatter(x=x, y=hist["peer_median_kw"] / 1000, mode="lines", name="Typical inverter",
                              line={"color": MUTED, "width": 1.5, "dash": "dash"}, hovertemplate="%{y:.2f} MW"))
-    fig.add_trace(go.Scatter(x=x, y=hist["inverter_kw"] / 1000, mode="lines", name=choice, connectgaps=False,
+    fig.add_trace(go.Scatter(x=x, y=hist["inverter_kw"] / 1000, mode="lines", name=plain.device(choice), connectgaps=False,
                              line={"color": SERIES["actual"], "width": 2.5}, hovertemplate="%{y:.2f} MW"))
-    fig.add_vline(x=local(run.now), line={"color": "#3d3a35", "width": 1})
+    fig.add_vline(x=local(run.now), line={"color": TOKENS["ink"], "width": 1})
     fig.update_layout(height=260, margin={"l": 0, "r": 0, "t": 10, "b": 0}, hovermode="x unified",
-                      legend={"orientation": "h", "y": 1.15, "x": 0}, yaxis_title="AC (MW)",
-                      xaxis_range=[local(run.incident.start), local(run.incident.end)])
+                      legend={"orientation": "h", "y": 1.15, "x": 0}, yaxis_title="Output (MW)",
+                      xaxis_range=[local(run.incident.start), local(run.incident.end)],
+                      paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
     st.plotly_chart(fig, key="inverter_detail")
     gaps = int(hist["inverter_kw"].isna().sum() - hist["peer_median_kw"].isna().sum())
-    st.caption(f"{choice} against the other {len(ids) - 1} inverters, from telemetry up to the sim clock."
+    st.caption(f"{plain.device(choice)} against the other {len(ids) - 1} inverters, up to the simulated clock."
                + (f" Gaps in the line are steps with no reading ({gaps} so far), not zero output." if gaps > 0 else ""))
 
 
 def alarm_feed(data: dict[str, pd.DataFrame]) -> None:
     st.subheader("Alarm feed")
     events = data["events"].sort_values("ts", ascending=False)
+    if not len(events):
+        st.caption("No alarms yet. Alarms appear here as the plant raises them, newest first.")
+        return
     by_severity = events["severity"].astype(str).value_counts()
-    st.caption(f"{len(events)} alarms · " + " · ".join(f"{s}: {by_severity.get(s, 0)}"
-                                                       for s in ("CRITICAL", "WARNING", "INFO"))
+    st.caption(f"{len(events)} alarms: " + ", ".join(f"{by_severity.get(s, 0)} {s.lower()}"
+                                                     for s in ("CRITICAL", "WARNING", "INFO"))
                + ". Message text is quoted device data (untrusted): the agent's rules never read it.")
     table = pd.DataFrame({
-        "Time": events["ts"].map(local_hhmm), "Device": events["device_id"], "Code": events["code"],
-        "Severity": events["severity"].astype(str), "Message (quoted)": events["message"],
+        "Time": events["ts"].map(local_hhmm), "Device": events["device_id"].map(plain.device),
+        "Alarm": events["code"].map(lambda c: plain._words(c)), "Severity": events["severity"].astype(str).str.capitalize(),
+        "Message (quoted)": events["message"],
     })
     st.dataframe(table, hide_index=True, height=380, key="alarm_table")
 
@@ -445,9 +633,10 @@ def notes_panel(run: source.Run) -> None:
     st.caption("Quoted as written (synthetic, untrusted data). The agent's rules never read note text; "
                "technician notes reach a model only as delimited data.")
     if not notes:
-        st.info("No notes so far.")
+        st.caption("No notes so far. Notes from site staff and your approval notes would appear here.")
         return
-    st.dataframe(pd.DataFrame([{"Time": local_hhmm(n.ts), "Source": n.source, "Author": n.author, "About": n.about,
+    st.dataframe(pd.DataFrame([{"Time": local_hhmm(n.ts), "Source": n.source.capitalize(), "Author": n.author,
+                                "About": plain.device(n.about) if n.source == "technician" else n.about,
                                 "Text (quoted)": n.text} for n in reversed(notes)]),
                  hide_index=True, key="notes_table")
 
@@ -457,22 +646,23 @@ def recovery_figure(run: source.Run, power: pd.DataFrame, height: int = 380) -> 
     x = power.index.tz_convert(DISPLAY_TZ)
     fig = go.Figure()
     for col, name, color, dash in (
-        ("actual_kw", "Actual (meter)", SERIES["actual"], "solid"),
-        ("expected_ref_kw", "Expected from trusted reference", SERIES["reference"], "solid"),
-        ("expected_sensor_kw", "Expected from on-site sensor", SERIES["sensor"], "dot"),
+        ("actual_kw", "Actual output (meter)", SERIES["actual"], "solid"),
+        ("expected_ref_kw", "Expected from the weather reference", SERIES["reference"], "solid"),
+        ("expected_sensor_kw", "Expected from the on-site sun sensor", SERIES["sensor"], "dot"),
     ):
         fig.add_trace(go.Scatter(x=x, y=power[col] / 1000, name=name, mode="lines",
                                  line={"color": color, "width": 2, "dash": dash}, hovertemplate="%{y:.1f} MW"))
     for a in run.log.actions_until(run.now):
         if a.status == ActionStatus.APPLIED:
             fig.add_vline(x=local(a.decided_at), line={"color": MUTED, "width": 1})
-            fig.add_annotation(x=local(a.decided_at), y=1, yref="paper", text=a.request.action.value,
+            fig.add_annotation(x=local(a.decided_at), y=1, yref="paper", text=plain.action(a.request.action),
                                showarrow=False, textangle=-90, xanchor="right", yanchor="top",
                                font={"size": 10, "color": MUTED})
     fig.update_layout(height=height, hovermode="x unified", margin={"l": 0, "r": 0, "t": 10, "b": 0},
                       legend={"orientation": "h", "y": 1.12, "x": 0},
-                      yaxis_title="Plant AC (MW)", xaxis_title=f"Time ({DISPLAY_TZ})",
-                      xaxis_range=[local(run.incident.start), local(run.incident.end)])
+                      yaxis_title="Plant output (MW)", xaxis_title=f"Time ({DISPLAY_TZ})",
+                      xaxis_range=[local(run.incident.start), local(run.incident.end)],
+                      paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
     return fig
 
 
@@ -480,25 +670,53 @@ def recovery_chart(run: source.Run, power: pd.DataFrame) -> None:
     st.subheader("Recovery")
     x = power.index.tz_convert(DISPLAY_TZ)
     st.plotly_chart(recovery_figure(run, power), key="recovery_chart")
-    st.caption("Expected lines are the fault-free plant run on the weather each source reports. When the sensor is "
-               "dusty, the sensor line drops to meet a dusty plant and the loss looks normal (the dusty-sensor "
-               "trap); the reference line still shows it. Vertical lines mark actions applied to the plant.")
+    st.caption("The expected lines are the fault-free plant on the weather each source reports. When the sun sensor is "
+               "dusty, its line drops to meet a dusty plant and the loss looks normal (the dusty-sensor trap); the "
+               "reference line still shows it. Vertical lines mark actions applied to the plant.")
 
     fig = go.Figure()
     for col, name, color, dash in (
-        ("sensor_ghi_wm2", "On-site sensor GHI", SERIES["sensor"], "dot"),
-        ("reference_ghi_wm2", "Reference GHI (NASA POWER)", SERIES["reference"], "solid"),
-        ("clearsky_ghi_wm2", "Clear-sky model (shape reference)", MUTED, "solid"),
+        ("sensor_ghi_wm2", "On-site sun sensor", SERIES["sensor"], "dot"),
+        ("reference_ghi_wm2", "Weather reference (NASA POWER)", SERIES["reference"], "solid"),
+        ("clearsky_ghi_wm2", "Clear-sky model (shape only)", MUTED, "solid"),
     ):
         fig.add_trace(go.Scatter(x=x, y=power[col], name=name, mode="lines",
                                  line={"color": color, "width": 2 if color != MUTED else 1, "dash": dash},
                                  hovertemplate="%{y:.0f} W/m²"))
     fig.update_layout(height=260, hovermode="x unified", margin={"l": 0, "r": 0, "t": 10, "b": 0},
-                      legend={"orientation": "h", "y": 1.2, "x": 0}, yaxis_title="GHI (W/m²)",
-                      xaxis_range=[local(run.incident.start), local(run.incident.end)])
+                      legend={"orientation": "h", "y": 1.2, "x": 0}, yaxis_title="Sunlight (W/m²)",
+                      xaxis_range=[local(run.incident.start), local(run.incident.end)],
+                      paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
     st.plotly_chart(fig, key="irradiance_chart")
     st.caption("The clear-sky model gives the shape of a cloudless day for comparison. It is not a ceiling: the "
                "reference itself can sit above it.")
+
+
+def approval_card(run: source.Run, a, key_prefix: str = "") -> None:
+    """One gated action in words: what, why, what to expect; Approve / Reject while it waits (live only)."""
+    req = a.request
+    with st.container(border=True):
+        st.markdown(f"**{md_escape(plain.approval_needed(req.action, req.target, req.params))}**")
+        st.markdown(f"Why: {md_escape(req.rationale)}  \nWhat to expect: {md_escape(req.expected_effect)}  \n"
+                    f"Asked at {local_hhmm(a.requested_at)}. Reversible: {'yes' if req.reversible else 'no'}.")
+        if a.status is not None:
+            recorded = "Recorded decision: " if isinstance(run, ReplayRun) else ""
+            st.markdown(recorded + md_escape(plain.decided(req.action, req.target, a.status == ActionStatus.APPLIED,
+                                                           a.decided_by, a.note, req.params))
+                        + f" ({local_hhmm(a.decided_at)})")
+        elif not isinstance(run, ReplayRun):
+            st.text_input("Your note (optional)", key=f"{key_prefix}note_{req.id}",
+                          placeholder="Why you decided this way")
+            ok, no = st.columns(2)
+            decide = _trace_decide if key_prefix else _decide
+            ok.button("Approve", key=f"{key_prefix}approve_{req.id}", on_click=decide, args=(req.id, True),
+                      type="primary", width="stretch")
+            no.button("Reject", key=f"{key_prefix}reject_{req.id}", on_click=decide, args=(req.id, False),
+                      width="stretch")
+        with show_data(f"approval_{key_prefix}{req.id}"):
+            st.dataframe(pd.DataFrame([{"Action": req.action.value, "Target": req.target, "Params": str(req.params),
+                                        "Id": req.id, "Status": a.status.value if a.status else "waiting",
+                                        "Decided by": a.decided_by}]), hide_index=True)
 
 
 def approvals(run: source.Run) -> None:
@@ -506,90 +724,87 @@ def approvals(run: source.Run) -> None:
     gated = [a for a in run.log.actions_until(run.now) if a.gated]
     st.subheader("Approvals")
     if not gated:
-        st.info("No action has needed approval so far.")
+        st.caption("No action has needed your approval so far. Actions that need one appear here with Approve and "
+                   "Reject buttons.")
     for a in gated:
-        req = a.request
-        with st.container(border=True):
-            params = ", ".join(f"{k}={v:g}" if isinstance(v, float) else f"{k}={v}" for k, v in req.params.items())
-            st.markdown(f"**{md_escape(req.action.value)}** on **{md_escape(req.target)}**"
-                        + (f" ({md_escape(params)})" if params else "")
-                        + f"  \nProposed {local_hhmm(a.requested_at)} · reversible: {'yes' if req.reversible else 'no'}")
-            st.markdown(f"*Rationale:* {md_escape(req.rationale)}  \n"
-                        f"*Expected effect:* {md_escape(req.expected_effect)}")
-            if a.status is not None:
-                verb = {ActionStatus.APPLIED: "Approved", ActionStatus.REJECTED: "Rejected"}.get(a.status, "Failed")
-                recorded = "Recorded decision: " if isinstance(run, ReplayRun) else ""
-                st.markdown(f"{recorded}**{verb}** by {md_escape(a.decided_by)} at {local_hhmm(a.decided_at)}"
-                            + (f": {md_escape(a.note)}" if a.note else ""))
-                continue
-            if isinstance(run, ReplayRun):
-                continue
-            st.text_input("Operator note", key=f"note_{req.id}", placeholder="Optional reason for the decision")
-            ok, no = st.columns(2)
-            ok.button("Approve", key=f"approve_{req.id}", on_click=_decide, args=(req.id, True), type="primary",
-                      width="stretch")
-            no.button("Reject", key=f"reject_{req.id}", on_click=_decide, args=(req.id, False), width="stretch")
+        approval_card(run, a)
 
 
 def agent_timeline(run: source.Run) -> None:
     st.subheader("Agent timeline")
     items = run.log.timeline_until(run.now)
     if not items:
-        st.info("No agent activity yet.")
+        st.caption("No agent activity yet. Each agent step appears here as the run goes on.")
         return
-    st.caption("Newest first. Each poll runs triage → investigate → rank → consult → plan → safety → execute → "
-               "verify → report; evidence is computed by code.")
-    st.dataframe(pd.DataFrame([{"Time": local_hhmm(t.ts), "Step": t.node, "Actor": t.actor, "What": t.summary,
-                                "Evidence": "; ".join(f"{k}: {v}" for k, v in t.details.items())}
-                               for t in reversed(items)]),
+    st.caption("Newest first. Each step looks at the alarms, runs the checks, weighs the causes, asks the model if "
+               "needed, plans, passes the safety gate, acts, checks the result and reports. Every number is computed "
+               "by code.")
+    st.dataframe(pd.DataFrame([{"Time": local_hhmm(t.ts), "Step": NODE_WORDS.get(t.node, plain._words(t.node)),
+                                "What (quoted)": t.summary} for t in reversed(items)]),
                  hide_index=True, height=420, key="timeline_table")
     findings = run.log.findings_until(run.now)
-    st.markdown("**Tool findings at the last poll**")
+    st.markdown("**What the checks find now**")
     if not findings:
-        st.caption("No tool reports a finding.")
+        st.caption("No check reports anything unusual.")
     else:
-        st.dataframe(pd.DataFrame([{"Tool": r.tool, "Finding": r.verdict, "Devices": ", ".join(r.devices),
-                                    "Evidence": r.evidence} for r in findings]), hide_index=True,
-                     key="findings_table")
+        for r in findings:
+            st.markdown(f"- {md_escape(plain.tool(r.tool))}: {md_escape(plain.verdict(r))}")
     diagnosis = run.log.diagnosis_until(run.now)
+    proposals = run.log.proposals_until(run.now)
     if diagnosis:
-        st.markdown(f"**Current diagnosis** (confidence {diagnosis.confidence:.2f})")
-        st.dataframe(pd.DataFrame([{"Cause": ", ".join(h.labels), "Score": h.score, "Explains": len(h.explains),
-                                    "Evidence": "; ".join(h.evidence)} for h in diagnosis.root_causes]),
-                     hide_index=True, key="diagnosis_table")
+        st.markdown("**Current diagnosis**")
+        for h in diagnosis.root_causes:
+            st.markdown(f"- {md_escape(plain.cause(h.labels[0]))}: {md_escape(plain.origin(h.labels[0], proposals))}")
+        if diagnosis.unexplained:
+            st.caption("Still unexplained: " + ", ".join(md_escape(plain.symptom_from_id(s)) for s in diagnosis.unexplained))
+    with show_data("timeline"):
+        st.dataframe(pd.DataFrame([{"Time": local_hhmm(t.ts), "Step": t.node, "Actor": t.actor, "What": t.summary,
+                                    "Evidence": "; ".join(f"{k}: {v}" for k, v in t.details.items())}
+                                   for t in reversed(items)]), hide_index=True, key="timeline_raw")
+        if findings:
+            st.dataframe(pd.DataFrame([{"Tool": r.tool, "Finding": r.verdict, "Devices": ", ".join(r.devices),
+                                        "Evidence": r.evidence} for r in findings]), hide_index=True,
+                         key="findings_table")
+        if diagnosis:
+            st.caption(f"Diagnosis confidence {diagnosis.confidence:.2f}")
+            st.dataframe(pd.DataFrame([{"Cause": ", ".join(h.labels), "Score": h.score, "Explains": len(h.explains),
+                                        "Evidence": "; ".join(h.evidence)} for h in diagnosis.root_causes]),
+                         hide_index=True, key="diagnosis_table")
+
+
+DECISION_WORD = {"accepted": ":green-background[Accepted]", "rejected": ":red-background[Rejected]",
+                 "dropped": ":orange-background[Dropped later]"}
 
 
 def proposals_panel(run: source.Run) -> None:
     st.subheader("Model proposals")
     proposals = run.log.proposals_until(run.now)
     asked = [t for t in run.log.timeline_until(run.now) if t.node == "consult" and t.summary.startswith("asked the model")]
-    st.caption("A model may propose a cause when the rules leave symptoms unexplained. The agent tests every "
-               "proposal on tool data first: only an accepted one enters the diagnosis. A rejected proposal "
+    st.caption("A model may propose a cause when the rules leave something unexplained. The agent tests every "
+               "proposal on the plant data first: only an accepted one enters the diagnosis. A rejected proposal "
                "changes nothing.")
     if not proposals:
-        st.info(f"No proposals tested so far ({len(asked)} model questions)." if asked
-                else "No proposals so far: the model was not asked (or this run is rules only).")
+        st.caption(f"No proposals tested so far ({len(asked)} model questions)." if asked
+                   else "No proposals so far: the model was not asked (or this run is rules only).")
         return
     counts = {d: sum(p.decision == d for p in proposals) for d in ("accepted", "rejected", "dropped")}
-    st.markdown(f"{len(asked)} model questions · {counts['accepted']} accepted · {counts['rejected']} rejected"
-                + (f" · {counts['dropped']} dropped later" if counts["dropped"] else ""))
+    st.markdown(f"The model was asked {len(asked)} time{'s' if len(asked) != 1 else ''}: {counts['accepted']} proposal(s) "
+                f"accepted, {counts['rejected']} rejected" + (f", {counts['dropped']} dropped later" if counts["dropped"] else "") + ".")
     actions, escalations = run.log.actions_until(run.now), run.log.escalations_until(run.now)
-    badge = {"accepted": ":green-background[ACCEPTED]", "rejected": ":red-background[REJECTED]",
-             "dropped": ":orange-background[DROPPED]"}
     for i, p in enumerate(reversed(proposals)):
         with st.container(border=True):
-            call = f"model call {p.llm_s:.2f} s ({md_escape(p.model)})" if p.model else "no model call this poll"
-            st.markdown(f"{badge[p.decision]} **{md_escape(p.fault_type)}** on **{md_escape(p.target)}** · "
-                        f"decided {local_hhmm(p.ts)} · {call}")
-            st.dataframe(pd.DataFrame([{"Check": c.check, "Result": c.result,
-                                        "Pass": {True: "pass", False: "FAIL", None: "context"}[c.passed]}
-                                       for c in p.checks]),
-                         hide_index=True, key=f"proposal_checks_{i}")
-            if p.model_evidence:
-                st.dataframe(pd.DataFrame({"Model's evidence (quoted)": p.model_evidence}), hide_index=True,
-                             key=f"proposal_evidence_{i}")
-            outcome = effect(p, actions, escalations)
-            (st.success if p.decision == "accepted" else st.warning)(md_escape(outcome))
+            st.markdown(f"{DECISION_WORD[p.decision]} {md_escape(plain.proposal(p.label, p.decision, p.reason, len(p.checks)))}")
+            call = f"Model call took {p.llm_s:.1f} s ({md_escape(p.model)})" if p.model else "No model call this step"
+            st.caption(f"Decided at {local_hhmm(p.ts)}. {call}.")
+            st.markdown(md_escape(effect(p, actions, escalations)))
+            with show_data(f"proposal_{i}"):
+                st.dataframe(pd.DataFrame([{"Check": c.check, "Result": c.result,
+                                            "Pass": {True: "pass", False: "FAIL", None: "context"}[c.passed]}
+                                           for c in p.checks]),
+                             hide_index=True, key=f"proposal_checks_{i}")
+                if p.model_evidence:
+                    st.dataframe(pd.DataFrame({"Model's evidence (quoted)": p.model_evidence}), hide_index=True,
+                                 key=f"proposal_evidence_{i}")
 
 
 def actions_panel(run: source.Run) -> None:
@@ -597,29 +812,40 @@ def actions_panel(run: source.Run) -> None:
     actions = run.log.actions_until(run.now)
     verified = {v.action_id: (ts, v) for ts, v in run.log.verifications_until(run.now)}
     if not actions:
-        st.info("No actions requested yet.")
+        st.caption("No action requested yet. Each action the agent asks for appears here with its result.")
     else:
         rows = []
         for a in actions:
             check = verified.get(a.request.id)
-            rows.append({"Time": local_hhmm(a.requested_at), "Action": a.request.action.value,
-                         "Target": a.request.target, "For cause": a.cause,
-                         "Approval": "needed" if a.gated else "auto",
-                         "Status": a.status.value if a.status else "waiting", "By": a.decided_by,
+            rows.append({"Time": local_hhmm(a.requested_at),
+                         "Action": plain.action_text(a.request.action, a.request.target, a.request.params),
+                         "For": plain.cause(a.cause) if a.cause else "",
+                         "Gate": plain.gate("needs_approval" if a.gated else "auto"),
+                         "Outcome": plain.action_status(a.status) + (f" {plain.decided_by(a.decided_by)}" if a.status else ""),
                          "Takes effect": local_hhmm(a.effective_at) if a.effective_at else "",
                          "Verified": ("" if check is None else
-                                      f"{'recovered' if check[1].recovered else 'not recovered'} at "
-                                      f"{local_hhmm(check[0])}"),
-                         "Before / after / expected (kW)": ("" if check is None else
-                                                            f"{check[1].before_kw:.0f} / {check[1].after_kw:.0f} / "
-                                                            f"{check[1].expected_kw:.0f}")})
+                                      f"{'recovered' if check[1].recovered else 'not recovered'} at {local_hhmm(check[0])}: "
+                                      f"{plain.power_change(check[1].before_kw, check[1].after_kw, check[1].expected_kw)}")})
         st.dataframe(pd.DataFrame(rows), hide_index=True, key="actions_table")
+        with show_data("actions"):
+            st.dataframe(pd.DataFrame([{"Time": local_hhmm(a.requested_at), "Action": a.request.action.value,
+                                        "Target": a.request.target, "For cause": a.cause,
+                                        "Approval": "needed" if a.gated else "auto",
+                                        "Status": a.status.value if a.status else "waiting", "By": a.decided_by,
+                                        "Before / after / expected (kW)": (
+                                            "" if a.request.id not in verified else
+                                            f"{verified[a.request.id][1].before_kw:.0f} / {verified[a.request.id][1].after_kw:.0f} / "
+                                            f"{verified[a.request.id][1].expected_kw:.0f}")} for a in actions]),
+                         hide_index=True, key="actions_raw")
     escalations = run.log.escalations_until(run.now)
     if escalations:
         st.markdown("**Handed to a human**")
-        st.dataframe(pd.DataFrame([{"Time": local_hhmm(e.ts), "Subject": e.subject, "Devices": ", ".join(e.devices),
-                                    "Reason": e.reason} for e in escalations]), hide_index=True,
-                     key="escalations_table")
+        for e in escalations:
+            st.markdown(f"- {local_hhmm(e.ts)}: {md_escape(plain.escalated(e.subject, e.devices, e.reason))}")
+        with show_data("escalations"):
+            st.dataframe(pd.DataFrame([{"Time": local_hhmm(e.ts), "Subject": e.subject, "Devices": ", ".join(e.devices),
+                                        "Reason": e.reason} for e in escalations]), hide_index=True,
+                         key="escalations_table")
 
 
 def llm_panel(run: source.Run) -> None:
@@ -628,15 +854,16 @@ def llm_panel(run: source.Run) -> None:
     calls = run.log.llm_calls_until(run.now)
     agent_s = sum(p.agent_s for p in polls)
     a, b, c, d = st.columns(4)
-    a.metric("LLM calls", len(calls))
-    b.metric("Model time", f"{sum(c.latency_s for c in calls):.1f} s")
+    a.metric("Model calls", len(calls))
+    b.metric("Time in the model", f"{sum(c.latency_s for c in calls):.1f} s")
     c.metric("Cost", f"{sum(c.cost_usd for c in calls):.4f} USD")
-    d.metric("Agent time (incl. model)", f"{agent_s:.1f} s", f"{len(polls)} polls", delta_color="off")
+    d.metric("Agent time (model included)", f"{agent_s:.1f} s", f"{len(polls)} steps", delta_color="off")
     if calls:
-        st.dataframe(pd.DataFrame([{"Role": c.role.value, "Model": c.model, "Purpose": c.purpose,
+        st.dataframe(pd.DataFrame([{"Purpose": plain.model_purpose(c.purpose).capitalize(), "Model": c.model,
+                                    "Where": "local server" if c.role.value == "local" else "API",
                                     "Tokens in": c.prompt_tokens, "Tokens out": c.completion_tokens,
-                                    "Latency (s)": round(c.latency_s, 2), "Cost (USD)": c.cost_usd,
-                                    "Valid": c.ok, "Escalation": c.escalation} for c in calls]),
+                                    "Seconds": round(c.latency_s, 2), "Cost (USD)": c.cost_usd,
+                                    "Valid reply": "yes" if c.ok else "no", "Escalation": c.escalation} for c in calls]),
                      hide_index=True, key="llm_table")
     else:
         st.caption("No model calls: the rules explained everything so far (or this run is rules only).")
@@ -644,27 +871,28 @@ def llm_panel(run: source.Run) -> None:
 
 # -- Trace tab ---------------------------------------------------------------------------------------------
 
-KIND_STYLE = {trace.FINDING: ("FINDING", "#fbdcc0"), trace.OK: ("OK", "#dcefe2"),
-              trace.INCONCLUSIVE: ("INCONCLUSIVE", "#ecebe7")}  # word + colour: never colour alone
-STATUS_BADGE = {trace.OPEN: "blue", trace.ACTING: "orange", trace.RESOLVED: "green", trace.ESCALATED: "red",
-                trace.EXPECTED: "gray", trace.FLAGGED: "violet"}
-DECISION_BADGE = {"accepted": ":green-background[ACCEPTED]", "rejected": ":red-background[REJECTED]",
-                  "dropped": ":orange-background[DROPPED]"}
+KIND_STYLE = {trace.FINDING: ("FINDING", SEMANTIC["attention"][1]), trace.OK: ("OK", SEMANTIC["healthy"][1]),
+              trace.INCONCLUSIVE: ("INCONCLUSIVE", SEMANTIC["no data"][1])}  # word + colour: never colour alone
+STATUS_CHIP = {trace.OPEN: "info", trace.ACTING: "attention", trace.RESOLVED: "healthy", trace.ESCALATED: "needs a human",
+               trace.EXPECTED: "no data", trace.FLAGGED: "critical"}
 
 
 def trace_header(head: trace.Header) -> None:
     a, b, c, d, e = st.columns([1, 1, 3, 1, 1])
-    a.metric("Sim time", f"{local(head.ts):%H:%M}", DISPLAY_TZ, delta_color="off")
-    b.metric("Turn", f"{head.turn}" + (f" / {head.turns_total}" if head.turns_total else ""))
+    a.metric("Simulated time", f"{local(head.ts):%H:%M}", DISPLAY_TZ, delta_color="off")
+    b.metric("Turn", f"{head.turn}" + (f" of {head.turns_total}" if head.turns_total else ""))
     with c:
-        st.markdown("**Causes by status**")
+        st.markdown("**Causes so far**")
         named = [(s, labels) for s, labels in head.causes.items() if labels]
-        st.markdown(" ".join(f":{STATUS_BADGE[s]}-background[{md_escape(s)}: {len(labels)}]" for s, labels in named)
-                    if named else "none named yet")
         if named:
-            st.caption(" · ".join(f"{md_escape(s)}: {', '.join(md_escape(x) for x in labels)}" for s, labels in named))
+            st.markdown(" ".join(chip(f"{plain.cause_status(s)}: {len(labels)}", STATUS_CHIP[s]) for s, labels in named),
+                        unsafe_allow_html=True)
+            st.caption("; ".join(f"{plain.cause_status(s)}: {', '.join(md_escape(plain.cause(x)) for x in labels)}"
+                                 for s, labels in named))
+        else:
+            st.caption("None named yet.")
     d.metric("Model calls", head.llm_calls)
-    e.metric("Model time", f"{head.llm_s:.1f} s")
+    e.metric("Time in the model", f"{head.llm_s:.1f} s")
 
 
 def _styled_checks(rows: list[trace.CheckRow]):
@@ -674,48 +902,72 @@ def _styled_checks(rows: list[trace.CheckRow]):
     return frame.style.apply(lambda _: colours, subset=["Verdict"])
 
 
+def _poll_checks(run: source.Run, card: trace.TurnCard):
+    """The ToolResults of this turn (v3 checks, else the findings), for the plain sentences."""
+    poll = next((p for p in run.log.polls if p.ts == card.ts), None)
+    if poll is None:
+        return []
+    return list(poll.checks or poll.findings or [])
+
+
 def trace_card(card: trace.TurnCard, run: source.Run) -> None:
     focused = st.session_state.get(summary.FOCUS_KEY) == card.index
+    actions_by_id = {a.request.id: a for a in run.log.actions}
+    proposals_so_far = run.log.proposals_until(card.ts)
+    results = _poll_checks(run, card) if card.checks is not None else []
+    named = [c.label for c in card.candidates or [] if c.selected]
     with st.container(border=True, key=f"trace_card_{card.index}"):
-        st.markdown((":violet-background[**Turn %d**]" if focused else "**Turn %d**") % card.index
-                    + f" · {local_hhmm(card.ts)} {DISPLAY_TZ}" + (" · final poll" if card.final else ""))
-        if card.outcomes:
-            st.caption("Told by the plant: " + "; ".join(md_escape(o) for o in card.outcomes))
-        if card.symptoms:
-            st.markdown("New symptoms: " + " ".join(f":orange-background[{md_escape(s)}]" for s in card.symptoms))
-        if card.checks is not None:
-            if card.checks:
-                st.dataframe(_styled_checks(card.checks), hide_index=True, key=f"trace_checks_{card.index}")
-            else:
-                st.caption("Tool checks: no finding.")
-        if card.candidates is not None:
-            top = max([c.score for c in card.candidates] + [1.0])
-            st.dataframe(pd.DataFrame([{"Cause": c.label, "Score": c.score,
-                                        "Selected": "✓ selected" if c.selected else "not selected",
-                                        "Explains": c.explains} for c in card.candidates]),
-                         hide_index=True, key=f"trace_candidates_{card.index}",
-                         column_config={"Score": st.column_config.ProgressColumn("Score", min_value=0.0,
-                                                                                 max_value=top, format="%.2f")})
+        title = f"Turn {card.index}, {local_hhmm(card.ts)}" + (" (final step)" if card.final else "")
+        st.markdown((":violet-background[**%s**]" if focused else "**%s**") % title)
+        if card.checks is not None and results:
+            st.markdown(f'<p class="rq-headline">{html_text(plain.checks_headline(results, named))}</p>',
+                        unsafe_allow_html=True)
+        elif card.checks is None and named:
+            st.markdown(f'<p class="rq-headline">{html_text("Named: " + ", ".join(plain.cause_short(x) for x in named) + ".")}</p>',
+                        unsafe_allow_html=True)
+        for o in card.outcomes:
+            st.markdown(f"- {md_escape(_outcome_sentence(o, actions_by_id))}")
+        if card.symptom_ids or card.symptoms:
+            signs = [plain.symptom_from_id(s) for s in card.symptom_ids] or card.symptoms
+            st.markdown("New signs: " + "; ".join(md_escape(s) for s in signs[:6])
+                        + (f"; and {len(signs) - 6} more" if len(signs) > 6 else "") + ".")
+        if results:
+            found = [r for r in results if r.finding and r.tool not in plain.ALARM_TOOLS]
+            quiet = [r for r in results if not r.finding]
+            for r in found:
+                st.markdown(f'<div class="rq-found"><b>{html_text(plain.tool(r.tool))}:</b> '
+                            f'{html_text(plain.verdict(r))}</div>', unsafe_allow_html=True)
+            unsure = sum(1 for r in quiet if r.verdict == trace.INCONCLUSIVE)
+            nothing = len(quiet) - unsure
+            if quiet:
+                words = []
+                if nothing:
+                    words.append(f"{nothing} check{'s' if nothing != 1 else ''} found nothing")
+                if unsure:
+                    words.append(f"{unsure} had too little data yet")
+                st.markdown(f'<p class="rq-quiet">{html_text(" and ".join(words))}.</p>', unsafe_allow_html=True)
+        elif card.checks is not None:
+            st.markdown('<p class="rq-quiet">Checks ran; nothing unusual.</p>', unsafe_allow_html=True)
+        if card.candidates is not None and named:
+            for label in named:
+                st.markdown(f"- {md_escape(plain.found(label, proposals_so_far))}")
             if card.unexplained:
-                st.caption("Unexplained: " + ", ".join(md_escape(s) for s in card.unexplained))
+                st.caption("Still unexplained: " + ", ".join(md_escape(plain.symptom_from_id(s)) for s in card.unexplained))
         if card.llm_calls or card.proposals:
             trace_model(card)
         if card.gate:
             trace_actions(card, run)
-        if card.verifications:
-            st.dataframe(pd.DataFrame([{"Verified": f"{'✓ recovered' if v.recovered else '✗ not recovered'}",
-                                        "Action": v.action_id, "Before kW": round(v.before_kw),
-                                        "After kW": round(v.after_kw), "Expected kW": round(v.expected_kw)}
-                                       for v in card.verifications]),
-                         hide_index=True, key=f"trace_verify_{card.index}")
-        if card.escalations:
-            st.dataframe(pd.DataFrame([{"Escalated to a human": e.subject, "Devices": ", ".join(e.devices),
-                                        "Reason": e.reason} for e in card.escalations]),
-                         hide_index=True, key=f"trace_escalations_{card.index}")
+        for v in card.verifications:
+            a = actions_by_id.get(v.action_id)
+            text = (plain.verified(a.request.action, a.request.target, v.recovered, v.before_kw, v.after_kw, v.expected_kw)
+                    if a else f"Verified {v.action_id}: {'recovered' if v.recovered else 'not recovered'}.")
+            st.markdown(f"- {md_escape(text)}")
+        for e in card.escalations:
+            st.markdown(f"- {md_escape(plain.escalated(e.subject, e.devices, e.reason))}")
         alarms = _turn_alarms(run, card)
         if len(alarms):
             with st.expander(f"Alarms this turn ({len(alarms)}): messages quoted, untrusted", expanded=False):
-                st.dataframe(pd.DataFrame({"Time": alarms["ts"].map(local_hhmm), "Device": alarms["device_id"],
+                st.dataframe(pd.DataFrame({"Time": alarms["ts"].map(local_hhmm), "Device": alarms["device_id"].map(plain.device),
                                            "Code": alarms["code"], "Severity": alarms["severity"].astype(str),
                                            "Message (quoted)": alarms["message"]}),
                              hide_index=True, key=f"trace_alarms_{card.index}")
@@ -724,29 +976,41 @@ def trace_card(card: trace.TurnCard, run: source.Run) -> None:
                 st.dataframe(pd.DataFrame([{"Time": local_hhmm(n.ts), "Source": n.source, "Author": n.author,
                                             "About": n.about, "Text (quoted)": n.text} for n in card.notes]),
                              hide_index=True, key=f"trace_notes_{card.index}")
-        if card.steps:
-            with st.expander(f"Agent steps ({len(card.steps)})", expanded=False):
-                st.dataframe(pd.DataFrame([{"Step": s.node, "What": s.summary} for s in card.steps]),
-                             hide_index=True, key=f"trace_steps_{card.index}")
+        trace_show_data(card, run)
 
 
-def _turn_alarms(run: source.Run, card: trace.TurnCard) -> pd.DataFrame:
-    """Alarms that arrived during this turn, (previous turn, this turn], from the run's telemetry store."""
-    start = card.since + timedelta(seconds=1) if card.since else run.incident.start
-    events = run.store.read("events", start, card.ts + timedelta(seconds=1)).reset_index()
-    return events
+def _outcome_sentence(outcome: str, actions_by_id) -> str:
+    """"raqeeb-1: applied" (trace._outcomes) -> "The plant reports: ordered cleaning ... done"."""
+    action_id, _, rest = outcome.partition(": ")
+    a = actions_by_id.get(action_id)
+    if a is None:
+        return f"The plant reports: {outcome}"
+    status, _, note = rest.partition(" (")
+    return plain.outcome(a.request.action, a.request.target, status.upper(), note.rstrip(")"))
 
 
-def trace_model(card: trace.TurnCard) -> None:
-    seconds = sum(c.latency_s for c in card.llm_calls)
-    decided = " · ".join(f"{sum(p.decision == d for p in card.proposals)} {d}"
-                         for d in ("accepted", "rejected", "dropped") if any(p.decision == d for p in card.proposals))
-    st.markdown(f"Model: {len(card.llm_calls)} call(s), {seconds:.2f} s" + (f" · proposals: {decided}" if decided else ""))
-    for p in card.proposals:
-        st.markdown(f"{DECISION_BADGE[p.decision]} **{md_escape(p.label)}**"
-                    + (f": {md_escape(p.reason)}" if p.reason and p.decision != "accepted" else "")
-                    + (" (changed nothing)" if p.decision == "rejected" else ""))
-    with st.expander("Model calls: data sent and replies", expanded=False):
+def trace_show_data(card: trace.TurnCard, run: source.Run) -> None:
+    """The raw record of the turn: every table the card used to show, unchanged, collapsed."""
+    with show_data(f"trace_{card.index}"):
+        if card.checks:
+            st.dataframe(_styled_checks(card.checks), hide_index=True, key=f"trace_checks_{card.index}")
+        elif card.checks is not None:
+            st.caption("Tool checks: no finding.")
+        if card.symptoms:
+            st.dataframe(pd.DataFrame({"New symptom (agent's summary)": card.symptoms}), hide_index=True,
+                         key=f"trace_symptoms_{card.index}")
+        if card.candidates is not None:
+            top = max([c.score for c in card.candidates] + [1.0])
+            st.dataframe(pd.DataFrame([{"Cause": c.label, "Score": c.score,
+                                        "Selected": "✓ selected" if c.selected else "not selected",
+                                        "Explains": c.explains} for c in card.candidates]),
+                         hide_index=True, key=f"trace_candidates_{card.index}",
+                         column_config={"Score": st.column_config.ProgressColumn("Score", min_value=0.0,
+                                                                                 max_value=top, format="%.2f")})
+        if card.gate:
+            st.dataframe(pd.DataFrame([{"Action": g.action, "Target": g.target, "For cause": g.cause, "Gate": g.gate,
+                                        "Decision": g.decision, "Note (quoted)": g.entry.note if g.entry else ""}
+                                       for g in card.gate]), hide_index=True, key=f"trace_actions_{card.index}")
         if card.llm_calls:
             st.dataframe(pd.DataFrame([{"Purpose": c.purpose, "Model": c.model, "Role": c.role.value,
                                         "Latency (s)": round(c.latency_s, 2), "Tokens in": c.prompt_tokens,
@@ -765,26 +1029,59 @@ def trace_model(card: trace.TurnCard) -> None:
                 st.code(tr.prompt, language=None, wrap_lines=True)
                 st.caption(f"Call {k + 1}: reply" + ("" if tr.reply else " (none: the call failed)"))
                 st.code(tr.reply, language=None, wrap_lines=True)
-        else:
+        elif card.llm_calls:
             st.caption("Data sent and replies are not recorded in this file (only call metadata).")
+        if card.verifications:
+            st.dataframe(pd.DataFrame([{"Verified": f"{'✓ recovered' if v.recovered else '✗ not recovered'}",
+                                        "Action": v.action_id, "Before kW": round(v.before_kw),
+                                        "After kW": round(v.after_kw), "Expected kW": round(v.expected_kw)}
+                                       for v in card.verifications]),
+                         hide_index=True, key=f"trace_verify_{card.index}")
+        if card.escalations:
+            st.dataframe(pd.DataFrame([{"Escalated to a human": e.subject, "Devices": ", ".join(e.devices),
+                                        "Reason": e.reason} for e in card.escalations]),
+                         hide_index=True, key=f"trace_escalations_{card.index}")
+        if card.steps:
+            st.caption(f"What the agent did ({len(card.steps)} step{'s' if len(card.steps) != 1 else ''})")
+            st.dataframe(pd.DataFrame([{"Step": NODE_WORDS.get(s.node, s.node), "What (quoted)": s.summary}
+                                       for s in card.steps]), hide_index=True, key=f"trace_steps_{card.index}")
+
+
+def _turn_alarms(run: source.Run, card: trace.TurnCard) -> pd.DataFrame:
+    """Alarms that arrived during this turn, (previous turn, this turn], from the run's telemetry store."""
+    start = card.since + timedelta(seconds=1) if card.since else run.incident.start
+    events = run.store.read("events", start, card.ts + timedelta(seconds=1)).reset_index()
+    return events
+
+
+def trace_model(card: trace.TurnCard) -> None:
+    seconds = sum(c.latency_s for c in card.llm_calls)
+    purposes = list(dict.fromkeys(plain.model_purpose(c.purpose) for c in card.llm_calls))
+    if card.llm_calls:
+        st.markdown("- " + md_escape(f"{'; '.join(purposes).capitalize()} ({len(card.llm_calls)} call"
+                                     f"{'s' if len(card.llm_calls) != 1 else ''}, {seconds:.1f} s)."))
+    for p in card.proposals:
+        st.markdown(f"- {DECISION_WORD[p.decision]} {md_escape(plain.proposal(p.label, p.decision, p.reason, len(p.checks)))}")
 
 
 def trace_actions(card: trace.TurnCard, run: source.Run) -> None:
-    st.dataframe(pd.DataFrame([{"Action": g.action, "Target": g.target, "For cause": g.cause, "Gate": g.gate,
-                                "Decision": g.decision, "Note (quoted)": g.entry.note if g.entry else ""}
-                               for g in card.gate]), hide_index=True, key=f"trace_actions_{card.index}")
+    for g in card.gate:
+        if g.entry is None:
+            text = (f"Held back by the safety gate: {plain.action_text(g.action, g.target)} "
+                    f"({g.gate.removeprefix('held back: ')}). Never sent.")
+        elif g.entry.gated:
+            text = plain.approval_needed(g.action, g.target, g.entry.request.params)
+            if g.entry.status is not None:
+                text += " " + plain.decided(g.action, g.target, g.entry.status == ActionStatus.APPLIED, g.entry.decided_by,
+                                            g.entry.note, g.entry.request.params)
+        else:
+            text = plain.acted(g.action, g.target, g.entry.request.params)
+            if g.entry.status not in (None, ActionStatus.APPLIED):
+                text += f" Outcome: {plain.action_status(g.entry.status)}" + (f" ({g.entry.note})" if g.entry.note else "") + "."
+        st.markdown(f"- {md_escape(text)}")
     for a in card.actions:
         if a.status is None and isinstance(run, LiveRun) and any(w.request.id == a.request.id for w in run.waiting):
-            req = a.request
-            with st.container(border=True):
-                st.markdown(f"**Approve {md_escape(req.action.value)} on {md_escape(req.target)}?**  \n"
-                            f"*Rationale:* {md_escape(req.rationale)}")
-                st.text_input("Operator note", key=f"trace_note_{req.id}", placeholder="Optional reason")
-                ok, no = st.columns(2)
-                ok.button("Approve", key=f"trace_approve_{req.id}", on_click=_trace_decide, args=(req.id, True),
-                          type="primary", width="stretch")
-                no.button("Reject", key=f"trace_reject_{req.id}", on_click=_trace_decide, args=(req.id, False),
-                          width="stretch")
+            approval_card(run, a, key_prefix="trace_")
 
 
 def _trace_decide(action_id: str, approve: bool) -> None:
@@ -801,7 +1098,7 @@ def trace_stream(run: source.Run, now) -> None:
     box = st.container(height=900, key="trace_stream")
     with box:
         if not cards:
-            st.info("No turns yet: press Step or Play.")
+            st.caption("No turns yet: press Step or Play. Each agent turn becomes a card here.")
         quiet: list[trace.TurnCard] = []
 
         def flush() -> None:
@@ -843,6 +1140,14 @@ def _scroll_to_card(key: str, turn: int) -> None:
     </script>""", unsafe_allow_javascript=True)
 
 
+def _scroll_to_approval() -> None:
+    """Scroll the page to the approval card (the strip's "Needs your decision"). Fixed script."""
+    st.html("""<script>
+      const card = document.querySelector('.st-key-approval_card');
+      if (card) { card.scrollIntoView({block: 'start', behavior: 'smooth'}); }
+    </script>""", unsafe_allow_javascript=True)
+
+
 def _switch_to_trace() -> None:
     """Click the Trace tab after a Summary jump (st.tabs has no Python API for that). Fixed script."""
     st.html("""<script>
@@ -874,10 +1179,7 @@ def trace_loader() -> None:
 
 def trace_tab(run: source.Run, power: pd.DataFrame) -> None:
     st.subheader("Trace")
-    st.caption("One card per agent turn, newest at the bottom: the checks it ran, the symptoms it saw, the causes it "
-               "ranked, model calls and how each proposal was tested, actions and the gate's decision, "
-               "verifications and escalations. Quiet turns are folded into one line. Free text is quoted data, "
-               "collapsed by default.")
+    intro("Trace")
     trace_loader()
     if isinstance(run, LiveRun):
         trace_live_controls(run)
@@ -934,26 +1236,26 @@ def _trace_body() -> None:
             st.session_state[summary.CLOCK_KEY] = min(st.session_state[summary.CLOCK_KEY], len(polls) - 1)
             k = st.select_slider("Clock (scrub through the turns)", options=list(range(len(polls))),
                                  key=summary.CLOCK_KEY,
-                                 format_func=lambda i: f"turn {i + 1} · {local_hhmm(polls[i].ts)}")
+                                 format_func=lambda i: f"turn {i + 1}, {local_hhmm(polls[i].ts)}")
             if k < len(polls) - 1:
                 view = source.RunAt(run, polls[k].ts)
             if st.session_state.get(summary.FOCUS_KEY) not in (None, k + 1):
                 st.session_state.pop(summary.FOCUS_KEY)  # the clock was moved by hand: the focus is over
         trace_header(trace.header(view.log, view.now, live=isinstance(run, LiveRun)))
         left, right = st.columns([5, 6], gap="medium")
-        with left:  # the plant as the agent reasons: same map and chart as the Operations view, compact
+        with left:  # the plant as the agent reasons: same map and chart as the Plant tab, compact
             plant = load_plant()
             st.plotly_chart(plantmap.map_figure(plantmap.map_view(view, plant), plant, compact=True),
                             key="trace_map", config={"displayModeBar": False})
             st.plotly_chart(recovery_figure(view, source.power_lines(view), height=300), key="trace_recovery")
-            st.caption("Map: telemetry and the agent's record at the sim clock. Chart: meter vs expected from the "
-                       "reference and from the on-site sensor; vertical lines are applied actions.")
+            st.caption("Map: telemetry and the agent's record at the simulated clock. Chart: metered output against "
+                       "what the weather reference and the on-site sensor say to expect; vertical lines are applied "
+                       "actions.")
         with right:
             if summary.FOLLOW_KEY not in st.session_state:
                 st.session_state[summary.FOLLOW_KEY] = True
-            st.toggle("Follow the newest turn", key=summary.FOLLOW_KEY)
+            st.toggle("Auto-scroll to latest", key=summary.FOLLOW_KEY)
             trace_stream(run, view.now)
-
 
 
 def report_markdown(run: source.Run, report: IncidentReport) -> str:
@@ -964,14 +1266,15 @@ def report_markdown(run: source.Run, report: IncidentReport) -> str:
              "## Summary (English)", "", report.summary_en, "",
              "## الملخص (العربية)", "", report.summary_ar, "",
              "## Root causes", ""]
-    lines += [f"- `{', '.join(h.labels)}`: {'; '.join(h.evidence)}" for h in report.causes]
-    lines += ["", "## Actions", "", "| Action | Target | Status | Verified |", "|---|---|---|---|"]
+    lines += [f"- {plain.cause(h.labels[0])} (`{', '.join(h.labels)}`): {'; '.join(h.evidence)}" for h in report.causes]
+    lines += ["", "## Actions", "", "| Action | Status | Verified |", "|---|---|---|"]
     for a in report.actions:
         status = statuses.get(a.id)
         v = verified.get(a.id)
-        check = ("recovered" if v.recovered else "not recovered") if v else "—"
-        lines.append(f"| {a.action.value} | {a.target} | {status.value.lower() if status else 'waiting'} | {check} |")
-    lines += ["", f"LLM calls: {report.llm_calls} · cost: {report.cost_usd:.4f} USD", ""]
+        check = ("recovered" if v.recovered else "not recovered") if v else "not checked"
+        lines.append(f"| {plain.action_text(a.action, a.target, a.params)} (`{a.action.value}` on `{a.target}`) | "
+                     f"{plain.action_status(status)} | {check} |")
+    lines += ["", f"LLM calls: {report.llm_calls}; cost: {report.cost_usd:.4f} USD", ""]
     return "\n".join(lines)
 
 
@@ -989,14 +1292,15 @@ def report_columns(report: IncidentReport) -> None:
 
 # -- summary tab ------------------------------------------------------------------------------------------
 
-MOMENT_COLOUR = {summary.SYMPTOM: "#e07b39", summary.CAUSE: "#6b4fbb", summary.PROPOSAL: "#1f8a9e",
-                 summary.ACTION: "#2b7bba", summary.APPROVAL: "#b8860b", summary.VERIFICATION: "#2e8b57",
-                 summary.ESCALATION: "#c0392b"}
+MOMENT_COLOUR = {summary.SYMPTOM: SEMANTIC["attention"][0], summary.CAUSE: "#5b3aa6", summary.PROPOSAL: "#117a65",
+                 summary.ACTION: SEMANTIC["info"][0], summary.APPROVAL: "#8a4b00", summary.VERIFICATION: SEMANTIC["healthy"][0],
+                 summary.ESCALATION: SEMANTIC["critical"][0]}
 MOMENT_SYMBOL = {summary.SYMPTOM: "diamond", summary.CAUSE: "circle", summary.PROPOSAL: "triangle-up",
                  summary.ACTION: "square", summary.APPROVAL: "star", summary.VERIFICATION: "circle-open",
                  summary.ESCALATION: "x"}
-OUTCOME_COLOUR = {"rejected": "#fdecea", "not recovered": "#fdecea", "never sent": "#fdecea", "escalated": "#fdecea",
-                  "accepted": "#e8f5e9", "recovered": "#e8f5e9", "approved": "#e8f5e9", "confirmed": "#ede7f6"}
+OUTCOME_STATE = {"rejected": "critical", "not recovered": "critical", "never sent": "critical", "escalated": "needs a human",
+                 "accepted": "healthy", "recovered": "healthy", "approved": "healthy", "confirmed": "info",
+                 "waiting for a decision": "needs a human"}
 
 
 def _jump_to_turn(turn: int) -> None:
@@ -1015,15 +1319,6 @@ def _timeline_clicked() -> None:
             return
 
 
-def _moment_selected() -> None:
-    event = st.session_state.get("summary_moments")
-    rows = (event or {}).get("selection", {}).get("rows", []) if isinstance(event, dict) else \
-        getattr(getattr(event, "selection", None), "rows", [])
-    turns = st.session_state.get("summary_moment_turns", [])
-    if rows and 0 <= rows[0] < len(turns):
-        _jump_to_turn(turns[rows[0]])
-
-
 def timeline_figure(moments: list[summary.Moment], run: source.Run) -> go.Figure:
     """One lane per kind of moment, time across; hovering shows the text, clicking jumps to the turn."""
     fig = go.Figure()
@@ -1034,7 +1329,7 @@ def timeline_figure(moments: list[summary.Moment], run: source.Run) -> go.Figure
             x=[local(m.ts) for m in mine], y=[kind] * len(mine), name=kind, mode="markers",
             marker={"size": 13, "color": MOMENT_COLOUR[kind], "symbol": MOMENT_SYMBOL[kind],
                     "line": {"width": 1, "color": "white"}},
-            text=[f"turn {m.turn} · {local_hhmm(m.ts)}<br>{source.html_text(m.text)}" for m in mine],
+            text=[f"turn {m.turn}, {local_hhmm(m.ts)}<br>{source.html_text(m.said or m.text)}" for m in mine],
             hovertemplate="%{text}<extra></extra>", showlegend=False))
         lookup.update({(curve, i): m.turn for i, m in enumerate(mine)})
     st.session_state.summary_points = lookup
@@ -1043,67 +1338,99 @@ def timeline_figure(moments: list[summary.Moment], run: source.Run) -> go.Figure
                              "fixedrange": True},
                       xaxis={"range": [local(run.incident.start), local(run.incident.end)],
                              "title": f"Time ({DISPLAY_TZ})"},
-                      clickmode="event+select", dragmode=False)
+                      clickmode="event+select", dragmode=False, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
     return fig
+
+
+def first_time_path(run: source.Run) -> None:
+    """Three lines on what Raqeeb is doing, and one button that plays the loaded run."""
+    st.markdown("Raqeeb watches a solar plant that has several things going wrong at once.  \n"
+                "It works out the causes from the plant's data alone, fixes what is safe to fix, asks you before "
+                "anything risky, and checks that output came back.  \n"
+                "Press Play the storm to watch it happen; every step is explained in the Trace tab.")
+    stopped = run.finished or bool(run.waiting)
+    if run.finished:
+        st.caption("This run has ended. Use the clock in the Trace tab to go back through it, or load another run "
+                   "from the sidebar.")
+    else:
+        st.button("Play the storm", key="play_storm", on_click=_play_storm, type="primary", disabled=stopped)
 
 
 def summary_tab(run: source.Run, power: pd.DataFrame) -> None:
     st.subheader("Incident summary")
+    intro("Summary")
     now = run.now
     log = run.log
     moments = summary.key_moments(log, now)
     head = trace.header(log, now, live=isinstance(run, LiveRun))
     e = summary.energy(power, log.actions_until(now), now)
     rows = summary.cause_rows(log, now)
+    proposals = log.proposals_until(now)
     if not log.polls_until(now):
-        st.info("No turns yet: press Step or Play. The summary fills in as the agent works.")
+        first_time_path(run)
+        st.caption("No turns yet: press Play the storm, or Step in the sidebar. The summary fills in as the agent works.")
         return
+    if not run.finished and not st.session_state.get("playing") and not (_runner(run) and _runner(run).state().running):
+        first_time_path(run)
     a, b, c, d, f = st.columns(5)
-    a.metric("Turns", head.turn if head.turns_total is None else f"{head.turn} / {head.turns_total}")
-    b.metric("Causes named", sum(len(v) for v in head.causes.values()),
-             f"{len(head.causes[trace.RESOLVED])} resolved · {len(head.causes[trace.ESCALATED])} escalated",
+    a.metric("Agent steps", head.turn if head.turns_total is None else f"{head.turn} of {head.turns_total}")
+    b.metric("Causes found", sum(len(v) for v in head.causes.values()),
+             f"{len(head.causes[trace.RESOLVED])} fixed and verified, {len(head.causes[trace.ESCALATED])} handed to a human",
              delta_color="off")
     c.metric("Energy below expected", f"{e.lost_mwh:.2f} MWh",
-             f"{e.lost_before_mwh:.2f} before the first action took effect · {e.lost_after_mwh:.2f} after"
-             if e.first_effective else "no action has taken effect yet", delta_color="off")
-    d.metric("Shortfall, worst hour → last hour",
-             "—" if e.gap_worst_pct is None else f"{e.gap_worst_pct:.0f}% → "
-             + ("—" if e.gap_last_pct is None else f"{e.gap_last_pct:.0f}%"))
+             f"{e.lost_before_mwh:.2f} before the first fix took effect, {e.lost_after_mwh:.2f} after"
+             if e.first_effective else "no fix has taken effect yet", delta_color="off")
+    d.metric("Shortfall, worst hour then last hour",
+             "none yet" if e.gap_worst_pct is None else f"{e.gap_worst_pct:.0f}% then "
+             + ("none" if e.gap_last_pct is None else f"{e.gap_last_pct:.0f}%"))
     f.metric("Model calls", head.llm_calls, f"{head.llm_s:.1f} s in the model" if head.llm_calls else "rules only",
              delta_color="off")
-    st.caption("Energy is the area under the expected-from-reference line minus the meter, up to the sim clock: the "
-               "shortfall, whatever its cause (the reference itself carries a few percent of error). Recovery shows "
-               "as the shortfall after the first applied action took effect, and in the last hour's percentage.")
+    st.caption("Energy below expected is the area between the expected-from-reference line and the meter, up to the "
+               "simulated clock: the shortfall, whatever its cause (the reference itself carries a few percent of "
+               "error). Recovery shows as the shortfall after the first fix took effect, and in the last hour's percentage.")
 
-    st.markdown("**Key moments** — click a marker or a row to open that turn in the Trace tab.")
+    st.markdown("**Key moments.** Click a marker or a button to open that step in the Trace tab.")
     if moments:
         st.plotly_chart(timeline_figure(moments, run), key="summary_timeline", on_select=_timeline_clicked,
                         selection_mode="points", config={"displayModeBar": False})
-        frame = pd.DataFrame([{"Time": local_hhmm(m.ts), "Turn": m.turn, "What": m.kind,
-                               "Detail": m.text, "Outcome": m.outcome} for m in moments])
         st.session_state.summary_moment_turns = [m.turn for m in moments]
-        styled = frame.style.apply(
-            lambda col: [f"background-color: {OUTCOME_COLOUR.get(v, '')}" if OUTCOME_COLOUR.get(v) else ""
-                         for v in col], subset=["Outcome"])
-        st.dataframe(styled, hide_index=True, key="summary_moments", on_select=_moment_selected,
-                     selection_mode="single-row", column_config={"Turn": st.column_config.NumberColumn(width="small")})
+        with st.container(height=min(60 + 52 * len(moments), 380)):
+            for i, m in enumerate(moments):
+                text_col, go_col = st.columns([7, 1])
+                state = OUTCOME_STATE.get(m.outcome)
+                mark = chip(m.outcome, state) if state else ""
+                text_col.markdown(f'<span class="rq-time">{local_hhmm(m.ts)}</span> {html_text(m.said or m.text)} {mark}',
+                                  unsafe_allow_html=True)
+                go_col.button(f"Turn {m.turn}", key=f"summary_moment_{i}", on_click=_jump_to_turn, args=(m.turn,),
+                              width="stretch")
+        with show_data("moments"):
+            st.dataframe(pd.DataFrame([{"Time": local_hhmm(m.ts), "Turn": m.turn, "What": m.kind,
+                                        "Detail": m.text, "Outcome": m.outcome} for m in moments]),
+                         hide_index=True, key="summary_moments")
     else:
-        st.caption("Nothing to report yet: no symptom, cause, action or model proposal so far.")
+        st.caption("Nothing to report yet: the first sign, cause, action or model proposal will appear here.")
 
     st.markdown("**Causes**")
     if rows:
-        st.dataframe(pd.DataFrame([{"Cause": r.cause, "Status": r.status,
-                                    "First named": f"turn {r.turn}" if r.turn else "—",
-                                    "Actions": r.actions, "Verified": r.verified} for r in rows]),
+        st.dataframe(pd.DataFrame([{"Cause": plain.cause(r.cause), "How it was found": plain.origin(r.cause, proposals),
+                                    "Status": plain.cause_status(r.status),
+                                    "First named": f"turn {r.turn}" if r.turn else "from an action or escalation",
+                                    "Actions": _plain_actions(r.cause, log, now), "Verified": r.verified if r.verified != "—" else "not yet"}
+                                   for r in rows]),
                      hide_index=True, key="summary_causes")
         picks = [r for r in rows if r.turn]
         if picks:
             cols = st.columns(min(len(picks), 4))
             for i, r in enumerate(picks[:8]):
-                cols[i % len(cols)].button(f"Turn {r.turn}: {r.cause}", key=f"summary_go_{r.cause}",
+                cols[i % len(cols)].button(f"Turn {r.turn}: {plain.cause_short(r.cause)}", key=f"summary_go_{r.cause}",
                                            on_click=_jump_to_turn, args=(r.turn,), width="stretch")
+        with show_data("causes"):
+            st.dataframe(pd.DataFrame([{"Cause": r.cause, "Status": r.status,
+                                        "First named": f"turn {r.turn}" if r.turn else "",
+                                        "Actions": r.actions, "Verified": r.verified} for r in rows]),
+                         hide_index=True, key="summary_causes_raw")
     else:
-        st.caption("No cause named yet.")
+        st.caption("No cause named yet. The causes the agent names, how it found them and what it did appear here.")
 
     report = log.report_until(now)
     st.markdown("**Shift report**")
@@ -1115,6 +1442,14 @@ def summary_tab(run: source.Run, power: pd.DataFrame) -> None:
         focus = st.session_state.get(summary.FOCUS_KEY)
         st.toast(f"Trace tab opened at turn {focus}.")
         _switch_to_trace()
+
+
+def _plain_actions(label: str, log, now) -> str:
+    mine = [a for a in log.actions_until(now) if a.cause == label]
+    if not mine:
+        return "none"
+    return "; ".join(f"{plain.action_text(a.request.action, a.request.target, a.request.params)} "
+                     f"({plain.action_status(a.status)})" for a in mine)
 
 
 # -- ask raqeeb -------------------------------------------------------------------------------------------
@@ -1135,17 +1470,18 @@ def _ask_gateway():
 
 def ask_tab(run: source.Run, power: pd.DataFrame) -> None:
     st.subheader("Ask Raqeeb")
-    st.caption("Questions about this run, answered from its record: code looks the facts up (actions and their "
-               "rationale, model proposals, approvals, what is unexplained, the energy shortfall); when the local "
-               "model is reachable it only rewords those facts, shown underneath as \"Based on:\". The chat cannot "
-               "request, approve or reject an action. Try: " + "; ".join(f"*{e}*" for e in ask.EXAMPLES) + ".")
+    intro("Ask Raqeeb")
+    st.caption("Code looks the facts up in the record (actions and why, model proposals, approvals, what is "
+               "unexplained, the energy shortfall); when the local model is reachable it only rewords those facts, "
+               "shown underneath as \"Based on:\". The chat cannot request, approve or reject an action. Try: "
+               + "; ".join(f"*{e}*" for e in ask.EXAMPLES) + ".")
     history: list[ask.Answer] = st.session_state.setdefault("ask_history", [])
     question = st.chat_input("Ask about this run", key="ask_input", max_chars=400)
     if question and question.strip():
         with run_lock(run):
             history.append(ask.ask(question.strip(), run.log, run.now, power, gateway=_ask_gateway()))
     if not history:
-        st.info("No question yet.")
+        st.caption("No question yet. Your questions and the answers appear here.")
     for a in history:
         with st.chat_message("user"):
             st.markdown(md_escape(a.question))
@@ -1162,9 +1498,11 @@ def ask_tab(run: source.Run, power: pd.DataFrame) -> None:
 
 def report_tab(run: source.Run) -> None:
     st.subheader("Shift report")
+    intro("Report")
     report = run.log.report_until(run.now)
     if report is None:
-        st.info("The agent writes the shift report at the end of the run.")
+        st.caption("The agent writes the shift report at the end of the run. It appears here, in English and Arabic, "
+                   "with a download button.")
         return
     report_columns(report)
     st.download_button("Download report (Markdown)", report_markdown(run, report),
@@ -1175,23 +1513,32 @@ def report_tab(run: source.Run) -> None:
 
 def answer_key_tab(run: source.Run) -> None:
     st.subheader("Answer key")
+    intro("Answer key")
     result = source.reveal(run)
     if result is None:
-        st.info("Hidden while the run is in progress. The agent never sees it; it appears here once the run ends.")
+        st.caption("Hidden while the run is in progress. The agent never sees it; it appears here once the run ends.")
         return
     if not st.toggle("Reveal answer key", key="reveal"):
         st.caption("The run has ended. Turn on the switch to compare the agent with the planted faults.")
         return
     st.markdown(f"The agent named **{result.found} of {result.root_causes}** planted root causes"
-                + (f"; it also named {', '.join(md_escape(c) for c in result.extra_causes)}, which were not planted."
+                + (f"; it also named {', '.join(md_escape(plain.cause(c)) for c in result.extra_causes)}, which were not planted."
                    if result.extra_causes else "."))
-    st.dataframe(result.faults, hide_index=True, key="reveal_faults")
+    faults = result.faults.copy()
+    faults.insert(1, "In words", faults["Planted fault"].map(plain.cause))
+    st.dataframe(faults, hide_index=True, key="reveal_faults")
     st.markdown("**Actions against the answer key**")
-    st.dataframe(result.actions, hide_index=True, key="reveal_actions")
+    actions = result.actions.copy()
+    if len(actions):
+        actions["Action"] = [plain.action_text(a, t) for a, t in zip(actions["Action"], actions["Target"])]
+        actions["Addresses"] = actions["Addresses"].map(lambda s: ", ".join(plain.cause(x) for x in s.split(", "))
+                                                        if "@" in str(s) else s)
+    st.dataframe(actions, hide_index=True, key="reveal_actions")
 
 
 def results_tab() -> None:
     st.subheader("Benchmark results")
+    intro("Results")
     folders = source.results_folders()
     st.session_state.setdefault("results_path", str(source.default_results_path()))
     if folders:
@@ -1203,25 +1550,31 @@ def results_tab() -> None:
     path = path if path.is_absolute() else REPO_ROOT / path
     results = source.load_results(path)
     if results is None:
-        st.info(f"Results not available yet at {md_escape(path.name)}. The final benchmark results arrive after "
-                "the final run; until then pick a practice folder above.")
+        st.caption(f"Results not available yet at {md_escape(path.name)}. The final benchmark results arrive after "
+                   "the final run; until then pick a practice folder above.")
         return
-    summary = results.summary
-    shown = summary[[c for c in SUMMARY_COLUMNS if c in summary.columns]].rename(columns=SUMMARY_COLUMNS)
+    table = results.summary
+    shown = table[[c for c in SUMMARY_COLUMNS if c in table.columns]].rename(columns=SUMMARY_COLUMNS)
+    if "Agent" in shown.columns:
+        shown = shown.assign(Agent=shown["Agent"].map(lambda a: AGENT_NAMES.get(a, a)))
+    st.caption("Precision and recall are about the root causes named; false actions are actions on a symptom or a "
+               "decoy; verified recovery means every applied action was checked and output came back.")
     st.dataframe(shown, hide_index=True, key="results_summary")
-    if "mwh_recovered" in summary.columns:
-        bars = summary.sort_values("mwh_recovered")
+    if "mwh_recovered" in table.columns:
+        bars = table.sort_values("mwh_recovered")
         notes = bars["note"].fillna("").astype(str) if "note" in bars.columns else pd.Series("", index=bars.index)
         colors = [MUTED if n else SERIES["actual"] for n in notes]
-        fig = go.Figure(go.Bar(x=bars["mwh_recovered"], y=bars["agent"], orientation="h", marker_color=colors,
+        fig = go.Figure(go.Bar(x=bars["mwh_recovered"], y=bars["agent"].map(lambda a: AGENT_NAMES.get(a, a)),
+                               orientation="h", marker_color=colors,
                                text=[f"{v:.1f}" for v in bars["mwh_recovered"]], textposition="outside",
                                hovertemplate="%{y}: %{x:.1f} MWh<extra></extra>"))
         fig.update_layout(height=60 + 45 * len(bars), margin={"l": 0, "r": 40, "t": 10, "b": 0},
-                          xaxis_title="Energy recovered vs no action (MWh)")
+                          xaxis_title="Energy recovered compared with doing nothing (MWh)",
+                          paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
         st.plotly_chart(fig, key="results_chart")
-        lost = summary["mwh_lost"].iloc[0] if "mwh_lost" in summary.columns else None
-        st.caption("Grey bars are reference bounds, not competitors (oracle reads the answer key; empty does nothing)."
-                   + (f" Energy lost to the faults with no action: {lost:.1f} MWh." if lost is not None else ""))
+        lost = table["mwh_lost"].iloc[0] if "mwh_lost" in table.columns else None
+        st.caption("Grey bars are reference bounds, not competitors (the oracle reads the answer key; the empty agent "
+                   "does nothing)." + (f" Energy lost to the faults with no action: {lost:.1f} MWh." if lost is not None else ""))
     if results.results is not None and {"agent", "scenario_id", "mwh_recovered"} <= set(results.results.columns):
         with st.expander("Per scenario: MWh recovered"):
             st.dataframe(results.results.pivot_table(index="scenario_id", columns="agent", values="mwh_recovered"),
@@ -1260,12 +1613,7 @@ def main() -> None:
 
     with run_lock(run):  # a background runner (live Trace) polls under the same lock
         sidebar(run)
-        st.title("Raqeeb console")
-        st.caption(source.FOOTER)
-        kind = "Replay" if isinstance(run, ReplayRun) else "Live"
-        st.info(f"**Mode: {md_escape(source.mode_label(run))}**  \n{kind} run of incident "
-                f"**{md_escape(run.incident.id)}** · {local(run.incident.start):%Y-%m-%d} · sim clock "
-                f"**{local(run.now):%H:%M}** ({DISPLAY_TZ}) · site {md_escape(load_plant().site.name)}")
+        header(run)
         _page(run)
 
     if st.session_state.playing:  # replays (live runs play in the background runner)
@@ -1303,26 +1651,30 @@ def alerts_banner(run: source.Run) -> None:
 def _page(run: source.Run) -> None:
     data = source.tables(run)
     power = lines(run)
-    if run.waiting:
-        st.warning("The agent requested an action that needs human approval. The run is paused until you decide "
-                   "(Approvals, below the map).")
+    notification_strip(run)
     alerts_banner(run)
-    plant_map(run)
     if run.waiting:
-        approvals(run)
+        with st.container(key="approval_card"):
+            st.warning("The agent asked for an action that needs your approval. The run is paused until you decide.")
+            approvals(run)
+        if st.session_state.pop("jump_approval", False):
+            _scroll_to_approval()
     headline(run, power, data)
 
-    summary_page, ops, trace_page, agent, report, key, results, ask_page = st.tabs(
-        ["Summary", "Operations", "Trace", "Agent", "Report", "Answer key", "Results", "Ask Raqeeb"])
+    summary_page, trace_page, plant_page, agent, report, key, results, ask_page = st.tabs(
+        ["Summary", "Trace", "Plant", "Agent", "Report", "Answer key", "Results", "Ask Raqeeb"])
     with trace_page:
         trace_tab(run, power)
     with summary_page:
         summary_tab(run, power)
-    with ops:
+    with plant_page:
+        intro("Plant")
+        plant_map(run)
         alarm_feed(data)
         recovery_chart(run, power)
         notes_panel(run)
     with agent:
+        intro("Agent")
         left, right = st.columns([3, 2])
         with left:
             agent_timeline(run)

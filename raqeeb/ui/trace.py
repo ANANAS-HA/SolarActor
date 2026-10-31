@@ -97,6 +97,7 @@ class TurnCard:
     notes: list[NoteRecord]
     steps: list[TimelineItem]  # the agent's step lines this turn
     outcomes: list[str] = field(default_factory=list)  # what the environment told the agent at this turn
+    symptom_ids: list[str] = field(default_factory=list)  # ids of the new symptoms (v3; empty for v1/v2)
 
     @property
     def quiet(self) -> bool:
@@ -154,15 +155,17 @@ def _candidates(poll: PollRecord) -> list[Candidate] | None:
             for h in poll.diagnosis.root_causes]
 
 
-def _symptoms(poll: PollRecord, previous: PollRecord | None) -> list[str]:
+def _symptoms(poll: PollRecord, previous: PollRecord | None) -> tuple[list[str], list[str]]:
+    """(summaries, ids) of the symptoms new since the last turn."""
     if poll.symptoms:  # v3: active symptoms; the chips are the ones new since the last turn
         before = {s.id for s in previous.symptoms} if previous is not None else set()
-        return [s.summary or s.id for s in poll.symptoms if s.id not in before]
+        new = [s for s in poll.symptoms if s.id not in before]
+        return [s.summary or s.id for s in new], [s.id for s in new]
     out = []
     for item in poll.timeline:
         if item.node == "investigate" and ": " in item.summary and "new symptom" in item.summary:
             out += [s.strip() for s in item.summary.split(": ", 1)[1].split("; ") if s.strip()]
-    return out
+    return out, []
 
 
 def _outcomes(poll: PollRecord) -> list[str]:
@@ -203,9 +206,10 @@ def turn_cards(log: RunLog, now: datetime) -> list[TurnCard]:
         if key is not None and key == last_candidates:
             candidates = None
         last_candidates = key if key is not None else last_candidates
+        symptoms, symptom_ids = _symptoms(poll, polls[k - 1] if k else None)
         cards.append(TurnCard(
             index=k + 1, ts=poll.ts, since=previous, final=poll.final, checks=checks,
-            symptoms=_symptoms(poll, polls[k - 1] if k else None),
+            symptoms=symptoms, symptom_ids=symptom_ids,
             unexplained=list(poll.diagnosis.unexplained) if poll.diagnosis and candidates is not None else [],
             candidates=candidates, llm_calls=list(poll.llm_calls), proposals=list(poll.proposals),
             transcripts=list(poll.transcripts),

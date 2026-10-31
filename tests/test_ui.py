@@ -233,7 +233,7 @@ def test_app_shows_notes_and_proposals_as_data():
     assert not at.exception
     page = _page(at)
     assert {"Technician and operator notes", "Model proposals"} <= {s.value for s in at.subheader}
-    assert "ACCEPTED" in page and "REJECTED" in page and source.md_escape(NOTHING_CHANGED) in page
+    assert "Accepted" in page and "Rejected" in page and source.md_escape(NOTHING_CHANGED) in page
     assert HOSTILE not in page and "Ignore rules" not in page
     assert HOSTILE in list(_table(at, "Text (quoted)")["Text (quoted)"])
     checks = [t.value for t in at.dataframe if "Check" in t.value.columns]
@@ -342,8 +342,8 @@ def test_every_page_renders_in_replay_and_live_mode():
     assert not at.exception
     page = _page(at)
     assert source.FOOTER in page and "Mode: Replay" in page and source.md_escape(source.SHOWCASE_LABEL) in page
-    assert at.subheader[0].value == "Plant map"  # the map comes first, above the charts and tabs
-    assert [t.label for t in at.tabs] == ["Summary", "Operations", "Trace", "Agent", "Report", "Answer key", "Results",
+    assert at.tabs[0].label == "Summary"  # the console opens on the Summary tab
+    assert [t.label for t in at.tabs] == ["Summary", "Trace", "Plant", "Agent", "Report", "Answer key", "Results",
                                           "Ask Raqeeb"]
     assert {"Plant map", "Alarm feed", "Recovery", "Technician and operator notes", "Agent timeline", "Approvals",
             "Model proposals", "Actions and verifications", "LLM calls and time", "Shift report", "Answer key",

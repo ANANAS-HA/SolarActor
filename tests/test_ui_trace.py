@@ -73,9 +73,9 @@ def test_trace_tab_renders_a_replay_with_words_and_colours():
     assert "No turns yet" in _page(at)
     at.button(key="to_end").click().run()
     assert not at.exception
-    assert [t.label for t in at.tabs][:3] == ["Summary", "Operations", "Trace"]
+    assert [t.label for t in at.tabs][:3] == ["Summary", "Trace", "Plant"]
     page = _page(at)
-    assert "Turn 48" in page and "ACCEPTED" in page and "REJECTED" in page and "(changed nothing)" in page
+    assert "Turn 48" in page and "Accepted" in page and "Rejected" in page and "Nothing changed" in page
     checks = [d.value for d in at.dataframe if "Verdict" in getattr(d.value, "columns", [])]
     assert checks and all(v.split(":")[0] in ("FINDING", "OK", "INCONCLUSIVE") for df in checks for v in df["Verdict"])
     assert any(m.value == "Turn" or "48" in str(m.value) for m in at.metric)

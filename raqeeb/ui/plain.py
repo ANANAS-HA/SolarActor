@@ -421,7 +421,7 @@ def checks_headline(results: Iterable[ToolResult], named: Iterable[str] = ()) ->
     nouns = list(dict.fromkeys(finding_noun(r) for r in findings))
     text = f"Ran {len(results)} check{'s' if len(results) != 1 else ''}"
     if findings:
-        text += f"; {len(findings)} found something: {_join(nouns)}"
+        text += f"; {len(nouns)} found something: {_join(nouns)}"
     else:
         text += "; nothing unusual found"
     alarms = next((r for r in results if r.tool == "alarm_summary" and r.finding), None)
