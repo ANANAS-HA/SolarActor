@@ -27,7 +27,7 @@ import streamlit as st
 
 from raqeeb.config import REPO_ROOT, load_plant
 from raqeeb.contracts import DISPLAY_TZ, ActionStatus, IncidentReport
-from raqeeb.ui import alerts, plantmap, source, trace
+from raqeeb.ui import alerts, plantmap, source, summary, trace
 from raqeeb.ui.live import LiveRun, ReplayRun, local_model_status
 from raqeeb.ui.runner import DEFAULT_PACE, PACES, Runner
 from raqeeb.ui.proposals import effect
@@ -641,8 +641,10 @@ def _styled_checks(rows: list[trace.CheckRow]):
 
 
 def trace_card(card: trace.TurnCard, run: source.Run) -> None:
-    with st.container(border=True):
-        st.markdown(f"**Turn {card.index}** · {local_hhmm(card.ts)} {DISPLAY_TZ}" + (" · final poll" if card.final else ""))
+    focused = st.session_state.get(summary.FOCUS_KEY) == card.index
+    with st.container(border=True, key=f"trace_card_{card.index}"):
+        st.markdown((":violet-background[**Turn %d**]" if focused else "**Turn %d**") % card.index
+                    + f" · {local_hhmm(card.ts)} {DISPLAY_TZ}" + (" · final poll" if card.final else ""))
         if card.outcomes:
             st.caption("Told by the plant: " + "; ".join(md_escape(o) for o in card.outcomes))
         if card.symptoms:
@@ -781,7 +783,10 @@ def trace_stream(run: source.Run, now) -> None:
             flush()
             trace_card(card, run)
         flush()
-    if st.session_state.get("trace_follow", True) and cards:
+    focus = st.session_state.get(summary.FOCUS_KEY)
+    if focus and any(c.index == focus for c in cards):
+        _scroll_to_card("trace_stream", int(focus))
+    elif st.session_state.get(summary.FOLLOW_KEY, True) and cards:
         _scroll_to_bottom("trace_stream", len(cards))
 
 
@@ -792,6 +797,24 @@ def _scroll_to_bottom(key: str, marker: int) -> None:
       for (const el of document.querySelectorAll('.st-key-{key}, .st-key-{key} *')) {{
         if (el.scrollHeight > el.clientHeight + 4) {{ el.scrollTop = el.scrollHeight; }}
       }}
+    </script>""", unsafe_allow_javascript=True)
+
+
+def _scroll_to_card(key: str, turn: int) -> None:
+    """Scroll the trace container to the card of `turn` (a Summary jump). Fixed script, integers only."""
+    st.html(f"""<script>
+      // focus turn {turn}
+      const card = document.querySelector('.st-key-trace_card_{turn}');
+      if (card) {{ card.scrollIntoView({{block: 'start'}}); }}
+    </script>""", unsafe_allow_javascript=True)
+
+
+def _switch_to_trace() -> None:
+    """Click the Trace tab after a Summary jump (st.tabs has no Python API for that). Fixed script."""
+    st.html("""<script>
+      for (const tab of document.querySelectorAll('button[role="tab"]')) {
+        if (tab.textContent.trim() === 'Trace') { tab.click(); break; }
+      }
     </script>""", unsafe_allow_javascript=True)
 
 
@@ -865,13 +888,23 @@ def _trace_body() -> None:
             st.session_state.trace_active = False
             st.rerun()
         view: source.Run | source.RunAt = run
-        if run.finished and run.log.polls:
-            polls = run.log.polls
+        polls = run.log.polls
+        if polls and not active:
+            # The clock: the newest turn, unless a Summary item asked for an earlier one; a live run that moved
+            # on since the clock was last set goes back to following the newest turn
+            if st.session_state.get("trace_clock_n") != len(polls) and summary.FOCUS_KEY not in st.session_state:
+                st.session_state.pop(summary.CLOCK_KEY, None)
+            st.session_state.trace_clock_n = len(polls)
+            if summary.CLOCK_KEY not in st.session_state:
+                st.session_state[summary.CLOCK_KEY] = len(polls) - 1
+            st.session_state[summary.CLOCK_KEY] = min(st.session_state[summary.CLOCK_KEY], len(polls) - 1)
             k = st.select_slider("Clock (scrub through the turns)", options=list(range(len(polls))),
-                                 value=len(polls) - 1, key="trace_clock",
+                                 key=summary.CLOCK_KEY,
                                  format_func=lambda i: f"turn {i + 1} · {local_hhmm(polls[i].ts)}")
             if k < len(polls) - 1:
                 view = source.RunAt(run, polls[k].ts)
+            if st.session_state.get(summary.FOCUS_KEY) not in (None, k + 1):
+                st.session_state.pop(summary.FOCUS_KEY)  # the clock was moved by hand: the focus is over
         trace_header(trace.header(view.log, view.now, live=isinstance(run, LiveRun)))
         left, right = st.columns([5, 6], gap="medium")
         with left:  # the plant as the agent reasons: same map and chart as the Operations view, compact
@@ -882,7 +915,9 @@ def _trace_body() -> None:
             st.caption("Map: telemetry and the agent's record at the sim clock. Chart: meter vs expected from the "
                        "reference and from the on-site sensor; vertical lines are applied actions.")
         with right:
-            st.toggle("Follow the newest turn", value=True, key="trace_follow")
+            if summary.FOLLOW_KEY not in st.session_state:
+                st.session_state[summary.FOLLOW_KEY] = True
+            st.toggle("Follow the newest turn", key=summary.FOLLOW_KEY)
             trace_stream(run, view.now)
 
 
@@ -906,12 +941,8 @@ def report_markdown(run: source.Run, report: IncidentReport) -> str:
     return "\n".join(lines)
 
 
-def report_tab(run: source.Run) -> None:
-    st.subheader("Shift report")
-    report = run.log.report_until(run.now)
-    if report is None:
-        st.info("The agent writes the shift report at the end of the run.")
-        return
+def report_columns(report: IncidentReport) -> None:
+    """The agent's bilingual summary, English left, Arabic right (right-to-left)."""
     en, ar = st.columns(2)
     with en:
         st.markdown("**English**")
@@ -920,6 +951,145 @@ def report_tab(run: source.Run) -> None:
         st.markdown("**العربية**")
         st.markdown(f'<div dir="rtl" lang="ar" style="text-align: right">{source.html_text(report.summary_ar)}</div>',
                     unsafe_allow_html=True)
+
+
+# -- summary tab ------------------------------------------------------------------------------------------
+
+MOMENT_COLOUR = {summary.SYMPTOM: "#e07b39", summary.CAUSE: "#6b4fbb", summary.PROPOSAL: "#1f8a9e",
+                 summary.ACTION: "#2b7bba", summary.APPROVAL: "#b8860b", summary.VERIFICATION: "#2e8b57",
+                 summary.ESCALATION: "#c0392b"}
+MOMENT_SYMBOL = {summary.SYMPTOM: "diamond", summary.CAUSE: "circle", summary.PROPOSAL: "triangle-up",
+                 summary.ACTION: "square", summary.APPROVAL: "star", summary.VERIFICATION: "circle-open",
+                 summary.ESCALATION: "x"}
+OUTCOME_COLOUR = {"rejected": "#fdecea", "not recovered": "#fdecea", "never sent": "#fdecea", "escalated": "#fdecea",
+                  "accepted": "#e8f5e9", "recovered": "#e8f5e9", "approved": "#e8f5e9", "confirmed": "#ede7f6"}
+
+
+def _jump_to_turn(turn: int) -> None:
+    summary.jump(st.session_state, int(turn))
+
+
+def _timeline_clicked() -> None:
+    event = st.session_state.get("summary_timeline")
+    points = (event or {}).get("selection", {}).get("points", []) if isinstance(event, dict) else \
+        getattr(getattr(event, "selection", None), "points", [])
+    lookup = st.session_state.get("summary_points", {})
+    for point in points:
+        turn = lookup.get((point.get("curve_number"), point.get("point_index", point.get("point_number"))))
+        if turn is not None:
+            _jump_to_turn(turn)
+            return
+
+
+def _moment_selected() -> None:
+    event = st.session_state.get("summary_moments")
+    rows = (event or {}).get("selection", {}).get("rows", []) if isinstance(event, dict) else \
+        getattr(getattr(event, "selection", None), "rows", [])
+    turns = st.session_state.get("summary_moment_turns", [])
+    if rows and 0 <= rows[0] < len(turns):
+        _jump_to_turn(turns[rows[0]])
+
+
+def timeline_figure(moments: list[summary.Moment], run: source.Run) -> go.Figure:
+    """One lane per kind of moment, time across; hovering shows the text, clicking jumps to the turn."""
+    fig = go.Figure()
+    lookup: dict[tuple[int, int], int] = {}
+    for curve, kind in enumerate(summary.KINDS):
+        mine = [m for m in moments if m.kind == kind]
+        fig.add_trace(go.Scatter(
+            x=[local(m.ts) for m in mine], y=[kind] * len(mine), name=kind, mode="markers",
+            marker={"size": 13, "color": MOMENT_COLOUR[kind], "symbol": MOMENT_SYMBOL[kind],
+                    "line": {"width": 1, "color": "white"}},
+            text=[f"turn {m.turn} · {local_hhmm(m.ts)}<br>{source.html_text(m.text)}" for m in mine],
+            hovertemplate="%{text}<extra></extra>", showlegend=False))
+        lookup.update({(curve, i): m.turn for i, m in enumerate(mine)})
+    st.session_state.summary_points = lookup
+    fig.update_layout(height=60 + 34 * len(summary.KINDS), margin={"l": 0, "r": 0, "t": 10, "b": 0},
+                      yaxis={"categoryorder": "array", "categoryarray": list(reversed(summary.KINDS)),
+                             "fixedrange": True},
+                      xaxis={"range": [local(run.incident.start), local(run.incident.end)],
+                             "title": f"Time ({DISPLAY_TZ})"},
+                      clickmode="event+select", dragmode=False)
+    return fig
+
+
+def summary_tab(run: source.Run, power: pd.DataFrame) -> None:
+    st.subheader("Incident summary")
+    now = run.now
+    log = run.log
+    moments = summary.key_moments(log, now)
+    head = trace.header(log, now, live=isinstance(run, LiveRun))
+    e = summary.energy(power, log.actions_until(now), now)
+    rows = summary.cause_rows(log, now)
+    if not log.polls_until(now):
+        st.info("No turns yet: press Step or Play. The summary fills in as the agent works.")
+        return
+    a, b, c, d, f = st.columns(5)
+    a.metric("Turns", head.turn if head.turns_total is None else f"{head.turn} / {head.turns_total}")
+    b.metric("Causes named", sum(len(v) for v in head.causes.values()),
+             f"{len(head.causes[trace.RESOLVED])} resolved · {len(head.causes[trace.ESCALATED])} escalated",
+             delta_color="off")
+    c.metric("Energy below expected", f"{e.lost_mwh:.2f} MWh",
+             f"{e.lost_before_mwh:.2f} before the first action took effect · {e.lost_after_mwh:.2f} after"
+             if e.first_effective else "no action has taken effect yet", delta_color="off")
+    d.metric("Shortfall, worst hour → last hour",
+             "—" if e.gap_worst_pct is None else f"{e.gap_worst_pct:.0f}% → "
+             + ("—" if e.gap_last_pct is None else f"{e.gap_last_pct:.0f}%"))
+    f.metric("Model calls", head.llm_calls, f"{head.llm_s:.1f} s in the model" if head.llm_calls else "rules only",
+             delta_color="off")
+    st.caption("Energy is the area under the expected-from-reference line minus the meter, up to the sim clock: the "
+               "shortfall, whatever its cause (the reference itself carries a few percent of error). Recovery shows "
+               "as the shortfall after the first applied action took effect, and in the last hour's percentage.")
+
+    st.markdown("**Key moments** — click a marker or a row to open that turn in the Trace tab.")
+    if moments:
+        st.plotly_chart(timeline_figure(moments, run), key="summary_timeline", on_select=_timeline_clicked,
+                        selection_mode="points", config={"displayModeBar": False})
+        frame = pd.DataFrame([{"Time": local_hhmm(m.ts), "Turn": m.turn, "What": m.kind,
+                               "Detail": m.text, "Outcome": m.outcome} for m in moments])
+        st.session_state.summary_moment_turns = [m.turn for m in moments]
+        styled = frame.style.apply(
+            lambda col: [f"background-color: {OUTCOME_COLOUR.get(v, '')}" if OUTCOME_COLOUR.get(v) else ""
+                         for v in col], subset=["Outcome"])
+        st.dataframe(styled, hide_index=True, key="summary_moments", on_select=_moment_selected,
+                     selection_mode="single-row", column_config={"Turn": st.column_config.NumberColumn(width="small")})
+    else:
+        st.caption("Nothing to report yet: no symptom, cause, action or model proposal so far.")
+
+    st.markdown("**Causes**")
+    if rows:
+        st.dataframe(pd.DataFrame([{"Cause": r.cause, "Status": r.status,
+                                    "First named": f"turn {r.turn}" if r.turn else "—",
+                                    "Actions": r.actions, "Verified": r.verified} for r in rows]),
+                     hide_index=True, key="summary_causes")
+        picks = [r for r in rows if r.turn]
+        if picks:
+            cols = st.columns(min(len(picks), 4))
+            for i, r in enumerate(picks[:8]):
+                cols[i % len(cols)].button(f"Turn {r.turn}: {r.cause}", key=f"summary_go_{r.cause}",
+                                           on_click=_jump_to_turn, args=(r.turn,), width="stretch")
+    else:
+        st.caption("No cause named yet.")
+
+    report = log.report_until(now)
+    st.markdown("**Shift report**")
+    if report is None:
+        st.caption("The agent writes the shift report at the end of the run.")
+    else:
+        report_columns(report)
+    if st.session_state.pop(summary.SWITCH_KEY, False):
+        focus = st.session_state.get(summary.FOCUS_KEY)
+        st.toast(f"Trace tab opened at turn {focus}.")
+        _switch_to_trace()
+
+
+def report_tab(run: source.Run) -> None:
+    st.subheader("Shift report")
+    report = run.log.report_until(run.now)
+    if report is None:
+        st.info("The agent writes the shift report at the end of the run.")
+        return
+    report_columns(report)
     st.download_button("Download report (Markdown)", report_markdown(run, report),
                        file_name=f"raqeeb_report_{run.incident.id}.md", mime="text/markdown", key="download_report")
     with st.expander("Markdown source"):
@@ -1065,10 +1235,12 @@ def _page(run: source.Run) -> None:
         approvals(run)
     headline(run, power, data)
 
-    ops, trace_page, agent, report, key, results = st.tabs(
-        ["Operations", "Trace", "Agent", "Report", "Answer key", "Results"])
+    summary_page, ops, trace_page, agent, report, key, results = st.tabs(
+        ["Summary", "Operations", "Trace", "Agent", "Report", "Answer key", "Results"])
     with trace_page:
         trace_tab(run, power)
+    with summary_page:
+        summary_tab(run, power)
     with ops:
         alarm_feed(data)
         recovery_chart(run, power)
