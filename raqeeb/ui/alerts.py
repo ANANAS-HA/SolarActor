@@ -72,8 +72,8 @@ class Alert:
 
     @property
     def subject(self) -> str:
-        what = "action awaiting approval" if self.kind == APPROVAL else "escalation"
-        return f"[Raqeeb] {self.scenario_id}: {what} ({self.ref})"
+        what = "approval needed" if self.kind == APPROVAL else "escalation"
+        return f"Solar Actor: {what} ({self.scenario_id}, {self.ref})"
 
     def body(self) -> str:
         when = self.sim_time.astimezone(ZoneInfo(DISPLAY_TZ)).strftime("%Y-%m-%d %H:%M %Z")
@@ -81,8 +81,8 @@ class Alert:
             ar = "يحتاج إجراء إلى موافقة المشغّل."
             en = "An action is waiting for operator approval."
         else:
-            ar = "رقيب أحال حالة إلى المشغّل."
-            en = "Raqeeb escalated a case to the operator."
+            ar = "Solar Actor أحال حالة إلى المشغّل."
+            en = "Solar Actor escalated a case to the operator."
         lines = [
             f"{en} / {ar}",
             "",
@@ -99,7 +99,7 @@ class Alert:
             "",
             "Open the console to approve or reject. / افتح وحدة التحكم للموافقة أو الرفض.",
             "",
-            "Raqeeb console alert. Synthetic plant and scenario; no plant data is included.",
+            "Solar Actor console alert. Synthetic plant and scenario; no plant data is included.",
         ]
         return "\n".join(lines)
 

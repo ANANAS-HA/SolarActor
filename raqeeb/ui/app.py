@@ -69,8 +69,8 @@ SUMMARY_COLUMNS = {  # bench summary.csv column -> shown name
     "mwh_lost": "MWh lost (no action)", "cost_per_incident_usd": "Cost per incident (USD)",
     "llm_calls_per_incident": "LLM calls per incident", "local_call_share": "Local call share", "note": "Note",
 }
-AGENT_NAMES = {"raqeeb_rules": "Raqeeb, rules only", "raqeeb_local": "Raqeeb, rules + local model",
-               "raqeeb_full": "Raqeeb, rules + local + API model", "raqeeb": "Raqeeb", "threshold": "Threshold baseline",
+AGENT_NAMES = {"raqeeb_rules": "Solar Actor, rules only", "raqeeb_local": "Solar Actor, rules + local model",
+               "raqeeb_full": "Solar Actor, rules + local + API model", "raqeeb": "Solar Actor", "threshold": "Threshold baseline",
                "oracle": "Oracle (reads the answer key)", "empty": "Does nothing"}
 NODE_WORDS = {"start": "Started watching", "triage": "Looked at the new alarms", "investigate": "Ran the checks",
               "rank": "Weighed the causes", "consult": "Asked the model", "plan": "Planned the fix",
@@ -79,22 +79,22 @@ NODE_WORDS = {"start": "Started watching", "triage": "Looked at the new alarms",
 PAGES_MAIN = ["Plant", "Summary", "Trace", "Agent", "Report"]  # Plant first in the sidebar; the console still opens on Summary
 PAGES_JUDGE = ["Answer key", "Results"]
 HINTS = {"Summary": "What happened", "Trace": "How it was solved", "Plant": "Map and inverters",
-         "Agent": "What Raqeeb did", "Report": "Shift report", "Answer key": "The faults we injected",
+         "Agent": "What Solar Actor did", "Report": "Shift report", "Answer key": "The faults we injected",
          "Results": "How well it did"}
 INTRO = {
-    "Summary": "The whole incident on one screen: what went wrong, what Raqeeb did about it and what it cost. "
+    "Summary": "The whole incident on one screen: what went wrong, what Solar Actor did about it and what it cost. "
                "Click a moment to open that step in Trace.",
     "Trace": "This is the agent's log. Each card is one 15-minute step: what it checked, what it found, what it "
              "decided, and what happened next.",
     "Plant": "Every inverter and sensor at the simulated clock, with its state in words; the alarms, the output "
              "against what the weather allows, and the notes from site staff.",
-    "Agent": "Each action Raqeeb took and whether it needed your approval, with the raw values behind it.",
+    "Agent": "Each action Solar Actor took and whether it needed your approval, with the raw values behind it.",
     "Report": "The report a plant manager reads at the end of the shift, in English and Arabic.",
-    "Answer key": "The faults we hid in the simulation, for checking Raqeeb against. The agent never sees this; it "
+    "Answer key": "The faults we hid in the simulation, for checking Solar Actor against. The agent never sees this; it "
                   "appears only after the run ends.",
-    "Results": "How well Raqeeb did over many scenarios, against a simple alarm-threshold baseline and two "
+    "Results": "How well Solar Actor did over many scenarios, against a simple alarm-threshold baseline and two "
                "reference bounds.",
-    "Ask Raqeeb": "Ask about this incident in your own words. Answers come from the record; a model only rewords "
+    "Ask the agent": "Ask about this incident in your own words. Answers come from the record; a model only rewords "
                   "them and can take no action.",
 }
 
@@ -537,7 +537,7 @@ def sidebar(run: source.Run) -> None:
     with st.sidebar:
         st.markdown('<div class="rq-hackathon">HUMAIN AI Builders Hackathon</div>', unsafe_allow_html=True)
         st.markdown('<div class="rq-logo"><div class="mark"><i></i><b></b><s style="top:17px"></s><s style="top:21px"></s>'
-                    '<s style="top:25px"></s></div><div><span class="name">Raqeeb</span>'
+                    '<s style="top:25px"></s></div><div><span class="name">Solar Actor</span>'
                     '<span class="sub">Solar plant console</span></div></div>', unsafe_allow_html=True)
         st.markdown('<div class="rq-group">The incident</div>', unsafe_allow_html=True)
         st.radio("The incident", PAGES_MAIN, key="nav_main", on_change=_nav_main, label_visibility="collapsed",
@@ -1556,7 +1556,7 @@ def timeline_figure(moments: list[summary.Moment], run: source.Run) -> go.Figure
 
 def first_time_path(run: source.Run) -> None:
     """Three lines on what Raqeeb is doing, and one button that plays the loaded run."""
-    st.markdown("Raqeeb watches a solar plant that has several things going wrong at once.  \n"
+    st.markdown("Solar Actor watches a solar plant that has several things going wrong at once.  \n"
                 "It works out the causes from the plant's data alone, fixes what is safe to fix, asks you before "
                 "anything risky, and checks that output came back.  \n"
                 "Press Play the storm to watch it happen; every step is explained in the Trace tab.")
@@ -1706,8 +1706,8 @@ def ask_fab(run: source.Run, power: pd.DataFrame) -> None:
     """Ask Raqeeb as a floating popup, pinned bottom-right on every page (CSS on the keyed container)."""
     history: list[ask.Answer] = st.session_state.setdefault("ask_history", [])
     with st.container(key="ask_fab"):
-        with st.popover("Ask Raqeeb"):
-            st.markdown("**Ask Raqeeb**  \nAnswers from this incident's record only; the facts used are listed under "
+        with st.popover("Ask the agent"):
+            st.markdown("**Ask the agent**  \nAnswers from this incident's record only; the facts used are listed under "
                         "\"Based on:\". The chat cannot request, approve or reject an action.")
             question = st.chat_input("Ask about this incident", key="ask_input", max_chars=400)
             pending = st.session_state.pop("ask_pending", None)
@@ -1847,7 +1847,7 @@ def initial_run() -> source.Run:
 
 
 def main() -> None:
-    st.set_page_config(page_title="Raqeeb console", layout="wide")
+    st.set_page_config(page_title="Solar Actor console", layout="wide")
     _, default_id = scenario_choices()
     st.session_state.setdefault("scenario_id", default_id)
     st.session_state.setdefault("speed", 60)

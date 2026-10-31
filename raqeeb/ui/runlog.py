@@ -335,7 +335,7 @@ class RunLog(_Record):
     def from_json(cls, text: str | bytes) -> RunLog:
         data = json.loads(text)
         if data.get("format") != REPLAY_FORMAT:
-            raise ValueError("not a Raqeeb replay file")
+            raise ValueError("not a Solar Actor replay file")
         if data.get("version") not in READABLE_VERSIONS:
             raise ValueError(f"replay version {data.get('version')!r} not supported (expected one of "
                              f"{', '.join(map(str, READABLE_VERSIONS))})")
