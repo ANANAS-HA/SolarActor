@@ -88,6 +88,16 @@ The NASA POWER weather file is in `data/weather/`. Modes:
 
 The planted faults (the answer key) are shown only after a run has ended.
 
+**Email alerts.** When a live run reaches a point that needs a human (an action waiting for approval, or an
+escalation), the console (not the agent) emails the operator through [Resend](https://resend.com)'s REST
+API: `RESEND_API_KEY`, `RAQEEB_ALERT_FROM` and `RAQEEB_ALERT_TO` (comma-separated) in `.env`. The email
+carries the scenario id, the sim time, what needs deciding, the agent's rationale and expected effect, and a
+line to open the console, in English and Arabic; no plant data beyond that. One email per request, at most
+one retry, sent from a background thread so the run never waits. Without a key the alert is only written to
+the audit table and shown as "Alert (email not configured)". `RAQEEB_ALERTS=0` switches alerts off entirely
+(the Docker image's default); bench runs never alert. `uv run python -m raqeeb.ui.alerts --preview out.json`
+writes a sample email's exact payload to a file without sending (`--send` posts that one email).
+
 ### With Docker
 
 ```powershell

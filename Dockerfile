@@ -1,5 +1,6 @@
 # Raqeeb console for a public demo (e.g. a Hugging Face Docker Space): rules-only live runs and replays.
-# No secrets, no .env, no model server: the local-model mode is switched off (RAQEEB_UI_NO_LLM).
+# No secrets, no .env, no model server: the local-model mode is switched off (RAQEEB_UI_NO_LLM) and so are
+# email alerts (RAQEEB_ALERTS=0).
 # Network is used only while building (base image, uv, Python packages); the running app makes no calls.
 #   docker build -t raqeeb-console .
 #   docker run --rm -p 7860:7860 raqeeb-console        -> http://localhost:7860
@@ -12,7 +13,7 @@ ENV UV_COMPILE_BYTECODE=1 \
     UV_PYTHON_DOWNLOADS=never \
     PYTHONUNBUFFERED=1 \
     HOME=/home/user \
-    RAQEEB_UI_NO_LLM=1 \
+    RAQEEB_UI_NO_LLM=1     RAQEEB_ALERTS=0 \
     LITELLM_LOCAL_MODEL_COST_MAP=True \
     STREAMLIT_BROWSER_GATHER_USAGE_STATS=false
 

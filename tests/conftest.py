@@ -33,6 +33,13 @@ def call(tool, store, scenario: Scenario, **kwargs) -> ToolResult:
     return checked(tool(store, view.start, view.end, **kwargs), scenario)
 
 
+@pytest.fixture(autouse=True)
+def _no_email_alerts(monkeypatch):
+    """Console alerts are off in every test unless a test builds its own Alerter: no email leaves a test run
+    even when .env holds a Resend key."""
+    monkeypatch.setenv("RAQEEB_ALERTS", "0")
+
+
 def pytest_collection_modifyitems(config, items):
     """Live LLM tests (marker `llm`) stay off the local model server while a bench run uses it."""
     from raqeeb.config import bench_running

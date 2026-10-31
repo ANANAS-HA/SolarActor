@@ -13,6 +13,8 @@ LiveRun is the agent's environment, like bench/harness.run_scenario: it polls th
 actions with configs/actions.yaml, runs allowed ones with twin.controls.apply_action and passes the
 outcomes back on the next poll. Unlike the bench, a gated action waits for an operator decision:
 the run pauses until decide() is called. Actions, decisions and verifications go to the audit table.
+When a gated action waits or the agent escalates, the console sends an email alert (ui/alerts.py; off
+without a key, and in the public image); the agent knows nothing of it.
 The planted scenario stays inside LiveRun; its faults are copied into the log only when the run ends.
 The log is filled by runlog.Recorder, the same code the bench harness uses for its trajectory files.
 """
@@ -29,7 +31,10 @@ from pathlib import Path
 
 from raqeeb.agent import RaqeebAgent
 from raqeeb.config import load_actions, load_plant, load_settings
+import pandas as pd
+
 from raqeeb.contracts import (
+    DISPLAY_TZ,
     STEP_MINUTES,
     ActionOutcome,
     ActionRequest,
@@ -42,6 +47,7 @@ from raqeeb.contracts import (
 from raqeeb.faults.injector import FaultInjector
 from raqeeb.telemetry.store import TelemetryStore
 from raqeeb.twin.controls import apply_action
+from raqeeb.ui.alerts import Alerter, approval_alert, escalation_alert
 from raqeeb.ui.runlog import (
     MODE_LABEL,
     RECORDED_LABEL,
@@ -105,7 +111,7 @@ def run_dir() -> Path:
 
 class LiveRun:
     def __init__(self, scenario: Scenario, mode: Mode = Mode.RULES, *, router=None, poll_min: int = POLL_MIN,
-                 plant: PlantConfig | None = None, db_path: Path | None = None):
+                 plant: PlantConfig | None = None, db_path: Path | None = None, alerter: Alerter | None = None):
         if poll_min < STEP_MINUTES or poll_min % STEP_MINUTES:
             raise ValueError(f"poll_min must be a multiple of {STEP_MINUTES}")
         self.plant = plant or load_plant()
@@ -117,6 +123,7 @@ class LiveRun:
         self.poll_min = poll_min
         self.mode = mode
         self.specs = load_actions()
+        self.alerter = alerter if alerter is not None else Alerter.from_env()
         router = router if router is not None else make_router(mode)
         self.agent = RaqeebAgent(self.plant, router=router, name=f"raqeeb_{mode.value}")
         self.incident: AgentScenario = scenario.agent_view()
@@ -183,6 +190,10 @@ class LiveRun:
             self._audit("verify", "agent", v.model_dump(mode="json"))
         for e in turn.escalations:
             self._audit("escalate", "agent", e.model_dump(mode="json"))
+            self._alert(escalation_alert(self.incident.id, now, e.subject, list(e.devices), e.reason,
+                                         *self._alert_context()))
+        for done in self.alerter.drain():  # deliveries finished since the last poll
+            self._audit("alert", "console", done.payload())
         for request in turn.actions:
             self._gate(request)
         if self.finished:
@@ -216,6 +227,9 @@ class LiveRun:
             self._audit("approval", "console", {"action_id": request.id, "waiting": True,
                                                 "rationale": request.rationale,
                                                 "expected_effect": request.expected_effect})
+            self._alert(approval_alert(self.incident.id, self.now, request.id, request.action.value,
+                                       request.target, request.rationale, request.expected_effect,
+                                       *self._alert_context()))
         else:
             self._execute(entry, by="auto")
 
@@ -235,6 +249,26 @@ class LiveRun:
         self._outcomes.append(ActionOutcome(action_id=entry.request.id, status=status, ts=self.now, note=note))
         self._audit("execute", "console", {"action_id": entry.request.id, "action": entry.request.action.value,
                                            "target": entry.request.target, "status": status.value, "note": note})
+
+    def _alert_context(self) -> tuple[str, str]:
+        """(scenario, summary) lines for an alert email: the agent's view of the scenario and its diagnosis."""
+        start = pd.Timestamp(self.incident.start).tz_convert(DISPLAY_TZ).strftime("%Y-%m-%d %H:%M")
+        scenario = f"started {start} {DISPLAY_TZ}, {self.incident.duration_hours:g} h"
+        diagnosis = self.log.diagnosis_until(self.now)
+        causes = (", ".join(h.labels[0] for h in diagnosis.root_causes) if diagnosis and diagnosis.root_causes
+                  else "no cause named yet")
+        summary = (f"{causes}; {len(self.waiting)} action(s) waiting for approval, "
+                   f"{len(self.log.escalations_until(self.now))} escalation(s)")
+        return scenario, summary
+
+    def _alert(self, alert) -> None:
+        record = self.alerter.send(alert)
+        if record is not None:
+            self._audit("alert", "console", record.payload())
+
+    @property
+    def alerts(self):
+        return self.alerter.records
 
     def _audit(self, step: str, actor: str, payload: dict) -> None:
         self.store.write_audit(step, actor, plain(payload), self.now)

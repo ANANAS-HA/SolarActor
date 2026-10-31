@@ -27,7 +27,7 @@ import streamlit as st
 
 from raqeeb.config import REPO_ROOT, load_plant
 from raqeeb.contracts import DISPLAY_TZ, ActionStatus, IncidentReport
-from raqeeb.ui import plantmap, source, trace
+from raqeeb.ui import alerts, plantmap, source, trace
 from raqeeb.ui.live import LiveRun, ReplayRun, local_model_status
 from raqeeb.ui.runner import DEFAULT_PACE, PACES, Runner
 from raqeeb.ui.proposals import effect
@@ -1030,12 +1030,36 @@ def main() -> None:
             st.rerun()
 
 
+def alerts_banner(run: source.Run) -> None:
+    """Email alerts of this live run that still matter: for actions waiting now, and for this turn's
+    escalations. Off (no alerts recorded) when RAQEEB_ALERTS=0 or in a replay."""
+    if not isinstance(run, LiveRun):
+        return
+    waiting = {a.request.id for a in run.waiting}
+    for r in run.alerts:
+        if not (r.alert.ref in waiting or r.alert.sim_time == run.now):
+            continue
+        who = ", ".join(run.alerter.config.recipients)
+        what = md_escape(r.alert.decision)
+        if r.status == alerts.NOT_CONFIGURED:
+            st.info(f"**{alerts.BANNER_NOT_CONFIGURED}:** {what}. Set RESEND_API_KEY, RAQEEB_ALERT_FROM and "
+                    "RAQEEB_ALERT_TO in .env to email the operator.")
+        elif r.status == alerts.SENT:
+            st.success(f"**Alert emailed** to {md_escape(who)}: {what}.")
+        elif r.status == alerts.FAILED:
+            st.warning(f"**Alert email failed** ({md_escape(r.error)}, {r.attempts} attempts): {what}. "
+                       "The run went on.")
+        else:
+            st.info(f"**Alert being emailed** to {md_escape(who)}: {what}.")
+
+
 def _page(run: source.Run) -> None:
     data = source.tables(run)
     power = lines(run)
     if run.waiting:
         st.warning("The agent requested an action that needs human approval. The run is paused until you decide "
                    "(Approvals, below the map).")
+    alerts_banner(run)
     plant_map(run)
     if run.waiting:
         approvals(run)
