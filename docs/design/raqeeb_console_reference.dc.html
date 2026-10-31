@@ -1,0 +1,611 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#f6f2ea;font-family:'IBM Plex Sans',system-ui,sans-serif;color:#1d1f22;-webkit-font-smoothing:antialiased}
+a{color:#8a4b00}a:hover{color:#5c3200}
+*{box-sizing:border-box}
+</style>
+</helmet>
+<div style="display:grid;grid-template-columns:248px minmax(0,1fr);min-height:100vh;max-width:1366px;margin:0 auto;background:#f6f2ea">
+
+  <aside style="background-color:#efe9dc;background-image:linear-gradient(rgba(27,47,74,0.045) 1px,transparent 1px),linear-gradient(90deg,rgba(27,47,74,0.045) 1px,transparent 1px);background-size:22px 22px;border-right:1px solid #dedad2;display:flex;flex-direction:column;padding:18px 14px;gap:18px;position:sticky;top:0;height:100vh">
+    <div style="display:flex;align-items:center;gap:10px;padding:4px 8px">
+      <div style="width:32px;height:32px;border-radius:8px;background:#1b2f4a;position:relative;overflow:hidden;flex:none"><div style="position:absolute;left:8px;top:7px;width:16px;height:16px;border-radius:50%;background:#e8a33d"></div><div style="position:absolute;left:0;right:0;top:15px;bottom:0;background:#1b2f4a"></div><div style="position:absolute;left:5px;right:5px;top:17px;height:2px;background:#8fa6c4"></div><div style="position:absolute;left:5px;right:5px;top:21px;height:2px;background:#8fa6c4"></div><div style="position:absolute;left:5px;right:5px;top:25px;height:2px;background:#8fa6c4"></div></div>
+      <div style="display:flex;flex-direction:column">
+        <span style="font-weight:700;font-size:16px;letter-spacing:-0.01em">Raqeeb</span>
+        <span style="font-size:12px;color:#5d5f63">Solar plant console</span>
+      </div>
+    </div>
+
+    <nav style="display:flex;flex-direction:column;gap:2px">
+      <span style="font-size:11px;font-weight:600;color:#6b6d71;text-transform:uppercase;letter-spacing:0.06em;padding:6px 10px">The incident</span>
+      <sc-for list="{{ navMain }}" as="n" hint-placeholder-count="4">
+        <button onClick="{{ n.go }}" style="display:flex;align-items:center;gap:10px;padding:9px 10px;border:0;border-radius:8px;background:{{ n.bg }};color:#1d1f22;font:inherit;font-size:14px;font-weight:{{ n.weight }};text-align:left;cursor:pointer" style-hover="background:#e3e0d9">
+          <span style="width:22px;height:22px;border-radius:6px;background:{{ n.iconBg }};color:{{ n.iconFg }};display:grid;place-items:center;font-size:11px;font-weight:700;font-family:'IBM Plex Mono',monospace">{{ n.key }}</span>
+          <span style="display:flex;flex-direction:column;gap:1px">
+            <span>{{ n.label }}</span>
+            <span style="font-size:12px;color:#5d5f63;font-weight:400">{{ n.hint }}</span>
+          </span>
+        </button>
+      </sc-for>
+      <span style="font-size:11px;font-weight:600;color:#6b6d71;text-transform:uppercase;letter-spacing:0.06em;padding:14px 10px 6px">For judges</span>
+      <sc-for list="{{ navJudge }}" as="n" hint-placeholder-count="2">
+        <button onClick="{{ n.go }}" style="display:flex;align-items:center;gap:10px;padding:9px 10px;border:0;border-radius:8px;background:{{ n.bg }};color:#1d1f22;font:inherit;font-size:14px;font-weight:{{ n.weight }};text-align:left;cursor:pointer" style-hover="background:#e3e0d9">
+          <span style="width:22px;height:22px;border-radius:6px;background:{{ n.iconBg }};color:{{ n.iconFg }};display:grid;place-items:center;font-size:11px;font-weight:700;font-family:'IBM Plex Mono',monospace">{{ n.key }}</span>
+          <span style="display:flex;flex-direction:column;gap:1px">
+            <span>{{ n.label }}</span>
+            <span style="font-size:12px;color:#5d5f63;font-weight:400">{{ n.hint }}</span>
+          </span>
+        </button>
+      </sc-for>
+    </nav>
+
+    <div style="margin-top:auto;display:flex;flex-direction:column;gap:8px;padding:12px;border:1px solid #dedad2;border-radius:10px;background:#f6f2ea">
+      <span style="font-size:12px;font-weight:600">Simulated plant</span>
+      <span style="font-size:12px;color:#5d5f63;line-height:1.45">16 inverters, synthetic data. Only the weather is real.</span>
+    </div>
+  </aside>
+
+  <div style="display:flex;flex-direction:column;min-width:0">
+    <header style="position:sticky;top:0;z-index:5;background:rgba(246,242,234,0.94);backdrop-filter:blur(8px);border-bottom:2px solid #e8a33d;padding:12px 32px;display:flex;position:sticky;align-items:center;gap:20px;flex-wrap:wrap">
+      <div style="display:flex;flex-direction:column;gap:2px;flex:1;min-width:180px">
+        <span style="font-size:12px;color:#5d5f63">Storm of 14 June · desert plant (synthetic)</span>
+        <span style="font-size:17px;font-weight:600">{{ pageTitle }}</span>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:4px">
+        <span style="font-size:11px;font-weight:600;color:#5d5f63;text-transform:uppercase;letter-spacing:0.06em;padding-left:4px">Run the agent</span>
+        <button onClick="{{ toggleRun }}" style="display:flex;align-items:center;gap:8px;border:1px solid #1b2f4a;background:#fff;color:#1d1f22;border-radius:999px;padding:7px 14px;font:inherit;font-size:13px;font-weight:600;cursor:pointer">
+          <span style="width:8px;height:8px;border-radius:50%;background:{{ runDot }}"></span>{{ runLabel }}<span style="color:#5d5f63;font-weight:500">· Change</span>
+        </button>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;background:#fff;border:1px solid #dedad2;border-radius:999px;padding:5px 6px 5px 14px">
+        <span style="font-size:12px;color:#5d5f63">Sim time</span>
+        <span style="font-family:'IBM Plex Mono',monospace;font-size:13px;font-weight:500">{{ clock }}</span>
+        <div style="width:140px;height:4px;background:#e6e3dc;border-radius:2px;position:relative">
+          <div style="position:absolute;left:0;top:0;bottom:0;width:{{ progress }};background:#e8a33d;border-radius:2px"></div>
+        </div>
+        <button onClick="{{ step }}" style="border:0;background:#f1efea;color:#1d1f22;border-radius:999px;padding:7px 11px;font:inherit;font-size:13px;font-weight:600;cursor:pointer">Step</button>
+        <button onClick="{{ toEnd }}" style="border:0;background:#f1efea;color:#1d1f22;border-radius:999px;padding:7px 11px;font:inherit;font-size:13px;font-weight:600;cursor:pointer">To end</button>
+        <button onClick="{{ togglePlay }}" style="border:0;background:#1b2f4a;color:#fff;border-radius:999px;padding:7px 14px;font:inherit;font-size:13px;font-weight:600;cursor:pointer">{{ playLabel }}</button>
+      </div>
+      <sc-if value="{{ runOpen }}" hint-placeholder-val="{{ false }}">
+        <div style="position:absolute;top:calc(100% + 8px);right:32px;width:440px;max-width:calc(100vw - 48px);background:#fff;border:1px solid #dedad2;border-radius:14px;box-shadow:0 18px 50px rgba(27,47,74,0.16);padding:20px;display:flex;flex-direction:column;gap:16px;z-index:30;max-height:calc(100vh - 110px);overflow:auto">
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <span style="font-size:17px;font-weight:600">Run the agent</span>
+            <button onClick="{{ toggleRun }}" style="border:0;background:#f1efea;border-radius:8px;width:30px;height:30px;font-size:16px;cursor:pointer;color:#1d1f22">×</button>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:8px">
+            <span style="font-size:13px;font-weight:600;color:#5d5f63">Mode</span>
+            <sc-for list="{{ modes }}" as="m" hint-placeholder-count="3">
+              <button onClick="{{ m.pick }}" style="text-align:left;display:grid;grid-template-columns:18px minmax(0,1fr);gap:10px;border:{{ m.border }};background:{{ m.bg }};border-radius:10px;padding:11px 12px;font:inherit;color:#1d1f22;cursor:pointer">
+                <span style="width:16px;height:16px;border-radius:50%;border:2px solid #1d1f22;display:grid;place-items:center;margin-top:2px"><span style="width:8px;height:8px;border-radius:50%;background:{{ m.dot }}"></span></span>
+                <span style="display:flex;flex-direction:column;gap:3px;min-width:0">
+                  <span style="font-size:14px;font-weight:600">{{ m.label }}</span>
+                  <span style="font-size:13px;color:#5d5f63;line-height:1.45">{{ m.hint }}</span>
+                  <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#5d5f63;word-break:break-all">{{ m.detail }}</span>
+                </span>
+              </button>
+            </sc-for>
+          </div>
+          <sc-if value="{{ isReplay }}" hint-placeholder-val="{{ true }}">
+            <div style="display:flex;flex-direction:column;gap:8px">
+              <span style="font-size:13px;font-weight:600;color:#5d5f63">Recorded run</span>
+              <div style="display:flex;gap:8px">
+                <select style="flex:1;min-width:0;border:1px solid #dedad2;border-radius:10px;padding:9px 10px;font:inherit;font-size:14px;background:#faf9f6;color:#1d1f22">
+                  <option>Storm run fin_0029 (frozen record)</option>
+                </select>
+                <button onClick="{{ loadRun }}" style="border:0;background:#1b2f4a;color:#fff;border-radius:10px;padding:0 16px;font:inherit;font-size:14px;font-weight:600;cursor:pointer">Load</button>
+              </div>
+              <div style="display:flex;align-items:center;gap:10px;border:1px dashed #c9c5bc;border-radius:10px;padding:10px 12px">
+                <span style="flex:1;font-size:13px;color:#3d3f43">Or upload a replay file (.json, up to 20 MB)</span>
+                <button style="border:1px solid #c9c5bc;background:#fff;color:#1d1f22;border-radius:8px;padding:7px 12px;font:inherit;font-size:13px;font-weight:600;cursor:pointer">Upload</button>
+              </div>
+            </div>
+          </sc-if>
+          <sc-if value="{{ isModelMode }}" hint-placeholder-val="{{ false }}">
+            <div style="display:flex;flex-direction:column;gap:10px">
+              <span style="font-size:13px;font-weight:600;color:#5d5f63">Language model</span>
+              <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px">
+                <sc-for list="{{ providers }}" as="p" hint-placeholder-count="4">
+                  <button onClick="{{ p.pick }}" style="border:{{ p.border }};background:{{ p.bg }};color:{{ p.fg }};border-radius:8px;padding:8px 4px;font:inherit;font-size:13px;font-weight:{{ p.weight }};cursor:pointer;white-space:nowrap">{{ p.label }}</button>
+                </sc-for>
+              </div>
+              <sc-if value="{{ isCloud }}" hint-placeholder-val="{{ true }}">
+                <div style="display:flex;flex-direction:column;gap:8px">
+                  <label style="display:flex;flex-direction:column;gap:4px;font-size:13px;color:#3d3f43">Model
+                    <select style="border:1px solid #dedad2;border-radius:10px;padding:9px 10px;font:inherit;font-size:14px;background:#faf9f6;color:#1d1f22">
+                      <option>{{ prov.model }}</option>
+                    </select>
+                  </label>
+                  <label style="display:flex;flex-direction:column;gap:4px;font-size:13px;color:#3d3f43">API key
+                    <input type="password" placeholder="{{ prov.keyHint }}" style="border:1px solid #dedad2;border-radius:10px;padding:9px 10px;font:inherit;font-size:14px;background:#faf9f6;color:#1d1f22">
+                  </label>
+                </div>
+              </sc-if>
+              <sc-if value="{{ isLocal }}" hint-placeholder-val="{{ false }}">
+                <div style="display:flex;flex-direction:column;gap:8px">
+                  <label style="display:flex;flex-direction:column;gap:4px;font-size:13px;color:#3d3f43">Endpoint
+                    <input placeholder="http://localhost:8080/v1" style="border:1px solid #dedad2;border-radius:10px;padding:9px 10px;font-family:'IBM Plex Mono',monospace;font-size:13px;background:#faf9f6;color:#1d1f22">
+                  </label>
+                  <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#5d5f63;word-break:break-all">Found: /home/accy/models/gguf/…/Qwen3.8-27B-ATX-4-XS.gguf</span>
+                </div>
+              </sc-if>
+              <span style="display:flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:{{ prov.envFg }}"><span style="width:8px;height:8px;border-radius:50%;background:{{ prov.envDot }}"></span>{{ prov.envNote }}</span>
+            </div>
+          </sc-if>
+          <sc-if value="{{ isLive }}" hint-placeholder-val="{{ false }}">
+            <div style="display:flex;flex-direction:column;gap:8px">
+              <span style="font-size:13px;font-weight:600;color:#5d5f63">Scenario</span>
+              <select style="border:1px solid #dedad2;border-radius:10px;padding:9px 10px;font:inherit;font-size:14px;background:#faf9f6;color:#1d1f22">
+                <option>Practice set 3 (scn_0003)</option>
+              </select>
+              <div style="display:flex;gap:8px">
+                <button onClick="{{ loadRun }}" style="flex:1;border:0;background:#1b2f4a;color:#fff;border-radius:10px;padding:11px 12px;font:inherit;font-size:14px;font-weight:600;cursor:pointer">Start live run</button>
+                <button onClick="{{ loadRun }}" style="flex:1;border:1px solid #c9c5bc;background:#fff;color:#1d1f22;border-radius:10px;padding:11px 12px;font:inherit;font-size:14px;font-weight:600;cursor:pointer">Dust storm + 2 random faults</button>
+              </div>
+              <span style="font-size:12px;color:#5d5f63;line-height:1.45">Faults are planted in the synthetic plant. The agent sees only the readings.</span>
+            </div>
+          </sc-if>
+          <div style="display:flex;flex-direction:column;gap:8px;padding-top:14px;border-top:1px solid #ece9e3">
+            <div style="display:flex;justify-content:space-between"><span style="font-size:13px;font-weight:600;color:#5d5f63">Playback speed</span><span style="font-size:13px;font-weight:600;font-variant-numeric:tabular-nums">{{ speedLabel }}</span></div>
+            <input type="range" min="5" max="60" step="5" value="{{ speed }}" onChange="{{ onSpeed }}" style="width:100%;accent-color:#1d1f22">
+          </div>
+        </div>
+      </sc-if>
+      <button onClick="{{ goApproval }}" style="display:flex;align-items:center;gap:8px;border:1px solid #c9822a;background:#fdf1de;color:#5c3200;border-radius:999px;padding:7px 14px;font:inherit;font-size:13px;font-weight:600;cursor:pointer">
+        <span style="width:8px;height:8px;border-radius:50%;background:#c9822a"></span>1 action needs your approval
+      </button>
+    </header>
+
+    <main style="padding:32px;display:flex;flex-direction:column;gap:28px;max-width:1080px;width:100%">
+
+      <sc-if value="{{ isSummary }}" hint-placeholder-val="{{ true }}">
+        <section style="display:flex;flex-direction:column;gap:14px">
+          <span style="font-size:13px;font-weight:600;color:#8a4b00">What happened</span>
+          <h1 style="margin:0;font-size:34px;line-height:1.15;letter-spacing:-0.02em;font-weight:700;max-width:820px;text-wrap:pretty">The plant looked healthy, but it was losing a fifth of its energy.</h1>
+          <p style="margin:0;font-size:17px;line-height:1.55;color:#3d3f43;max-width:760px;text-wrap:pretty">A sandstorm hit four problems at once. The sun sensor got dusty too, so the usual health check compared dusty panels against a dusty sensor and called it normal. Raqeeb found the real causes from the data alone, fixed what was safe, and is waiting for you on one risky step.</p>
+        </section>
+
+        <section style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px">
+          <sc-for list="{{ stats }}" as="s" hint-placeholder-count="4">
+            <div style="background:#fff;border:1px solid #dedad2;border-radius:12px;padding:16px;display:flex;flex-direction:column;gap:6px">
+              <span style="font-size:13px;color:#5d5f63">{{ s.label }}</span>
+              <span style="font-size:28px;font-weight:600;letter-spacing:-0.02em;font-variant-numeric:tabular-nums">{{ s.value }}</span>
+              <span style="display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:{{ s.fg }}"><span style="width:8px;height:8px;border-radius:50%;background:{{ s.dot }}"></span>{{ s.state }}</span>
+            </div>
+          </sc-for>
+        </section>
+
+        <section style="display:flex;flex-direction:column;gap:12px">
+          <div style="display:flex;align-items:baseline;justify-content:space-between">
+            <h2 style="margin:0;font-size:18px;font-weight:600">The story in four steps</h2>
+            <button onClick="{{ goTrace }}" style="border:0;background:none;color:#8a4b00;font:inherit;font-size:14px;font-weight:600;cursor:pointer">See every step in Trace →</button>
+          </div>
+          <ol style="list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px">
+            <sc-for list="{{ story }}" as="st" hint-placeholder-count="4">
+              <li style="background:#fff;border:1px solid #dedad2;border-radius:12px;padding:16px;display:flex;flex-direction:column;gap:8px">
+                <span style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:#5d5f63">{{ st.time }}</span>
+                <span style="font-size:15px;font-weight:600">{{ st.title }}</span>
+                <span style="font-size:14px;line-height:1.5;color:#3d3f43">{{ st.body }}</span>
+              </li>
+            </sc-for>
+          </ol>
+        </section>
+
+        <section id="approval" style="background:#fff;border:1.5px solid #c9822a;border-radius:14px;padding:22px;display:flex;flex-direction:column;gap:14px">
+          <div style="display:flex;align-items:center;gap:10px">
+            <span style="font-size:12px;font-weight:600;background:#fdf1de;color:#5c3200;padding:4px 10px;border-radius:999px">{{ approvalState }}</span>
+            <span style="font-size:13px;color:#5d5f63">Step 3 of 4 · risky action</span>
+          </div>
+          <h2 style="margin:0;font-size:20px;font-weight:600">Lower inverter 7's output to stop it overheating?</h2>
+          <p style="margin:0;font-size:15px;line-height:1.55;color:#3d3f43;max-width:720px">Inverter 7 is at 78 °C and climbing. Lowering its output to 60 % cools it within about 20 minutes and costs roughly 1.2 % of today's energy. Raqeeb will check that it recovered.</p>
+          <div style="display:flex;gap:10px;flex-wrap:wrap">
+            <button onClick="{{ approve }}" style="border:0;background:#1b2f4a;color:#fff;border-radius:8px;padding:10px 18px;font:inherit;font-size:14px;font-weight:600;cursor:pointer">Approve</button>
+            <button onClick="{{ decline }}" style="border:1px solid #c9c5bc;background:#fff;color:#1d1f22;border-radius:8px;padding:10px 18px;font:inherit;font-size:14px;font-weight:600;cursor:pointer">Not now</button>
+            <button onClick="{{ openChatAboutApproval }}" style="border:0;background:none;color:#8a4b00;font:inherit;font-size:14px;font-weight:600;cursor:pointer">Ask Raqeeb why</button>
+          </div>
+        </section>
+      </sc-if>
+
+      <sc-if value="{{ isTrace }}" hint-placeholder-val="{{ false }}">
+        <section style="display:flex;flex-direction:column;gap:6px">
+          <h1 style="margin:0;font-size:26px;font-weight:700;letter-spacing:-0.02em">How Raqeeb worked it out</h1>
+          <p style="margin:0;font-size:15px;color:#3d3f43">Every decision, in order. Open “Show data” on any step to see the raw record.</p>
+        </section>
+        <div style="display:flex;flex-direction:column;gap:12px">
+          <sc-for list="{{ story }}" as="st" hint-placeholder-count="4">
+            <article style="background:#fff;border:1px solid #dedad2;border-radius:12px;padding:18px 20px;display:grid;grid-template-columns:90px minmax(0,1fr);gap:16px">
+              <span style="font-family:'IBM Plex Mono',monospace;font-size:13px;color:#5d5f63;padding-top:2px">{{ st.time }}</span>
+              <div style="display:flex;flex-direction:column;gap:8px">
+                <span style="font-size:16px;font-weight:600">{{ st.title }}</span>
+                <span style="font-size:15px;line-height:1.55;color:#3d3f43">{{ st.body }}</span>
+                <span style="font-size:13px;font-weight:600;color:#8a4b00">Show data</span>
+              </div>
+            </article>
+          </sc-for>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ isOther }}" hint-placeholder-val="{{ false }}">
+        <section style="display:flex;flex-direction:column;gap:6px">
+          <h1 style="margin:0;font-size:26px;font-weight:700;letter-spacing:-0.02em">{{ pageTitle }}</h1>
+          <p style="margin:0;font-size:15px;color:#3d3f43">{{ pageIntro }}</p>
+        </section>
+      </sc-if>
+
+      <sc-if value="{{ isPlant }}" hint-placeholder-val="{{ false }}">
+        <section style="background:#fff;border:1px solid #dedad2;border-radius:14px;padding:20px;display:flex;flex-direction:column;gap:12px">
+          <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px">
+            <h2 style="margin:0;font-size:18px;font-weight:600">Sun and wind</h2>
+            <span style="font-size:13px;color:#5d5f63">Real weather record, 06:00 to 18:00</span>
+          </div>
+          <svg viewBox="0 0 800 130" style="width:100%;height:auto;display:block">
+            <line x1="40" y1="110" x2="790" y2="110" stroke="#dedad2"></line>
+            <line x1="40" y1="{{ wx.stowY }}" x2="790" y2="{{ wx.stowY }}" stroke="#9a2420" stroke-dasharray="4 4"></line>
+            <text x="786" y="{{ wx.stowLabelY }}" text-anchor="end" font-size="13" fill="#9a2420" font-family="IBM Plex Sans" font-weight="600">Stow limit 15 m/s</text>
+            <defs><linearGradient id="sunfill" x1="0" x2="1" y1="0" y2="0"><stop offset="0" stop-color="#fbf3e2"></stop><stop offset="0.5" stop-color="#f7dca6"></stop><stop offset="1" stop-color="#fbf3e2"></stop></linearGradient></defs><path d="{{ wx.sunArea }}" fill="url(#sunfill)" stroke="#c9822a" stroke-width="2"></path>
+            <path d="{{ wx.wind }}" fill="none" stroke="#1b2f4a" stroke-width="2.5"></path>
+            <line x1="{{ wx.nowX }}" y1="10" x2="{{ wx.nowX }}" y2="110" stroke="#e8a33d" stroke-width="2"></line>
+            <text x="40" y="126" font-size="12" fill="#5d5f63" font-family="IBM Plex Mono">06:00</text>
+            <text x="415" y="126" text-anchor="middle" font-size="12" fill="#5d5f63" font-family="IBM Plex Mono">12:00</text>
+            <text x="790" y="126" text-anchor="end" font-size="12" fill="#5d5f63" font-family="IBM Plex Mono">18:00</text>
+          </svg>
+          <div style="display:flex;gap:24px;flex-wrap:wrap">
+            <span style="display:flex;gap:8px;align-items:center;font-size:13px;color:#3d3f43"><span style="width:18px;height:10px;background:#fdf1de;border:2px solid #c9822a;border-radius:2px"></span><strong style="color:#1d1f22">Sun height</strong> {{ wx.sunNow }}</span>
+            <span style="display:flex;gap:8px;align-items:center;font-size:13px;color:#3d3f43"><span style="width:18px;height:3px;background:#1b2f4a"></span><strong style="color:#1d1f22">Wind on site</strong> {{ wx.windNow }}</span>
+            <span style="font-size:13px;color:#3d3f43">Above the dashed line, panels must be turned flat to protect them.</span>
+          </div>
+        </section>
+
+        <section style="background:#fff;border:1px solid #dedad2;border-radius:14px;padding:20px;display:flex;flex-direction:column;gap:14px">
+          <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px">
+            <h2 style="margin:0;font-size:18px;font-weight:600">Plant output today</h2>
+            <span style="font-size:13px;color:#5d5f63">Megawatts, 06:00 to 14:00</span>
+          </div>
+          <svg viewBox="0 0 800 240" style="width:100%;height:auto;display:block">
+            <line x1="40" y1="200" x2="790" y2="200" stroke="#dedad2"></line>
+            <line x1="40" y1="120" x2="790" y2="120" stroke="#ece9e3"></line>
+            <line x1="40" y1="40" x2="790" y2="40" stroke="#ece9e3"></line>
+            <text x="0" y="204" font-size="12" fill="#5d5f63" font-family="IBM Plex Mono">0</text>
+            <text x="0" y="124" font-size="12" fill="#5d5f63" font-family="IBM Plex Mono">6</text>
+            <text x="0" y="44" font-size="12" fill="#5d5f63" font-family="IBM Plex Mono">12</text>
+            <rect x="{{ chart.gapX }}" y="20" width="{{ chart.gapW }}" height="180" fill="#fbe7e5"></rect>
+            <path d="{{ chart.sat }}" fill="none" stroke="#1f6b3a" stroke-width="2.5" stroke-dasharray="6 5"></path>
+            <path d="{{ chart.actual }}" fill="none" stroke="#1b2f4a" stroke-width="3"></path>
+            <path d="{{ chart.sensor }}" fill="none" stroke="#c9822a" stroke-width="3.5" stroke-dasharray="3 5" stroke-linecap="round"></path>
+            <text x="{{ chart.gapLabelX }}" y="38" font-size="18" fill="#9a2420" font-weight="600" font-family="IBM Plex Sans">21 % lost to dust</text>
+            <line x1="{{ chart.nowX }}" y1="20" x2="{{ chart.nowX }}" y2="200" stroke="#e8a33d" stroke-width="2"></line>
+          </svg>
+          <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px">
+            <div style="display:flex;gap:10px;align-items:flex-start"><span style="width:24px;height:3px;background:#1b2f4a;margin-top:9px;flex:none"></span><span style="font-size:13px;line-height:1.5;color:#3d3f43"><strong style="color:#1d1f22">Actual output.</strong> What the plant really produced.</span></div>
+            <div style="display:flex;gap:10px;align-items:flex-start"><span style="width:24px;border-top:3px dotted #c9822a;margin-top:8px;flex:none"></span><span style="font-size:13px;line-height:1.5;color:#3d3f43"><strong style="color:#1d1f22">Expected, from the plant's sun sensor.</strong> The sensor is dusty too, so this line follows the actual one and hides the loss.</span></div>
+            <div style="display:flex;gap:10px;align-items:flex-start"><span style="width:24px;border-top:3px dashed #1f6b3a;margin-top:8px;flex:none"></span><span style="font-size:13px;line-height:1.5;color:#3d3f43"><strong style="color:#1d1f22">Expected, from satellite weather.</strong> Not affected by dust. The gap to this line is the real loss.</span></div>
+          </div>
+        </section>
+
+
+        <section style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,460px),1fr));gap:16px;align-items:start">
+          <div style="background:#fff;border:1px solid #dedad2;border-radius:14px;padding:20px;display:flex;flex-direction:column;gap:16px">
+            <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px">
+              <h2 style="margin:0;font-size:18px;font-weight:600">Plant map</h2>
+              <span style="font-size:13px;color:#5d5f63">Laid out as on site. Select an inverter for detail.</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:10px;background:#faf9f6;border:1px solid #ece9e3">
+              <span style="font-size:13px;font-weight:600">Plant-wide</span>
+              <span style="font-size:13px;color:#3d3f43">{{ plantWide }}</span>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:8px">
+              <sc-for list="{{ mapRows }}" as="r" hint-placeholder-count="4">
+                <div style="display:grid;grid-template-columns:44px minmax(0,1fr);gap:8px;align-items:stretch">
+                  <span style="font-size:13px;font-weight:600;color:#5d5f63;align-self:center">{{ r.label }}</span>
+                  <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px">
+                    <sc-for list="{{ r.tiles }}" as="v" hint-placeholder-count="4">
+                      <button onClick="{{ v.pick }}" style="text-align:left;border:{{ v.border }};background:{{ v.bg }};border-radius:10px;padding:10px 11px;font:inherit;color:#1d1f22;cursor:pointer;display:flex;flex-direction:column;gap:5px;min-height:84px;min-width:0">
+                        <span style="font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ v.name }}</span>
+                        <span style="font-size:19px;font-weight:600;font-variant-numeric:tabular-nums;letter-spacing:-0.01em;white-space:nowrap">{{ v.out }}</span>
+                        <span style="display:flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:{{ v.fg }};min-width:0"><span style="width:8px;height:8px;border-radius:50%;background:{{ v.dot }};flex:none"></span><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ v.state }}</span></span>
+                      </button>
+                    </sc-for>
+                  </div>
+                </div>
+              </sc-for>
+            </div>
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;padding-top:12px;border-top:1px solid #ece9e3">
+              <sc-for list="{{ siteGear }}" as="g" hint-placeholder-count="3">
+                <div style="border:1px dashed #c9c5bc;border-radius:10px;padding:10px 11px;display:flex;flex-direction:column;gap:5px">
+                  <span style="font-size:13px;font-weight:600">{{ g.name }}</span>
+                  <span style="font-size:13px;color:#3d3f43">{{ g.reading }}</span>
+                  <span style="display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:{{ g.fg }}"><span style="width:8px;height:8px;border-radius:50%;background:{{ g.dot }};flex:none"></span>{{ g.state }}</span>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+          <div style="background:#fff;border:1px solid #dedad2;border-radius:14px;padding:20px;display:flex;flex-direction:column;gap:14px;position:sticky;top:90px">
+            <span style="font-size:13px;color:#5d5f63">Selected</span>
+            <h2 style="margin:0;font-size:22px;font-weight:600">{{ sel.name }}</h2>
+            <span style="display:inline-flex;align-items:center;gap:8px;font-size:14px;font-weight:600;color:{{ sel.fg }}"><span style="width:10px;height:10px;border-radius:50%;background:{{ sel.dot }}"></span>{{ sel.state }}</span>
+            <p style="margin:0;font-size:14px;line-height:1.55;color:#3d3f43">{{ sel.note }}</p>
+            <dl style="margin:0;display:grid;grid-template-columns:auto 1fr;gap:8px 16px;font-size:14px">
+              <dt style="color:#5d5f63">Output</dt><dd style="margin:0;font-weight:600;font-variant-numeric:tabular-nums">{{ sel.out }} of expected</dd>
+              <dt style="color:#5d5f63">Temperature</dt><dd style="margin:0;font-weight:600;font-variant-numeric:tabular-nums">{{ sel.temp }}</dd>
+              <dt style="color:#5d5f63">Data link</dt><dd style="margin:0;font-weight:600">{{ sel.link }}</dd>
+            </dl>
+            <span style="font-size:13px;font-weight:600;color:#8a4b00">Show data</span>
+          </div>
+        </section>
+      </sc-if>
+
+      <sc-if value="{{ isAgent }}" hint-placeholder-val="{{ false }}">
+        <section style="background:#fff;border:1px solid #dedad2;border-radius:14px;overflow:hidden">
+          <table style="width:100%;border-collapse:collapse;font-size:14px">
+            <thead>
+              <tr style="background:#faf9f6;text-align:left">
+                <th style="padding:12px 16px;font-weight:600;color:#5d5f63;font-size:13px">Time</th>
+                <th style="padding:12px 16px;font-weight:600;color:#5d5f63;font-size:13px">Action</th>
+                <th style="padding:12px 16px;font-weight:600;color:#5d5f63;font-size:13px">Who decided</th>
+                <th style="padding:12px 16px;font-weight:600;color:#5d5f63;font-size:13px">Result</th>
+              </tr>
+            </thead>
+            <tbody>
+              <sc-for list="{{ actions }}" as="a" hint-placeholder-count="4">
+                <tr style="border-top:1px solid #ece9e3">
+                  <td style="padding:14px 16px;font-family:'IBM Plex Mono',monospace;font-size:13px;color:#5d5f63;vertical-align:top">{{ a.time }}</td>
+                  <td style="padding:14px 16px;vertical-align:top"><span style="font-weight:600">{{ a.what }}</span><br><span style="color:#5d5f63;font-size:13px">{{ a.why }}</span></td>
+                  <td style="padding:14px 16px;vertical-align:top">{{ a.who }}</td>
+                  <td style="padding:14px 16px;vertical-align:top"><span style="display:inline-flex;align-items:center;gap:6px;font-size:13px;font-weight:600;color:{{ a.fg }}"><span style="width:8px;height:8px;border-radius:50%;background:{{ a.dot }}"></span>{{ a.result }}</span></td>
+                </tr>
+              </sc-for>
+            </tbody>
+          </table>
+        </section>
+      </sc-if>
+
+      <sc-if value="{{ isReport }}" hint-placeholder-val="{{ false }}">
+        <article style="background:#fff;border:1px solid #dedad2;border-radius:14px;padding:32px 36px;display:flex;flex-direction:column;gap:16px;max-width:760px">
+          <span style="font-size:13px;color:#5d5f63">To: plant manager · Shift ending 14:00 · synthetic plant</span>
+          <h2 style="margin:0;font-size:22px;font-weight:600">Storm shift: four faults, three fixed, one waiting on you</h2>
+          <p style="margin:0;font-size:15px;line-height:1.6;color:#3d3f43">Dust cut output by about 21 % while the usual health check read normal, because the sun sensor was dusty as well. Cleaning is recommended for rows B and C and the sun sensor.</p>
+          <p style="margin:0;font-size:15px;line-height:1.6;color:#3d3f43">Inverter 7 overheated to 78 °C. Raqeeb proposed lowering its output to 60 % and is waiting for approval. The data link to inverter 12 was reset and has been stable since 08:30.</p>
+          <div style="display:flex;gap:10px"><button onClick="{{ goApproval }}" style="border:0;background:#1b2f4a;color:#fff;border-radius:8px;padding:10px 18px;font:inherit;font-size:14px;font-weight:600;cursor:pointer">Review the approval</button></div>
+        </article>
+      </sc-if>
+
+      <sc-if value="{{ isJudge }}" hint-placeholder-val="{{ false }}">
+        <section style="background:#fff;border:1px solid #dedad2;border-radius:14px;overflow:hidden">
+          <table style="width:100%;border-collapse:collapse;font-size:14px">
+            <thead>
+              <tr style="background:#faf9f6;text-align:left">
+                <th style="padding:12px 16px;font-weight:600;color:#5d5f63;font-size:13px">Fault we injected</th>
+                <th style="padding:12px 16px;font-weight:600;color:#5d5f63;font-size:13px">What Raqeeb concluded</th>
+                <th style="padding:12px 16px;font-weight:600;color:#5d5f63;font-size:13px">Match</th>
+              </tr>
+            </thead>
+            <tbody>
+              <sc-for list="{{ judge }}" as="j" hint-placeholder-count="4">
+                <tr style="border-top:1px solid #ece9e3">
+                  <td style="padding:14px 16px;font-weight:600;vertical-align:top">{{ j.fault }}</td>
+                  <td style="padding:14px 16px;color:#3d3f43;vertical-align:top">{{ j.found }}</td>
+                  <td style="padding:14px 16px;vertical-align:top"><span style="display:inline-flex;align-items:center;gap:6px;font-size:13px;font-weight:600;color:#1f6b3a"><span style="width:8px;height:8px;border-radius:50%;background:#2e9b56"></span>Correct</span></td>
+                </tr>
+              </sc-for>
+            </tbody>
+          </table>
+        </section>
+      </sc-if>
+    </main>
+  </div>
+</div>
+
+<sc-if value="{{ chatOpen }}" hint-placeholder-val="{{ false }}">
+  <div style="position:fixed;right:24px;bottom:96px;width:380px;max-width:calc(100vw - 48px);height:540px;max-height:calc(100vh - 140px);background:#fff;border:1px solid #dedad2;border-radius:16px;box-shadow:0 18px 50px rgba(27,47,74,0.18);display:flex;flex-direction:column;overflow:hidden;z-index:20">
+    <div style="padding:14px 16px;border-bottom:1px solid #ece9e3;display:flex;align-items:center;gap:10px">
+      <div style="width:32px;height:32px;border-radius:8px;background:#1b2f4a;position:relative;overflow:hidden;flex:none"><div style="position:absolute;left:8px;top:7px;width:16px;height:16px;border-radius:50%;background:#e8a33d"></div><div style="position:absolute;left:0;right:0;top:15px;bottom:0;background:#1b2f4a"></div><div style="position:absolute;left:5px;right:5px;top:17px;height:2px;background:#8fa6c4"></div><div style="position:absolute;left:5px;right:5px;top:21px;height:2px;background:#8fa6c4"></div><div style="position:absolute;left:5px;right:5px;top:25px;height:2px;background:#8fa6c4"></div></div>
+      <div style="display:flex;flex-direction:column;flex:1">
+        <span style="font-weight:600;font-size:15px">Ask Raqeeb</span>
+        <span style="font-size:12px;color:#5d5f63">Answers from this incident's record only</span>
+      </div>
+      <button onClick="{{ toggleChat }}" style="border:0;background:#f1efea;border-radius:8px;width:30px;height:30px;font-size:16px;cursor:pointer;color:#1d1f22">×</button>
+    </div>
+    <div style="flex:1;overflow:auto;padding:16px;display:flex;flex-direction:column;gap:10px">
+      <sc-for list="{{ messages }}" as="m" hint-placeholder-count="1">
+        <div style="align-self:{{ m.align }};max-width:85%;background:{{ m.bg }};color:{{ m.fg }};padding:10px 13px;border-radius:12px;font-size:14px;line-height:1.5">{{ m.text }}</div>
+      </sc-for>
+      <sc-if value="{{ showSuggestions }}" hint-placeholder-val="{{ true }}">
+        <div style="display:flex;flex-direction:column;gap:6px;margin-top:4px">
+          <sc-for list="{{ suggestions }}" as="q" hint-placeholder-count="3">
+            <button onClick="{{ q.ask }}" style="text-align:left;border:1px solid #dedad2;background:#faf9f6;border-radius:10px;padding:9px 12px;font:inherit;font-size:13px;color:#1d1f22;cursor:pointer" style-hover="background:#f1efea">{{ q.text }}</button>
+          </sc-for>
+        </div>
+      </sc-if>
+    </div>
+    <div style="padding:12px;border-top:1px solid #ece9e3;display:flex;gap:8px">
+      <input value="{{ draft }}" onChange="{{ onDraft }}" onKeyDown="{{ onKey }}" placeholder="Ask about this incident" style="flex:1;border:1px solid #dedad2;border-radius:10px;padding:10px 12px;font:inherit;font-size:14px;outline:none;background:#faf9f6">
+      <button onClick="{{ send }}" style="border:0;background:#1b2f4a;color:#fff;border-radius:10px;padding:0 14px;font:inherit;font-size:14px;font-weight:600;cursor:pointer">Send</button>
+    </div>
+  </div>
+</sc-if>
+
+<button onClick="{{ toggleChat }}" style="position:fixed;right:24px;bottom:24px;z-index:21;display:flex;align-items:center;gap:10px;border:0;background:#1b2f4a;color:#fff;border-radius:999px;padding:12px 18px 12px 12px;font:inherit;font-size:14px;font-weight:600;cursor:pointer;box-shadow:0 10px 30px rgba(27,47,74,0.25)">
+  <span style="width:28px;height:28px;border-radius:50%;background:#e8a33d;color:#1b2f4a;display:grid;place-items:center;font-weight:700">R</span>{{ chatLabel }}
+</button>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  state = { tab: 'plant', chatOpen: false, playing: false, t: 62, approval: 'Waiting for you', draft: '', messages: [{ me: false, text: 'Hi, I can explain anything on this screen. What would you like to know?' }] };
+  pages = {
+    summary: ['Summary', 'What happened', 'S'],
+    trace: ['Trace', 'How it was solved', 'T'],
+    plant: ['Plant', 'Map and inverters', 'P'],
+    agent: ['Agent', 'What Raqeeb did', 'A'],
+    report: ['Report', 'Shift report', 'R'],
+    answer: ['Answer key', 'The faults we injected', 'K'],
+    results: ['Results', 'How well it did', '✓'],
+  };
+  intros = {
+    plant: 'Every inverter and sensor, with its state in words.',
+    agent: 'Each action Raqeeb took, and whether it needed your approval.',
+    report: 'The report a plant manager reads at the end of the shift.',
+    answer: 'The four faults we hid in the simulation, for checking Raqeeb against.',
+    results: 'What Raqeeb found compared with the answer key.',
+  };
+  componentWillUnmount() { clearInterval(this.iv); }
+  togglePlay = () => {
+    if (this.state.playing) { clearInterval(this.iv); this.setState({ playing: false }); return; }
+    this.setState({ playing: true, t: this.state.t >= 100 ? 0 : this.state.t });
+    this.iv = setInterval(() => this.setState(s => s.t >= 100 ? (clearInterval(this.iv), { playing: false }) : { t: s.t + 1 }), 120);
+  };
+  reply(q) {
+    const l = q.toLowerCase();
+    if (l.includes('sensor') || l.includes('normal')) return 'The health check divides panel output by sunlight measured at the sun sensor. Both were dusty, so the ratio looked normal. Raqeeb compared against satellite weather instead and saw a 21 % gap.';
+    if (l.includes('approv') || l.includes('inverter 7') || l.includes('why')) return 'Lowering output is reversible but costs energy, so Raqeeb asks a person first. Inverter 7 is at 78 °C; the safe limit is 75 °C.';
+    if (l.includes('synthetic')) return 'The plant, its inverters and the faults are simulated. Only the weather comes from a real record.';
+    return 'From the record: four faults, three resolved, one waiting on your approval. Try asking about the dusty sensor.';
+  }
+  ask = (q) => {
+    if (!q.trim()) return;
+    this.setState(s => ({ draft: '', chatOpen: true, messages: [...s.messages, { me: true, text: q }, { me: false, text: this.reply(q) }] }));
+  };
+  plantVals(states) {
+    const s = this.state, N = 49;
+    const x = i => 40 + (i / (N - 1)) * 750, y = v => 200 - v * (160 / 12);
+    const sat = [], act = [], sen = [];
+    for (let i = 0; i < N; i++) {
+      const sun = Math.max(0, Math.sin(Math.PI * (i + 4) / 64)) * 11.5;
+      const dust = i < 6 ? 1 : Math.max(0.79, 1 - (i - 6) * 0.03);
+      sat.push(sun); act.push(sun * dust); sen.push(sun * dust * 1.04);
+    }
+    const path = a => a.map((v, i) => (i ? 'L' : 'M') + x(i).toFixed(1) + ' ' + y(v).toFixed(1)).join(' ');
+    const shown = Math.max(2, Math.round(s.t / 100 * (N - 1)) + 1);
+    const cut = a => a.slice(0, shown);
+    const special = { 7: ['bad', 'Overheating', '78 °C', 'Connected', 'Running hot at 78 °C. Lowering output to 60 % is waiting for your approval.'], 12: ['warn', 'Link restored', '52 °C', 'Restored 08:30', 'Lost its data link at 08:20. Raqeeb reset it safely and readings resumed.'] };
+    const dusty = [5, 6, 9, 10, 11, 13, 14];
+    const sel = s.inv || 7;
+    const inverters = Array.from({ length: 16 }, (_, k) => {
+      const n = k + 1;
+      let d = special[n] || (dusty.includes(n) ? ['warn', 'Dusty', '49 °C', 'Connected', 'Dust on the panels. Output is about 21 % below what the weather allows. Cleaning recommended.'] : ['ok', 'Normal', '46 °C', 'Connected', 'Producing what the weather allows.']);
+      const out = n === 7 ? '64 %' : dusty.includes(n) ? '79 %' : n === 12 ? '93 %' : (96 + (n % 4)) + ' %';
+      const on = sel === n;
+      return { name: 'Inverter ' + n, out, state: d[1], fg: states[d[0]][0], dot: states[d[0]][1], temp: d[2], link: d[3], note: d[4],
+        bg: on ? '#faf3e6' : '#fff', border: on ? '2px solid #1b2f4a' : '1px solid #dedad2', pick: () => this.setState({ inv: n }) };
+    });
+    const st = (k) => ({ fg: states[k][0], dot: states[k][1] });
+    const W = 61, wxX = i => 40 + (i / (W - 1)) * 750;
+    const sunV = i => Math.max(0, Math.sin(Math.PI * (i - 3) / 54)) * 45;
+    const windV = i => 6 + 4 * Math.sin(i / 7) + (i > 4 && i < 16 ? 2.5 : 0);
+    const wShown = Math.max(2, Math.round(s.t / 100 * 40 * (W - 1) / 60) + 1);
+    const sy = v => 110 - v * (90 / 50), wy = v => 110 - v * (90 / 22);
+    let sun = 'M40 110', wind = '';
+    for (let i = 0; i < W; i++) sun += ' L' + wxX(i).toFixed(1) + ' ' + sy(sunV(i)).toFixed(1);
+    sun += ' L790 110 Z';
+    for (let i = 0; i < wShown; i++) wind += (i ? ' L' : 'M') + wxX(i).toFixed(1) + ' ' + wy(windV(i)).toFixed(1);
+    const ni = wShown - 1;
+    return {
+      wx: { sunArea: sun, wind, stowY: wy(15), stowLabelY: wy(15) - 5, nowX: wxX(ni), sunNow: Math.round(sunV(ni)) + '°', windNow: windV(ni).toFixed(1) + ' m/s' },
+      plantWide: 'No plant-wide action needed. Wind stays below the stow limit.',
+      mapRows: ['A', 'B', 'C', 'D'].map((r, ri) => ({ label: 'Row ' + r, tiles: inverters.slice(ri * 4, ri * 4 + 4) })),
+      siteGear: [
+        { name: 'Sun sensor', reading: 'Reads 21 % low', state: 'Dusty, not trusted', ...st('bad') },
+        { name: 'Weather station', reading: 'Wind ' + windV(ni).toFixed(1) + ' m/s', state: 'Normal', ...st('ok') },
+        { name: 'Grid connection', reading: 'Exporting', state: 'Normal', ...st('ok') },
+      ],
+      chart: { sat: path(cut(sat)), actual: path(cut(act)), sensor: path(cut(sen)), gapX: x(6), gapW: Math.max(0, x(shown - 1) - x(6)), gapLabelX: x(8), nowX: x(shown - 1) },
+      inverters, sel: inverters[sel - 1],
+      actions: [
+        { time: '07:15', what: 'Flagged dust loss on 7 inverters', why: 'Satellite weather showed 21 % more sun than the plant used.', who: 'Raqeeb, automatically', result: 'Confirmed', ...st('ok') },
+        { time: '07:20', what: 'Marked the sun sensor as unreliable', why: 'Its readings fell with the dusty panels.', who: 'Raqeeb, automatically', result: 'Confirmed', ...st('ok') },
+        { time: '08:02', what: 'Lower inverter 7 output to 60 %', why: 'Temperature 78 °C, above the 75 °C limit.', who: 'Needs a person', result: s.approval, ...st(s.approval === 'Approved' ? 'ok' : 'warn') },
+        { time: '08:30', what: 'Reset data link to inverter 12', why: 'No readings for 10 minutes.', who: 'Raqeeb, automatically', result: 'Recovered', ...st('ok') },
+      ],
+      judge: [
+        { fault: 'Dusty panels, rows B and C', found: 'Dust loss of about 21 % on 7 inverters' },
+        { fault: 'Dusty sun sensor', found: 'Sensor unreliable; used satellite weather instead' },
+        { fault: 'Overheating inverter 7', found: 'Overheating; proposed lowering output' },
+        { fault: 'Lost data link, inverter 12', found: 'Link lost; reset and verified' },
+      ],
+    };
+  }
+  renderVals() {
+    const s = this.state;
+    const mk = (k) => {
+      const [label, hint, key] = this.pages[k]; const on = s.tab === k;
+      return { label, hint, key, go: () => this.setState({ tab: k }), bg: on ? '#fff' : 'transparent', weight: on ? 600 : 500, iconBg: on ? '#1b2f4a' : '#dedad2', iconFg: on ? '#e8a33d' : '#3d3f43' };
+    };
+    const mins = Math.round(s.t * 4.8);
+    const hh = String(6 + Math.floor(mins / 60)).padStart(2, '0'), mm = String(mins % 60).padStart(2, '0');
+    const states = { ok: ['#1f6b3a', '#2e9b56'], warn: ['#7a4300', '#c9822a'], bad: ['#9a2420', '#d0463f'] };
+    const stat = (label, value, st, k) => ({ label, value, state: st, fg: states[k][0], dot: states[k][1] });
+    return {
+      navMain: ['plant', 'summary', 'trace', 'agent', 'report'].map(mk),
+      navJudge: ['answer', 'results'].map(mk),
+      pageTitle: this.pages[s.tab][0],
+      pageIntro: this.intros[s.tab] || '',
+      placeholder: this.pages[s.tab][0].toLowerCase() + ' content: tables, charts and map come next',
+      isSummary: s.tab === 'summary', isTrace: s.tab === 'trace', isOther: !['summary', 'trace'].includes(s.tab),
+      isPlant: s.tab === 'plant', isAgent: s.tab === 'agent', isReport: s.tab === 'report', isJudge: s.tab === 'answer' || s.tab === 'results',
+      ...this.plantVals(states),
+      runOpen: !!s.runOpen, toggleRun: () => this.setState({ runOpen: !s.runOpen }),
+      runLabel: { replay: 'Replay: storm run', rules: 'Live: rules only', model: 'Live: rules + language model' }[s.mode || 'replay'],
+      runDot: (s.mode || 'replay') === 'replay' ? '#c9822a' : '#2e9b56',
+      isReplay: (s.mode || 'replay') === 'replay', isLive: (s.mode || 'replay') !== 'replay',
+      modes: [
+        ['rules', 'Live: rules only', "The agent's rules, no language model", ''],
+        ['model', 'Live: rules + language model', 'The rules plus a cloud or local model', ''],
+        ['replay', 'Replay', 'Play back a recorded run', ''],
+      ].map(([k, label, hint, detail]) => { const on = (s.mode || 'replay') === k; return { label, hint, detail, pick: () => this.setState({ mode: k }), dot: on ? '#1d1f22' : 'transparent', bg: on ? '#faf3e6' : '#fff', border: on ? '1.5px solid #1d1f22' : '1px solid #dedad2' }; }),
+      isModelMode: s.mode === 'model',
+      isCloud: (s.prov || 'claude') !== 'local', isLocal: s.prov === 'local',
+      providers: [['claude', 'Claude'], ['chatgpt', 'ChatGPT'], ['gemini', 'Gemini'], ['local', 'Local LLM']].map(([k, label]) => { const on = (s.prov || 'claude') === k; return { label, pick: () => this.setState({ prov: k }), bg: on ? '#1b2f4a' : '#fff', border: on ? '1px solid #1b2f4a' : '1px solid #dedad2', weight: on ? 600 : 500, fg: on ? '#fff' : '#1d1f22' }; }),
+      prov: (() => {
+        const k = s.prov || 'claude';
+        const m = { claude: ['Claude (model name from .env)', 'ANTHROPIC_API_KEY', true], chatgpt: ['GPT (model name from .env)', 'OPENAI_API_KEY', false], gemini: ['Gemini (model name from .env)', 'GOOGLE_API_KEY', false], local: ['', 'LOCAL_LLM_ENDPOINT', true] }[k];
+        return { model: m[0], keyHint: 'Leave blank to use ' + m[1] + ' from .env', envNote: m[2] ? m[1] + ' found in .env' : m[1] + ' not set in .env. Paste a key above.', envFg: m[2] ? '#1f6b3a' : '#7a4300', envDot: m[2] ? '#2e9b56' : '#c9822a' };
+      })(),
+      loadRun: () => this.setState({ runOpen: false, t: 0 }),
+      speed: s.speed || 15, speedLabel: (s.speed || 15) + ' sim minutes per tick',
+      onSpeed: e => this.setState({ speed: +e.target.value }),
+      step: () => this.setState({ t: Math.min(100, s.t + 3) }),
+      toEnd: () => { clearInterval(this.iv); this.setState({ t: 100, playing: false }); },
+      clock: hh + ':' + mm, progress: s.t + '%', playLabel: s.playing ? 'Pause' : 'Play the storm', togglePlay: this.togglePlay,
+      stats: [
+        stat('Energy lost to dust', '21 %', 'Hidden by the dusty sensor', 'bad'),
+        stat('Faults found', '4 of 4', 'Matches the answer key', 'ok'),
+        stat('Fixed automatically', '3', 'Recovery checked', 'ok'),
+        stat('Waiting for you', '1', s.approval, s.approval === 'Approved' ? 'ok' : 'warn'),
+      ],
+      story: [
+        { time: '06:40', title: 'Storm arrives', body: 'Dust settles on panels and on the sun sensor. Output drops, but the health check still reads normal.' },
+        { time: '07:15', title: 'The trap is spotted', body: 'Raqeeb compares output with satellite weather and finds a 21 % gap the sensor could not see.' },
+        { time: '08:02', title: 'Inverter 7 overheats', body: 'Temperature reaches 78 °C. Lowering its output is risky, so Raqeeb asks a person first.' },
+        { time: '08:30', title: 'Data link restored', body: 'A lost connection to inverter 12 is reset safely and its readings resume.' },
+      ],
+      approvalState: s.approval,
+      approve: () => this.setState({ approval: 'Approved' }),
+      decline: () => this.setState({ approval: 'Postponed' }),
+      goApproval: () => this.setState({ tab: 'summary' }, () => { const el = document.getElementById('approval'); if (el) window.scrollTo({ top: el.getBoundingClientRect().top + window.scrollY - 90, behavior: 'smooth' }); }),
+      goTrace: () => this.setState({ tab: 'trace' }),
+      openChatAboutApproval: () => this.ask('Why does inverter 7 need my approval?'),
+      chatOpen: s.chatOpen, chatLabel: s.chatOpen ? 'Close' : 'Ask Raqeeb',
+      toggleChat: () => this.setState({ chatOpen: !s.chatOpen }),
+      messages: s.messages.map(m => ({ text: m.text, align: m.me ? 'flex-end' : 'flex-start', bg: m.me ? '#1b2f4a' : '#f1efea', fg: m.me ? '#fff' : '#1d1f22' })),
+      showSuggestions: s.messages.length < 3,
+      suggestions: ['Why did the health check look normal?', 'Why does inverter 7 need my approval?', 'What is synthetic here?'].map(text => ({ text, ask: () => this.ask(text) })),
+      draft: s.draft, onDraft: e => this.setState({ draft: e.target.value }),
+      onKey: e => { if (e.key === 'Enter') this.ask(s.draft); }, send: () => this.ask(s.draft),
+    };
+  }
+}
+
+</script>
+</body>
+</html>
