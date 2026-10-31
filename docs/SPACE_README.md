@@ -22,7 +22,8 @@ Modes in this demo:
 - **Live: rules only.** The real agent runs step by step on a practice scenario or a random dust storm.
   Actions that need a human (power limits, isolation) pause the run for Approve / Reject.
 - **Replay.** Runs recorded earlier, including runs with a language model. Each replay is labelled
-  with how it was recorded; "recorded with test model" means a scripted stand-in, not a language model.
+  with how it was recorded; "recorded with test model" means a scripted stand-in, not a language model
+  (its cause proposals come from a fixed rule, to show how the agent tests a proposal before using it).
 
 The local-model mode is switched off here: this Space has no model server and no API keys.
 The planted faults (answer key) are shown only after a run has ended.

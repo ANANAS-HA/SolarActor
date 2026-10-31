@@ -4,16 +4,16 @@
     run = start_replay(path)                     # ui/live.py ReplayRun: a recorded run
     tables(run)                                  # telemetry up to run.now, one DataFrame per table
     power_lines(run)                             # actual vs expected (reference) vs expected (sensor)
-    inverter_status(run)                         # plant map
     reveal(run)                                  # answer key vs the agent: None until the run has finished
     load_results(path)                           # benchmark output (bench/<set>/summary.csv, results.csv)
 
-Scenarios offered for live runs are the practice sets (scenarios/scn_*, scenarios/practice2/pr2_*)
-and generated dust storms; the held-out sets are never listed or read here.
+Scenarios offered for live runs are the practice sets (scenarios/scn_*, scenarios/practice2/pr2_*,
+scenarios/practice_unknown/pru_*) and generated dust storms; the held-out sets are never listed or read here.
 """
 
 from __future__ import annotations
 
+import gzip
 import html
 import os
 import re
@@ -24,29 +24,23 @@ from pathlib import Path
 import pandas as pd
 
 from raqeeb.bench.score import addresses
-from raqeeb.config import BENCH_DIR, PRACTICE2_SCENARIO_DIR, SCENARIO_DIR, load_plant
+from raqeeb.config import BENCH_DIR, PRACTICE2_SCENARIO_DIR, PRACTICE_UNKNOWN_SCENARIO_DIR, SCENARIO_DIR, load_plant
 from raqeeb.contracts import (
     DECOY_FAULTS,
     DISPLAY_TZ,
     STEP_MINUTES,
     TABLE_MODELS,
     FaultType,
-    InverterStatus,
     PlantConfig,
     Scenario,
 )
 from raqeeb.faults.generator import is_trap, load_scenarios, storm_scenario
 from raqeeb.tools import physics as tool_physics
 from raqeeb.ui.live import LiveRun, ReplayRun
-from raqeeb.ui.runlog import Mode, RunLog
+from raqeeb.ui.runlog import GZIP_MAGIC, Mode, RunLog
 
 Run = LiveRun | ReplayRun
 
-# Plant map: an inverter is "degraded" when its status says so, or it is this far below its peers
-DEGRADED_STATUSES = frozenset({InverterStatus.DERATED, InverterStatus.FAULT, InverterStatus.STOPPED})
-PEER_SHORTFALL = 0.10
-MIN_PEER_FRACTION = 0.05  # of the rating; below this (dawn, dusk) peers are not compared
-HEALTHY, DEGRADED, NO_DATA = "healthy", "degraded", "no data"
 
 REPLAY_DIR_ENV = "RAQEEB_REPLAY_DIR"
 RESULTS_ENV = "RAQEEB_RESULTS"
@@ -64,7 +58,8 @@ NASA_CREDIT = ("Weather: NASA Langley Research Center (LaRC) POWER Project, fund
 
 
 def practice_scenarios() -> list[Scenario]:
-    return load_scenarios(SCENARIO_DIR, "scn") + load_scenarios(PRACTICE2_SCENARIO_DIR, "pr2")
+    return (load_scenarios(SCENARIO_DIR, "scn") + load_scenarios(PRACTICE2_SCENARIO_DIR, "pr2")
+            + load_scenarios(PRACTICE_UNKNOWN_SCENARIO_DIR, "pru"))
 
 
 def scenario_ids() -> list[str]:
@@ -102,9 +97,35 @@ def replay_title(path: Path) -> str:
 
 
 def start_replay(source: Path | str | bytes) -> ReplayRun:
-    """A replay from a file path or the bytes of an uploaded file."""
-    log = RunLog.load(Path(source)) if isinstance(source, (str, Path)) else RunLog.from_json(source)
-    return ReplayRun(log)
+    """A replay from a file path or the bytes of an uploaded file (plain or gzip-compressed JSON)."""
+    if isinstance(source, (str, Path)):
+        return ReplayRun(RunLog.load(Path(source)))
+    raw = gzip.decompress(source) if source[:2] == GZIP_MAGIC else source
+    return ReplayRun(RunLog.from_json(raw))
+
+
+def trajectory_files(path: Path | str) -> list[Path]:
+    """Replay / trajectory files at `path`: the file itself, or the *.json and *.json.gz in a folder (and in
+    its trajectories/ subfolder, where the bench writes them), sorted by name."""
+    path = Path(path)
+    if path.is_file():
+        return [path]
+    if not path.is_dir():
+        return []
+    found = [p for folder in (path, path / "trajectories") if folder.is_dir()
+             for pattern in ("*.json", "*.json.gz") for p in folder.glob(pattern)]
+    return sorted(set(found), key=lambda p: (p.parent != path, p.name))
+
+
+class RunAt:
+    """A run seen at an earlier sim time (the Trace tab's clock slider once a run has ended). Read only:
+    every view the console draws is cut at `now`, so this is the run as it stood then."""
+
+    def __init__(self, run: Run, now: datetime):
+        self.base, self.now = run, now
+        self.log, self.store, self.incident, self.mode = run.log, run.store, run.incident, run.mode
+        self.waiting: list = []
+        self.finished = True
 
 
 def mode_label(run: Run) -> str:
@@ -148,27 +169,6 @@ def power_lines(run: Run, plant: PlantConfig | None = None) -> pd.DataFrame:
         "clearsky_ghi_wm2": ref["clearsky_ghi_wm2"],
     }, index=grid)
     return frame[columns]
-
-
-def inverter_status(run: Run, plant: PlantConfig | None = None) -> pd.DataFrame:
-    """One row per inverter at the latest step up to `run.now`: status, ac_kw, temp_c, map state."""
-    plant = plant or load_plant()
-    readings = run.store.read("inverter_readings", end=run.now + STEP).reset_index()
-    at = readings["ts"].max() if len(readings) else None
-    now = readings[readings["ts"] == at].set_index("inverter_id") if at is not None else readings
-    rows = []
-    peer_median = float(now["ac_kw"].median()) if len(now) else 0.0
-    compare = peer_median > MIN_PEER_FRACTION * plant.inverters.ac_kw
-    for inv_id in plant.inverters.ids:
-        if inv_id not in now.index:
-            rows.append({"inverter_id": inv_id, "state": NO_DATA, "status": None, "ac_kw": None, "temp_c": None})
-            continue
-        r = now.loc[inv_id]
-        low = compare and r["ac_kw"] < (1 - PEER_SHORTFALL) * peer_median
-        state = DEGRADED if r["status"] in DEGRADED_STATUSES or low else HEALTHY
-        rows.append({"inverter_id": inv_id, "state": state, "status": str(r["status"]),
-                     "ac_kw": float(r["ac_kw"]), "temp_c": float(r["temp_c"])})
-    return pd.DataFrame(rows)
 
 
 # -- answer key (only after the run) -----------------------------------------------------
