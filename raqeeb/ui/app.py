@@ -66,7 +66,7 @@ def scenario_choices() -> tuple[list[str], str]:
 
 @st.cache_data
 def replay_choices() -> dict[str, str]:
-    return {str(p): source.replay_title(p) for p in source.replay_files()}
+    return {str(p): source.replay_title(p) for p in source.console_replays()}
 
 
 @st.cache_data(ttl=60, show_spinner=False)

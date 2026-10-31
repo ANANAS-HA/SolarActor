@@ -50,7 +50,8 @@ uvx --from huggingface_hub hf upload $space docs/SPACE_README.md README.md --rep
 uvx --from huggingface_hub hf upload $space . . --repo-type space `
   --exclude ".env" ".env.*" ".venv/*" "**/__pycache__/*" ".pytest_cache/*" "data/*.db" "data/*.db-*" `
             "data/plots/*" "scenarios/test/*" "scenarios/final/*" "scenarios/safety/*" "tests/*" "handoffs/*" `
-            "bench/*" "**/results.csv" "**/proposals.csv" ".claude/*" ".vscode/*" "README.md" "CLAUDE.md" `
+            "bench/*" "**/results.csv" "**/proposals.csv" "raqeeb/ui/replays/*_test.json" `
+            ".claude/*" ".vscode/*" "README.md" "CLAUDE.md" `
   --commit-message "Raqeeb console"
 ```
 
@@ -86,14 +87,15 @@ goes up, in step 4.
   uvx --from huggingface_hub hf upload $space raqeeb/ui/replays/scn_0007_local.json raqeeb/ui/replays/scn_0007_local.json --repo-type space
   ```
 
-  The replays now shipped (scn_0007, scn_0006, pr2_0001, pru_0001) are labelled "recorded with test model": a
-  scripted stand-in, not a language model. Its proposals come from a fixed rule (the site area holding the
-  unexplained weak inverters, plus one deliberately wrong area), so they show the agent's tool test at work,
-  not what a model would propose.
-  Delete them from the Space when the real ones are there, or keep them:
-  `uvx --from huggingface_hub hf repo-files delete $space raqeeb/ui/replays/scn_0007_test.json --repo-type space`
-  (older CLI: `huggingface-cli repo-files <space> delete <file> --repo-type space`). To make another file the
-  default, change `DEFAULT_REPLAY` in `raqeeb/ui/source.py`.
+  The public image ships only four runs of the agent with the local model, replayed from the frozen final set (tag
+  `final-trace`, agent unchanged; `raqeeb/ui/replays/final/`): fin_0029 (dust storm, dusty sensor and a
+  derate that needs approval), fin_0024 (a grid-operator notice in Arabic, confirmed), fin_0038 (a quiet
+  transformer trip named through a model proposal the agent tested) and fin_0053 (a held-out sensor drift,
+  escalated as unexplained). They keep the model's prompts and replies. The model name keeps only the
+  model file's name.
+  The default is `DEFAULT_SHOWCASE` in `raqeeb/ui/source.py`. The four test-model recordings
+  (`raqeeb/ui/replays/*.json`, labelled "recorded with test model", a scripted stand-in) stay in the
+  repository and are left out of the image (`.dockerignore`) and of the upload below.
 
 ## 5. After the hackathon
 

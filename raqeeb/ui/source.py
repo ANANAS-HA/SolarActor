@@ -46,6 +46,9 @@ REPLAY_DIR_ENV = "RAQEEB_REPLAY_DIR"
 RESULTS_ENV = "RAQEEB_RESULTS"
 REPLAY_DIR = Path(__file__).resolve().parent / "replays"
 DEFAULT_REPLAY = "scn_0007_test.json"  # dusty panels + dusty sensor, comms loss, a derate that needs approval
+SHOWCASE_SUBDIR = "final"  # ui/replays/final: local-model trajectories replayed from the frozen final set
+DEFAULT_SHOWCASE = "fin_0029__raqeeb_local.json.gz"  # storm + dusty sensor + a derate with approvals
+SHOWCASE_LABEL = "replayed from the frozen set from commit final-trace, agent unchanged"
 DEFAULT_RESULTS = BENCH_DIR / "final"
 STEP = timedelta(minutes=STEP_MINUTES)
 
@@ -87,8 +90,21 @@ def replay_dir() -> Path:
 
 
 def replay_files() -> list[Path]:
-    """Recorded runs, the trap demo (DEFAULT_REPLAY) first."""
+    """The test-model recordings (ui/replays/*.json, scripted stand-in), the trap demo (DEFAULT_REPLAY) first."""
     return sorted(replay_dir().glob("*.json"), key=lambda p: (p.name != DEFAULT_REPLAY, p.name))
+
+
+def showcase_files() -> list[Path]:
+    """Local-model runs of four final-set scenarios (ui/replays/final/*.json.gz, written by the bench from the
+    frozen set at tag final-trace), DEFAULT_SHOWCASE first. The model name keeps only the model file's name."""
+    folder = replay_dir() / SHOWCASE_SUBDIR
+    return sorted(folder.glob("*.json.gz"), key=lambda p: (p.name != DEFAULT_SHOWCASE, p.name))
+
+
+def console_replays() -> list[Path]:
+    """What the console offers: the showcase runs first (the default), then the test-model recordings. The
+    public image ships only the showcase (.dockerignore)."""
+    return showcase_files() + replay_files()
 
 
 def replay_title(path: Path) -> str:
