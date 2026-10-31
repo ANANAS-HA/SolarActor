@@ -27,7 +27,7 @@ import streamlit as st
 
 from raqeeb.config import REPO_ROOT, load_plant
 from raqeeb.contracts import DISPLAY_TZ, ActionStatus, IncidentReport
-from raqeeb.ui import alerts, plantmap, source, summary, trace
+from raqeeb.ui import alerts, ask, plantmap, source, summary, trace
 from raqeeb.ui.live import LiveRun, ReplayRun, list_local_models, local_model_status
 from raqeeb.ui.runner import DEFAULT_PACE, PACES, Runner
 from raqeeb.ui.proposals import effect
@@ -129,6 +129,7 @@ def _set_run(run: source.Run) -> None:
     st.session_state.run = run
     st.session_state.playing = False
     st.session_state.pop("lines_cache", None)
+    st.session_state.ask_history = []
     st.session_state.load_error = ""
 
 
@@ -1116,6 +1117,49 @@ def summary_tab(run: source.Run, power: pd.DataFrame) -> None:
         _switch_to_trace()
 
 
+# -- ask raqeeb -------------------------------------------------------------------------------------------
+
+
+def _ask_gateway():
+    """The local model's gateway when the server is reachable (the sidebar's model, else .env's), else None."""
+    if not local_status()[0]:
+        return None
+    from raqeeb.llm.gateway import Gateway
+    from raqeeb.config import load_settings
+    settings = load_settings()
+    model = st.session_state.get("model_choice")
+    if model and model != RULES_ONLY and model != settings.local_llm_model:
+        settings = settings.model_copy(update={"local_llm_model": model})
+    return Gateway(settings)
+
+
+def ask_tab(run: source.Run, power: pd.DataFrame) -> None:
+    st.subheader("Ask Raqeeb")
+    st.caption("Questions about this run, answered from its record: code looks the facts up (actions and their "
+               "rationale, model proposals, approvals, what is unexplained, the energy shortfall); when the local "
+               "model is reachable it only rewords those facts, shown underneath as \"Based on:\". The chat cannot "
+               "request, approve or reject an action. Try: " + "; ".join(f"*{e}*" for e in ask.EXAMPLES) + ".")
+    history: list[ask.Answer] = st.session_state.setdefault("ask_history", [])
+    question = st.chat_input("Ask about this run", key="ask_input", max_chars=400)
+    if question and question.strip():
+        with run_lock(run):
+            history.append(ask.ask(question.strip(), run.log, run.now, power, gateway=_ask_gateway()))
+    if not history:
+        st.info("No question yet.")
+    for a in history:
+        with st.chat_message("user"):
+            st.markdown(md_escape(a.question))
+        with st.chat_message("assistant"):
+            st.markdown(md_escape(a.text))
+            if a.phrased_by:
+                st.caption(f"Worded by {md_escape(a.phrased_by)} in {a.llm_s:.1f} s from the facts below, nothing else.")
+            else:
+                st.caption("No model reachable" + (f" ({md_escape(a.note)})" if a.note else "") + ": the facts are "
+                           "shown as retrieved.")
+            with st.expander("Based on:", expanded=bool(a.phrased_by)):
+                st.markdown("\n".join(f"- {md_escape(f)}" for f in a.facts))
+
+
 def report_tab(run: source.Run) -> None:
     st.subheader("Shift report")
     report = run.log.report_until(run.now)
@@ -1268,8 +1312,8 @@ def _page(run: source.Run) -> None:
         approvals(run)
     headline(run, power, data)
 
-    summary_page, ops, trace_page, agent, report, key, results = st.tabs(
-        ["Summary", "Operations", "Trace", "Agent", "Report", "Answer key", "Results"])
+    summary_page, ops, trace_page, agent, report, key, results, ask_page = st.tabs(
+        ["Summary", "Operations", "Trace", "Agent", "Report", "Answer key", "Results", "Ask Raqeeb"])
     with trace_page:
         trace_tab(run, power)
     with summary_page:
@@ -1294,6 +1338,8 @@ def _page(run: source.Run) -> None:
         answer_key_tab(run)
     with results:
         results_tab()
+    with ask_page:
+        ask_tab(run, power)
     footer()
 
 

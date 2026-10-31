@@ -88,6 +88,14 @@ The NASA POWER weather file is in `data/weather/`. Modes:
 
 The planted faults (the answer key) are shown only after a run has ended.
 
+Tabs on a loaded run: **Summary** (the incident in one screen: key moments on a timeline, the causes table,
+energy below the expected line before and after the first action, model calls, the bilingual report; every
+item jumps to its turn in the Trace tab), **Operations**, **Trace** (one card per agent turn), **Agent**,
+**Report**, **Answer key**, **Results** and **Ask Raqeeb** (questions about the run, answered from its record;
+a reachable local model only rewords the retrieved facts, shown under the reply; the chat cannot trigger an
+action). The sidebar's **Model** selector offers rules only and every model the local server lists at
+`/models`; the API tier is shown disabled (the console runs fully local).
+
 **Email alerts.** When a live run reaches a point that needs a human (an action waiting for approval, or an
 escalation), the console (not the agent) emails the operator through [Resend](https://resend.com)'s REST
 API: `RESEND_API_KEY`, `RAQEEB_ALERT_FROM` and `RAQEEB_ALERT_TO` (comma-separated) in `.env`. The email

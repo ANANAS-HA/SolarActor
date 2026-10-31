@@ -343,7 +343,8 @@ def test_every_page_renders_in_replay_and_live_mode():
     page = _page(at)
     assert source.FOOTER in page and "Mode: Replay" in page and source.md_escape(source.SHOWCASE_LABEL) in page
     assert at.subheader[0].value == "Plant map"  # the map comes first, above the charts and tabs
-    assert [t.label for t in at.tabs] == ["Summary", "Operations", "Trace", "Agent", "Report", "Answer key", "Results"]
+    assert [t.label for t in at.tabs] == ["Summary", "Operations", "Trace", "Agent", "Report", "Answer key", "Results",
+                                          "Ask Raqeeb"]
     assert {"Plant map", "Alarm feed", "Recovery", "Technician and operator notes", "Agent timeline", "Approvals",
             "Model proposals", "Actions and verifications", "LLM calls and time", "Shift report", "Answer key",
             "Benchmark results"} <= {s.value for s in at.subheader}
