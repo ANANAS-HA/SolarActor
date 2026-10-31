@@ -12,11 +12,16 @@ Writes <out>/results.csv (one row per agent x scenario), <out>/summary.csv (one 
 what the console shows) and <out>/summary.md (the same table plus where each agent is wrong
 and where it loses head-to-head). Agents with a note in AGENTS are reference bounds, not
 competitors: they are left out of head-to-head comparisons.
+Every run is also recorded as <out>/trajectories/<scenario>__<agent>.json (ui/runlog.RunLog v3; gzip
+as .json.gz when over TRAJECTORY_GZIP_BYTES; the neutral-text control run of an injected-instruction
+scenario as <scenario>__<agent>__control.json), written as soon as the run ends and readable with
+`python -m raqeeb.bench.trajectory <file>`. The scores never read them.
 """
 
 from __future__ import annotations
 
 import argparse
+import gzip
 import json
 import subprocess
 from collections.abc import Callable
@@ -48,6 +53,9 @@ from raqeeb.config import (
 from raqeeb.contracts import Agent, Scenario
 from raqeeb.llm.router import Router
 from raqeeb.twin.weather import weather_5min
+from raqeeb.ui.runlog import RunLog
+
+TRAJECTORY_GZIP_BYTES = 1 << 20  # a trajectory file over 1 MB is written gzip-compressed (.json.gz)
 
 
 @dataclass(frozen=True)
@@ -94,7 +102,10 @@ def load_scenarios(ids: list[str] | None = None, scenario_set: str = "practice")
     return [Scenario.from_yaml(p) for p in paths]
 
 
-def run_bench(scenarios: list[Scenario], agents: list[str], poll_min: int = POLL_MIN) -> list[RunRecord]:
+def run_bench(scenarios: list[Scenario], agents: list[str], poll_min: int = POLL_MIN,
+              trajectory_dir: Path | None = None) -> list[RunRecord]:
+    """`trajectory_dir`: record every run as a trajectory file there (written as each run ends, then dropped
+    from the record so a long set does not keep them all in memory); None records none."""
     plant = load_plant()
     records = []
     for scenario in scenarios:
@@ -102,10 +113,43 @@ def run_bench(scenarios: list[Scenario], agents: list[str], poll_min: int = POLL
         for name in agents:
             make = AGENTS[name].make
             case = SAFETY_CASES.get(scenario.id)
-            records.append(run_with_control(scenario, lambda: make(scenario), poll_min=poll_min,
-                                            reference=reference, plant=plant, **(case.run_options() if case else {})))
+            record = run_with_control(scenario, lambda: make(scenario), poll_min=poll_min, reference=reference,
+                                      plant=plant, trajectory=trajectory_dir is not None,
+                                      **(case.run_options() if case else {}))
+            if trajectory_dir is not None:
+                write_trajectories(record, trajectory_dir)
+                record.trajectory = record.control_trajectory = None
+            records.append(record)
         print(f"{scenario.id}: done ({', '.join(agents)})")
     return records
+
+
+def trajectory_stem(scenario_id: str, agent: str, control: bool = False) -> str:
+    return f"{scenario_id}__{agent}" + ("__control" if control else "")
+
+
+def write_trajectory(log: RunLog, folder: Path, stem: str) -> Path:
+    """<folder>/<stem>.json, or <stem>.json.gz when the JSON text is over TRAJECTORY_GZIP_BYTES."""
+    folder.mkdir(parents=True, exist_ok=True)
+    data = log.to_json().encode("utf-8")
+    if len(data) > TRAJECTORY_GZIP_BYTES:
+        path = folder / f"{stem}.json.gz"
+        path.write_bytes(gzip.compress(data, mtime=0))
+    else:
+        path = folder / f"{stem}.json"
+        path.write_bytes(data)
+    return path
+
+
+def write_trajectories(record: RunRecord, folder: Path) -> list[Path]:
+    """The record's trajectory (and its control run's) as files; [] when the run was not recorded."""
+    out = []
+    if record.trajectory is not None:
+        out.append(write_trajectory(record.trajectory, folder, trajectory_stem(record.scenario_id, record.agent)))
+    if record.control_trajectory is not None:
+        out.append(write_trajectory(record.control_trajectory, folder,
+                                    trajectory_stem(record.scenario_id, record.agent, control=True)))
+    return out
 
 
 def source_commit() -> dict:
@@ -214,13 +258,14 @@ def main(argv: list[str] | None = None) -> None:
     BENCH_LOCK.parent.mkdir(parents=True, exist_ok=True)
     BENCH_LOCK.write_text(f"{args.scenario_set} {','.join(agents)}\n", encoding="utf-8")
     try:  # the lock keeps the live LLM tests off the local model server while the bench uses it
-        records = run_bench(scenarios, agents, args.poll_min)
+        records = run_bench(scenarios, agents, args.poll_min, trajectory_dir=args.out / "trajectories")
     finally:
         BENCH_LOCK.unlink(missing_ok=True)
     results, summary = write_outputs(records, args.out, scenarios, args.scenario_set)
     with pd.option_context("display.width", 200, "display.max_columns", 30, "display.float_format", "{:.2f}".format):
         print(summary.drop(columns="note").to_string(index=False))
-    print(f"wrote {args.out / 'results.csv'}, summary.csv and summary.md ({len(results)} runs)")
+    print(f"wrote {args.out / 'results.csv'}, summary.csv and summary.md ({len(results)} runs); "
+          f"trajectories in {args.out / 'trajectories'}")
 
 
 if __name__ == "__main__":
