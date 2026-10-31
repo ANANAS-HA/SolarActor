@@ -134,14 +134,21 @@ button[role="tab"] p { font-size: 1rem; }
 
 
 def inline(text: object) -> str:
-    """Record text inside an HTML snippet given to st.markdown: neither markdown nor HTML is rendered
-    (the markdown parser still runs around allowed HTML, so both escapes are needed)."""
+    """Record text next to inline HTML (a <span>) in st.markdown: the markdown parser still runs there, so
+    the text is escaped for markdown and for HTML."""
     return html_text(md_escape(text))
 
 
-def chip(text: str, state: str) -> str:
+def block(text: object) -> str:
+    """Record text inside a block-level HTML element (<div>, <p>) in st.markdown: no markdown is parsed
+    inside an HTML block (html_text leaves no newline, so the block never ends early), so HTML escaping is
+    all that is needed; a markdown escape here would show as a backslash."""
+    return html_text(text)
+
+
+def chip(text: str, state: str, in_block: bool = False) -> str:
     ink, bg = SEMANTIC.get(state, SEMANTIC["info"])
-    return f'<span class="rq-chip" style="color:{ink};background:{bg}">{inline(text)}</span>'
+    return f'<span class="rq-chip" style="color:{ink};background:{bg}">{(block if in_block else inline)(text)}</span>'
 
 
 # -- data ------------------------------------------------------------------------------
@@ -483,7 +490,7 @@ def notification_strip(run: source.Run) -> None:
 
     if moments:
         last = moments[-1]
-        event = f'<span class="rq-time">{local_hhmm(last.ts)}</span> {inline(last.said or last.text)}'
+        event = f'<span class="rq-time">{local_hhmm(last.ts)}</span> {block(last.said or last.text)}'
     else:
         event = "Nothing has happened yet. Press Play, or Step for one agent turn."
     state = "human" if waiting else "critical" if escalated and not recovered else "healthy" if recovered else "info"
@@ -491,11 +498,11 @@ def notification_strip(run: source.Run) -> None:
     if waiting:
         chips.append(f'<span class="rq-chip rq-pulse" style="color:{SEMANTIC["needs a human"][0]};'
                      f'background:{SEMANTIC["needs a human"][1]}">Needs your decision: {waiting}</span>')
-    chips.append(chip(f"Awaiting your approval: {waiting}", "needs a human" if waiting else "no data"))
-    chips.append(chip(f"Handed to a human: {escalated}", "attention" if escalated else "no data"))
-    chips.append(chip(f"Recovered: {recovered}", "healthy" if recovered else "no data"))
+    chips.append(chip(f"Awaiting your approval: {waiting}", "needs a human" if waiting else "no data", in_block=True))
+    chips.append(chip(f"Handed to a human: {escalated}", "attention" if escalated else "no data", in_block=True))
+    chips.append(chip(f"Recovered: {recovered}", "healthy" if recovered else "no data", in_block=True))
     text, kind = alert_status(run)
-    chips.append(chip(text, kind))
+    chips.append(chip(text, kind, in_block=True))
     st.markdown(f'<div class="rq-strip {state}"><span class="rq-event">{event}</span>{"".join(chips)}</div>',
                 unsafe_allow_html=True)
     if waiting:
@@ -928,10 +935,10 @@ def trace_card(card: trace.TurnCard, run: source.Run) -> None:
         title = f"Turn {card.index}, {local_hhmm(card.ts)}" + (" (final step)" if card.final else "")
         st.markdown((":violet-background[**%s**]" if focused else "**%s**") % title)
         if card.checks is not None and results:
-            st.markdown(f'<p class="rq-headline">{inline(plain.checks_headline(results, named))}</p>',
+            st.markdown(f'<p class="rq-headline">{block(plain.checks_headline(results, named))}</p>',
                         unsafe_allow_html=True)
         elif card.checks is None and named:
-            st.markdown(f'<p class="rq-headline">{inline("Named: " + ", ".join(plain.cause_short(x) for x in named) + ".")}</p>',
+            st.markdown(f'<p class="rq-headline">{block("Named: " + ", ".join(plain.cause_short(x) for x in named) + ".")}</p>',
                         unsafe_allow_html=True)
         for o in card.outcomes:
             st.markdown(f"- {md_escape(_outcome_sentence(o, actions_by_id))}")
@@ -943,8 +950,8 @@ def trace_card(card: trace.TurnCard, run: source.Run) -> None:
             found = [r for r in results if r.finding and r.tool not in plain.ALARM_TOOLS]
             quiet = [r for r in results if not r.finding]
             for r in found:
-                st.markdown(f'<div class="rq-found"><b>{inline(plain.tool(r.tool))}:</b> '
-                            f'{inline(plain.verdict(r))}</div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="rq-found"><b>{block(plain.tool(r.tool))}:</b> '
+                            f'{block(plain.verdict(r))}</div>', unsafe_allow_html=True)
             unsure = sum(1 for r in quiet if r.verdict == trace.INCONCLUSIVE)
             nothing = len(quiet) - unsure
             if quiet:
@@ -953,7 +960,7 @@ def trace_card(card: trace.TurnCard, run: source.Run) -> None:
                     words.append(f"{nothing} check{'s' if nothing != 1 else ''} found nothing")
                 if unsure:
                     words.append(f"{unsure} had too little data yet")
-                st.markdown(f'<p class="rq-quiet">{inline(" and ".join(words))}.</p>', unsafe_allow_html=True)
+                st.markdown(f'<p class="rq-quiet">{block(" and ".join(words))}.</p>', unsafe_allow_html=True)
         elif card.checks is not None:
             st.markdown('<p class="rq-quiet">Checks ran; nothing unusual.</p>', unsafe_allow_html=True)
         if card.candidates is not None and named:
